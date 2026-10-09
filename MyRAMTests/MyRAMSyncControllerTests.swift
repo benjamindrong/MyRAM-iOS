@@ -6,6 +6,67 @@ import XCTest
 
 @MainActor
 final class MyRAMSyncControllerTests: XCTestCase {
+    func testMYR233TransportOnlyRetainsDiscoveryAndRejectsSyncWithoutMutatingQueues() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bundlePath = directory.appendingPathComponent("Diagnostic.bundle")
+        try FileManager.default.createDirectory(at: bundlePath, withIntermediateDirectories: true)
+        let info: [String: Any] = [
+            "CFBundleIdentifier": "com.northsignalstudio.myram.verification",
+            "NSBonjourServices": ["_myram-verify._tcp"],
+            MyRAMSyncRuntimeConfiguration.transportOnlyKey: true
+        ]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: bundlePath.appendingPathComponent("Info.plist"))
+        let batch = makeBatch(idSuffix: 23390)
+        let queueURL = directory.appendingPathComponent("unsent.json")
+        try FileBackedSyncBatchQueue(fileURL: queueURL).enqueueDurably(batch)
+        let original = try Data(contentsOf: queueURL)
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = MyRAMSyncController(
+            unsentBatchQueueFileURL: queueURL,
+            pendingChangesFileURL: directory.appendingPathComponent("legacy.json"),
+            startsNetworking: false,
+            configurationBundle: try XCTUnwrap(Bundle(path: bundlePath.path)), transport: transport
+        )
+        XCTAssertFalse(controller.applicationSyncEnabled)
+        controller.invite(MyRAMDiscoveredPeer(peerID: Self.remotePeerID, deviceID: "remote-device", displayName: "Remote", isTrusted: true))
+        XCTAssertEqual(transport.invitedPeerIDs, [Self.remotePeerID])
+        var bootstrapPrepared = false
+        controller.onPrepareLocalOwnershipForBootstrap = { bootstrapPrepared = true }
+        var incomingCaptured = false
+        controller.onDurablyCaptureIncomingBatch = { _ in incomingCaptured = true; return true }
+        var incomingApplied = false
+        controller.onChangesReceived = { _ in incomingApplied = true; return [] }
+        let session = MCSession(peer: MCPeerID(displayName: "local"), securityIdentity: nil, encryptionPreference: .required)
+        controller.session(session, peer: Self.remotePeerID, didChange: .connected)
+        controller.session(session, didReceive: try MultipeerSyncMessageCoding.encodeBatch(batch), fromPeer: Self.remotePeerID)
+        await waitUntil { controller.lastConnectionEvent.hasPrefix("Connected:") }
+        await controller.beginBootstrapForTesting(to: Self.remotePeerID)
+        controller.recordLocalChange(entityType: .note, entityID: UUID().uuidString, payload: Data(), updatedAt: .now)
+        controller.flushAllOutboundWork()
+        do {
+            try await controller.acceptLocalBatch(batch)
+            XCTFail("Suppressed admission must not report success")
+        } catch {
+            XCTAssertTrue(error is MyRAMSyncRuntimeConfiguration.AdmissionError)
+        }
+        let container = try makeContainer()
+        let viewModel = NotesViewModel(context: container.mainContext, syncController: controller,
+                                      pendingIncomingBatchQueueFileURL: directory.appendingPathComponent("incoming.json"),
+                                      pendingLocalConvergenceBatchQueueFileURL: directory.appendingPathComponent("local.json"))
+        viewModel.resumePendingConvergencePresentationIfNeeded()
+        await Task.yield()
+        let legacy = await controller.legacyQueueSnapshot()
+        XCTAssertTrue(legacy.pendingChanges.isEmpty)
+        XCTAssertFalse(bootstrapPrepared)
+        XCTAssertFalse(incomingCaptured)
+        XCTAssertFalse(incomingApplied)
+        XCTAssertTrue(transport.sentData.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: queueURL), original)
+    }
+
     func testBootstrapPresentationRefreshPublishesSelectedMountedEditorReload() throws {
         let transport = FakeMyRAMSyncTransport(connectedPeers: [])
         let controller = try makeController(transport: transport)

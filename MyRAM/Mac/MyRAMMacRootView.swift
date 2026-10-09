@@ -340,7 +340,7 @@ struct MyRAMMacRootView: View {
     }
 
     private func configureSyncConvergenceIfNeeded() {
-        guard syncConvergenceCoordinator == nil else { return }
+        guard syncController.applicationSyncEnabled, syncConvergenceCoordinator == nil else { return }
 
         let presentationSurface = MacSyncConvergencePresentationSurface(
             selectedNoteID: { selectedNoteID },

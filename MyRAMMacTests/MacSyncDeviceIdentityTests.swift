@@ -86,6 +86,70 @@ final class MacSyncTransportLifecycleTests: XCTestCase {
         controller.stopNetworking()
     }
 
+    func testMYR233TransportOnlyRetainsMPCAndPreservesPersistedQueue() async throws {
+        let container = try makeContainer()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bundlePath = directory.appendingPathComponent("Diagnostic.bundle")
+        try FileManager.default.createDirectory(at: bundlePath, withIntermediateDirectories: true)
+        let info: [String: Any] = [
+            "CFBundleIdentifier": "com.northsignalstudio.myram.mac.verification",
+            "NSBonjourServices": ["_myram-verify._tcp"],
+            MyRAMSyncRuntimeConfiguration.transportOnlyKey: true
+        ]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: bundlePath.appendingPathComponent("Info.plist"))
+        let queueURL = directory.appendingPathComponent("unsent.json")
+        let batch = SyncBatch(id: UUID(), originDeviceID: UUID(), createdAt: .now, changes: [])
+        try FileBackedSyncBatchQueue(fileURL: queueURL).enqueueDurably(batch)
+        let original = try Data(contentsOf: queueURL)
+        let remote = MCPeerID(displayName: "remote|transport-only")
+        var events: [String] = []
+        let controller = MacSyncBatchController(
+            context: container.mainContext,
+            conflictStore: SyncConflictStore(fileURL: directory.appendingPathComponent("conflicts.json")),
+            unsentBatchQueueFileURL: queueURL, startsNetworking: false,
+            configurationBundle: try XCTUnwrap(Bundle(path: bundlePath.path)),
+            identityProvider: { MacSyncDeviceIdentity(id: UUID(), displayName: "Transport test") },
+            startAdvertisingOperation: { events.append("advertise") },
+            startBrowsingOperation: { events.append("browse") },
+            connectedPeersProvider: { [remote] },
+            sendBatchDataOperation: { _, _, _ in XCTFail("Application send in transport-only mode") },
+            invitePeerOperation: { _, _, _ in events.append("invite") }
+        )
+        XCTAssertFalse(controller.applicationSyncEnabled)
+        controller.startNetworkingIfNeeded()
+        controller.startNetworkingIfNeeded()
+        // Invitation handling still belongs to the retained MPC session.
+        let advertiser = MCNearbyServiceAdvertiser(peer: MCPeerID(displayName: "test"), discoveryInfo: nil, serviceType: "myram-verify")
+        let invited = expectation(description: "Transport invitation accepted")
+        controller.advertiser(advertiser, didReceiveInvitationFromPeer: remote, withContext: nil) { accepted, session in
+            XCTAssertTrue(accepted)
+            XCTAssertNotNil(session)
+            invited.fulfill()
+        }
+        await fulfillment(of: [invited], timeout: 2)
+        let session = MCSession(peer: MCPeerID(displayName: "local"), securityIdentity: nil, encryptionPreference: .required)
+        controller.session(session, peer: remote, didChange: .connected)
+        let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
+        controller.session(session, didReceive: data, fromPeer: remote)
+        controller.flushPendingBatch()
+        await controller.beginReconnectBootstrapForTesting(to: remote)
+        await controller.resumeBootstrapAfterConflictResolution()
+        do {
+            try await controller.acceptLocalBatch(batch)
+            XCTFail("Suppressed admission must not report success")
+        } catch {
+            XCTAssertTrue(error is MyRAMSyncRuntimeConfiguration.AdmissionError)
+        }
+        await Task.yield()
+        XCTAssertEqual(events, ["advertise", "browse"])
+        XCTAssertEqual(try Data(contentsOf: queueURL), original)
+        XCTAssertNil(controller.bootstrapStateForTesting(peerDeviceID: "transport-only"))
+        controller.stopNetworking()
+    }
+
     @MainActor
     private func makeLifecycleController(
         container: ModelContainer, event: @escaping (String) -> Void
@@ -115,6 +179,33 @@ final class MacSyncTransportLifecycleTests: XCTestCase {
 }
 
 final class MacSyncDeviceIdentityTests: XCTestCase {
+    func testMYR233ProductionCannotEnableTransportOnlyMode() throws {
+        for id in ["com.northsignalstudio.myram", "com.northsignalstudio.myram.dev",
+                   "com.northsignalstudio.myram.mac", "com.northsignalstudio.myram.mac.dev", "unknown"] {
+            XCTAssertTrue(try MyRAMSyncRuntimeConfiguration(bundleIdentifier: id, bonjourServices: nil, transportOnlyValue: nil).applicationSyncEnabled)
+            for value in [true, false] {
+                XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(bundleIdentifier: id, bonjourServices: ["_myram-verify._tcp"], transportOnlyValue: value))
+            }
+        }
+    }
+
+    func testMYR233TransportOnlyRequiresExactVerificationIdentityAndNamespace() throws {
+        for id in MyRAMSyncRuntimeConfiguration.verificationBundleIDs {
+            let mode = try MyRAMSyncRuntimeConfiguration(bundleIdentifier: id, bonjourServices: ["_myram-verify._tcp"], transportOnlyValue: true)
+            XCTAssertFalse(mode.applicationSyncEnabled)
+            XCTAssertThrowsError(try mode.requireApplicationSync())
+            XCTAssertTrue(mode.recordsTransportDiagnostics)
+            for namespace in [nil, ["_myram-sync._tcp"], ["_myram-verify._tcp", "_myram-sync._tcp"]] as [[String]?] {
+                XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(bundleIdentifier: id, bonjourServices: namespace, transportOnlyValue: true))
+            }
+            XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(bundleIdentifier: id, bonjourServices: ["_myram-verify._tcp"], transportOnlyValue: "true"))
+            let normal = try MyRAMSyncRuntimeConfiguration(bundleIdentifier: id, bonjourServices: ["_myram-verify._tcp"], transportOnlyValue: nil)
+            XCTAssertTrue(normal.applicationSyncEnabled)
+            XCTAssertTrue(normal.recordsTransportDiagnostics)
+            XCTAssertNoThrow(try normal.requireApplicationSync())
+        }
+    }
+
     func testVerificationFixtureIdentityPersistsAndRebindsEveryProviderBeforePeerConstruction() throws {
         let defaults = makeDefaults()
         defaults.set(UUID().uuidString, forKey: MacSyncDeviceIdentity.deviceIDKey)

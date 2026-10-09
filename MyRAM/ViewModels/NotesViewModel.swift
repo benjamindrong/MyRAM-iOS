@@ -2789,11 +2789,13 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func handleReadyLocalBatch(_ obligation: SyncConvergenceLocalObligation) async {
+        guard syncController?.applicationSyncEnabled != false else { return }
         let outcome = await syncConvergenceRuntime.submitLocalObligation(obligation)
         await handleConvergenceRuntimeOutcome(outcome)
     }
 
     func resumePendingConvergencePresentationIfNeeded() {
+        guard syncController?.applicationSyncEnabled != false else { return }
         guard pendingConvergenceResumeTask == nil else { return }
         pendingConvergenceResumeTask = Task { [weak self] in
             await self?.resumePendingConvergencePresentation()
@@ -2804,6 +2806,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func resumePendingConvergencePresentation() async {
+        guard syncController?.applicationSyncEnabled != false else { return }
         let outcome = await syncConvergenceRuntime.resumePendingWork()
         await handleConvergenceRuntimeOutcome(outcome)
     }

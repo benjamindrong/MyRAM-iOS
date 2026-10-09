@@ -279,7 +279,7 @@ def configure_project(root: Path, identity: dict[str, Any]) -> None:
     )
 
 
-def configure_plists(root: Path, identity: dict[str, Any], fixture: dict[str, Any] | None = None) -> None:
+def configure_plists(root: Path, identity: dict[str, Any], fixture: dict[str, Any] | None = None, transport_only: bool = False) -> None:
     ios_path = root / "MyRAM" / "Info.plist"
     with ios_path.open("rb") as handle:
         ios_plist = plistlib.load(handle)
@@ -294,6 +294,8 @@ def configure_plists(root: Path, identity: dict[str, Any], fixture: dict[str, An
     ios = identity["ios"]
     if fixture:
         ios_plist["MyRAMVerificationFixtureDeviceID"] = fixture["iphone"]
+    if transport_only:
+        ios_plist["MyRAMVerificationTransportOnly"] = True
     ios_plist["CFBundleDisplayName"] = identity["display_name"]
     ios_plist["NSBonjourServices"] = [identity["bonjour_service"]]
     url_types[0]["CFBundleURLSchemes"] = [ios["url_scheme"]]
@@ -334,6 +336,8 @@ def configure_plists(root: Path, identity: dict[str, Any], fixture: dict[str, An
     macos = identity["macos"]
     if fixture:
         mac_plist["MyRAMVerificationFixtureDeviceID"] = fixture["mac"]
+    if transport_only:
+        mac_plist["MyRAMVerificationTransportOnly"] = True
     mac_plist["CFBundleDisplayName"] = identity["display_name"]
     mac_plist["NSBonjourServices"] = [identity["bonjour_service"]]
     mac_url_types[0]["CFBundleURLSchemes"] = [macos["url_scheme"]]
@@ -398,7 +402,7 @@ def configure_runtime_identities(root: Path, identity: dict[str, Any]) -> None:
     )
 
 
-def audit(root: Path, identity: dict[str, Any], source_sha: str, fixture: dict[str, Any] | None = None) -> dict[str, Any]:
+def audit(root: Path, identity: dict[str, Any], source_sha: str, fixture: dict[str, Any] | None = None, transport_only: bool = False) -> dict[str, Any]:
     project = root / "MyRAM.xcodeproj" / "project.pbxproj"
     project_text = project.read_text(encoding="utf-8")
     ios = identity["ios"]
@@ -484,6 +488,8 @@ def audit(root: Path, identity: dict[str, Any], source_sha: str, fixture: dict[s
         fail("macOS Verification URL scheme audit failed.")
 
     for platform, values in (("iphone", ios_plist), ("mac", mac_plist)):
+        if values.get("MyRAMVerificationTransportOnly", False) is not transport_only:
+            fail(f"{platform}: Verification transport mode audit failed.")
         expected_fixture_id = fixture[platform] if fixture else None
         if values.get("MyRAMVerificationFixtureDeviceID") != expected_fixture_id:
             fail(f"{platform}: Verification fixture device identity audit failed.")
@@ -506,6 +512,7 @@ def audit(root: Path, identity: dict[str, Any], source_sha: str, fixture: dict[s
 
     return {
         "source_candidate_sha": source_sha,
+        "transport_mode": "transportOnly" if transport_only else "application",
         "fixture_identity": fixture,
         "environment": identity["environment"],
         "display_name": identity["display_name"],
@@ -561,6 +568,7 @@ def main() -> int:
         help="Optional path for the generated isolation audit JSON.",
     )
     parser.add_argument("--fixture-manifest", type=Path, help="Approved fixture manifest; binds peer identities only inside Verification apps.")
+    parser.add_argument("--transport-only", action="store_true", help="Disable application sync inside the existing isolated Verification MPC owners.")
     args = parser.parse_args()
     root = args.root.resolve()
 
@@ -569,10 +577,10 @@ def main() -> int:
         identity = load_identity(root)
         fixture = load_fixture_identity(args.fixture_manifest)
         configure_project(root, identity)
-        configure_plists(root, identity, fixture)
+        configure_plists(root, identity, fixture, args.transport_only)
         configure_storage_roots(root, identity)
         configure_runtime_identities(root, identity)
-        report = audit(root, identity, source_sha, fixture)
+        report = audit(root, identity, source_sha, fixture, args.transport_only)
         rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
         if args.manifest_output:
             args.manifest_output.parent.mkdir(parents=True, exist_ok=True)

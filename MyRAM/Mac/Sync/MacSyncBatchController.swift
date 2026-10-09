@@ -37,6 +37,10 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     var onBootstrapCandidateCapturedForTesting: (() async -> Void)?
 #endif
 
+    private let runtimeConfiguration: MyRAMSyncRuntimeConfiguration
+    private let transportDiagnostics: MyRAMSyncTransportDiagnostics
+    var applicationSyncEnabled: Bool { runtimeConfiguration.applicationSyncEnabled }
+
     private let serviceType = "myram-sync"
     private let peerID: MCPeerID
     private let session: MCSession
@@ -86,6 +90,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         unsentBatchQueueFileURL: URL? = MacSyncBatchController.unsentBatchQueueFileURL(),
         unsentBatchQueue: FileBackedSyncBatchQueue? = nil,
         startsNetworking: Bool = true,
+        configurationBundle: Bundle = .main,
         identityProvider: () -> MacSyncDeviceIdentity = {
             MacSyncDeviceIdentityProvider().currentIdentity()
         },
@@ -101,6 +106,11 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         invitePeerOperation:
             ((MCPeerID, Data, TimeInterval) -> Void)? = nil
     ) {
+        let configuration = MyRAMSyncRuntimeConfiguration.current(bundle: configurationBundle)
+        precondition(!configuration.recordsTransportDiagnostics || serviceType == "myram-verify",
+                     "Verification transport diagnostics require the isolated MPC namespace")
+        runtimeConfiguration = configuration
+        transportDiagnostics = MyRAMSyncTransportDiagnostics(configuration: configuration)
         let identity = identityProvider()
         let retainedPeerID = MCPeerID(displayName: identity.peerDisplayName)
         let retainedSession = MCSession(
@@ -159,6 +169,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             ?? { retainedSession.disconnect() }
 
         super.init()
+        transportDiagnostics.record("owner.created", session: session, peer: retainedPeerID.displayName)
 
         session.delegate = self
         advertiser.delegate = self
@@ -167,6 +178,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             startNetworkingIfNeeded()
         }
 
+        guard applicationSyncEnabled else { return }
         readyBatchTask = Task { [weak self, accumulator] in
             let stream = await accumulator.readyLocalObligations()
             for await obligation in stream {
@@ -289,6 +301,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     func startNetworkingIfNeeded() {
         guard networkingLifecycle == .idle else { return }
         networkingLifecycle = .running
+        transportDiagnostics.record("networking.start", session: session)
         startAdvertisingOperation()
         startBrowsingOperation()
     }
@@ -297,6 +310,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     /// disconnect() requests departure but does not promise remote GCK retirement.
     func stopNetworking() {
         guard networkingLifecycle != .stopped else { return }
+        transportDiagnostics.record("networking.stop", session: session)
         networkingLifecycle = .stopped
         readyBatchTask?.cancel()
         bootstrapCapabilityResolutionTasks.values.forEach { $0.cancel() }
@@ -314,7 +328,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private func sendTransportData(
         _ data: Data, _ peers: [MCPeerID], _ mode: MCSessionSendDataMode
     ) throws {
+        try runtimeConfiguration.requireApplicationSync()
         guard networkingLifecycle != .stopped else { throw CancellationError() }
+        transportDiagnostics.record("application.send", session: session, detail: "bytes=\(data.count)")
         try sendBatchDataOperation(data, peers, mode)
     }
 
@@ -325,6 +341,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             return
         }
         lastConnectionEvent = "Inviting \(peer.displayName)"
+        transportDiagnostics.record("invitation.outgoing", session: session, peer: peer.peerID.displayName)
         invitePeerOperation(
             peer.peerID,
             SyncBatchPeerCapabilityCodec.productionInvitationContext,
@@ -333,6 +350,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     func record(_ capturedChanges: [SyncConvergenceCapturedLocalChange], at date: Date = .now) async {
+        guard applicationSyncEnabled else { return }
         if !capturedChanges.isEmpty {
             localCaptureGeneration &+= 1
         }
@@ -349,6 +367,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         affecting noteID: UUID,
         at date: Date = .now
     ) async -> SyncConvergenceLocalObligation? {
+        guard applicationSyncEnabled else { return nil }
         if !capturedChanges.isEmpty {
             localCaptureGeneration &+= 1
         }
@@ -362,7 +381,8 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     func takePendingLocalObligationIfAffecting(noteID: UUID) async -> SyncConvergenceLocalObligation? {
-        await accumulator.takePendingObligationIfAffecting(noteID: noteID)
+        guard applicationSyncEnabled else { return nil }
+        return await accumulator.takePendingObligationIfAffecting(noteID: noteID)
     }
 
     private func updateSequenceReservationIssue() async {
@@ -372,6 +392,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     func flushPendingBatch() {
+        guard applicationSyncEnabled else { return }
         Task {
             await accumulator.emitReadyBatches(at: .now)
             await flushUnsentBatches()
@@ -380,6 +401,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     func acceptLocalBatch(_ batch: SyncBatch) async throws {
+        try runtimeConfiguration.requireApplicationSync()
         try validateDurableAdmission(batch)
         do {
             try unsentBatches.enqueueDurably(batch)
@@ -544,6 +566,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     private func flushUnsentBatches() async {
+        guard applicationSyncEnabled else { return }
         guard !unsentBatches.isEmpty else { return }
         let connectedPeers = connectedPeersProvider()
 
@@ -632,6 +655,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     private func beginBootstrap(to peerID: MCPeerID) async {
+        guard applicationSyncEnabled else { return }
         let identity = MacSyncPeerIdentity(peerID: peerID)
         guard peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
             forPeerDeviceID: identity.deviceID
@@ -718,6 +742,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     private func beginBootstrapAfterLocalOwnershipPreflight(to peerID: MCPeerID) {
+        guard applicationSyncEnabled else { return }
         let identity = MacSyncPeerIdentity(peerID: peerID)
         guard peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
             forPeerDeviceID: identity.deviceID
@@ -1004,6 +1029,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     private func sendBootstrapCapabilityAnnouncement(to peerID: MCPeerID) {
+        guard applicationSyncEnabled else { return }
         do {
             let payload = try JSONEncoder().encode(SyncPeerBootstrapCapabilityAnnouncement())
             let data = try MultipeerSyncMessageCoding.encode(
@@ -1017,6 +1043,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     func resumeBootstrapAfterConflictResolution() async {
+        guard applicationSyncEnabled else { return }
         let connectedDeviceIDs = Set(
             connectedPeersProvider().map { MacSyncPeerIdentity(peerID: $0).deviceID }
         )
@@ -1078,6 +1105,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     func receive(_ batch: MacSyncBatch) {
+        guard applicationSyncEnabled else { return }
         Task { _ = await processReceivedBatch(batch) }
     }
 
@@ -1277,9 +1305,16 @@ extension MacSyncBatchController: MCSessionDelegate {
             )
             connectedPeers = session.connectedPeers.map { displayName(for: $0) }
             lastConnectionEvent = "\(state.syncDescription): \(displayName(for: peerID))"
+            transportDiagnostics.record("session.state", session: session, peer: peerID.displayName, detail: "state=\(state.rawValue)")
             if state == .notConnected {
-                handlePeerDisconnect(peerDeviceID: identity.deviceID)
+                if applicationSyncEnabled { handlePeerDisconnect(peerDeviceID: identity.deviceID) }
             }
+
+            if state == .connected, !applicationSyncEnabled {
+                remember(peerID)
+                return
+            }
+
             if state == .connected {
                 peerCapabilityRegistry.bindCurrentSessionV2Support(
                     forPeerDeviceID: identity.deviceID
@@ -1297,6 +1332,8 @@ extension MacSyncBatchController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         Task { @MainActor in
             guard networkingLifecycle != .stopped else { return }
+            transportDiagnostics.record("application.received", session: session, peer: peerID.displayName, detail: "bytes=\(data.count)")
+            guard applicationSyncEnabled else { return }
             guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
                   message.schemaVersion == MultipeerSyncMessageEnvelope.currentSchemaVersion else {
                 return
@@ -1398,6 +1435,7 @@ extension MacSyncBatchController: MCNearbyServiceAdvertiserDelegate {
             )
             remember(peerID)
             lastConnectionEvent = "Invitation from \(displayName(for: peerID))"
+            transportDiagnostics.record("invitation.incoming.accepted", session: session, peer: peerID.displayName)
             invitationHandler(true, session)
         }
     }
@@ -1429,7 +1467,8 @@ extension MacSyncBatchController: MCNearbyServiceBrowserDelegate {
             ) {
                 bootstrapCapabilityResolutionTasks.removeValue(forKey: identity.deviceID)?.cancel()
             }
-            if connectedPeersProvider().contains(peerID) {
+            transportDiagnostics.record("discovery.found", session: session, peer: peerID.displayName)
+            if applicationSyncEnabled, connectedPeersProvider().contains(peerID) {
                 if peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
                     forPeerDeviceID: identity.deviceID
                 ) {

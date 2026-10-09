@@ -100,6 +100,7 @@ private final class MyRAMMultipeerTransport: MyRAMSyncTransporting {
 
 @MainActor
 protocol MyRAMSyncControlling: AnyObject {
+    var applicationSyncEnabled: Bool { get }
     var onChangesReceived: (([SyncChange]) async -> [LegacyIncomingChangeResult])? { get set }
     var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)? { get set }
     var onBatchReceived: ((SyncBatch) async -> SyncConvergenceRemoteBatchDisposition)? { get set }
@@ -176,6 +177,7 @@ protocol PendingSyncQueueAdministrating: AnyObject {
 }
 
 extension MyRAMSyncControlling {
+    var applicationSyncEnabled: Bool { true }
     func publishConflictResolutionChecked(_ payload: MyRAMSyncConflictPayload) async throws {
         throw CheckedConflictPublicationError.queueAdmissionNotDurable
     }
@@ -247,6 +249,10 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     var onBootstrapCandidateCapturedForTesting: (() async -> Void)?
 #endif
 
+    private let runtimeConfiguration: MyRAMSyncRuntimeConfiguration
+    private let transportDiagnostics: MyRAMSyncTransportDiagnostics
+    var applicationSyncEnabled: Bool { runtimeConfiguration.applicationSyncEnabled }
+
     private let serviceType = "myram-sync"
     private let peerID: MCPeerID
     private let trustedPeerStore = UserDefaultsTrustedPeerStore(key: "myram.sync.trustedPeers")
@@ -293,8 +299,14 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         unsentBatchQueueFileURL: URL? = MyRAMSyncController.unsentBatchQueueFileURL(),
         pendingChangesFileURL: URL? = nil,
         startsNetworking: Bool = true,
+        configurationBundle: Bundle = .main,
         transport: MyRAMSyncTransporting? = nil
     ) {
+        let configuration = MyRAMSyncRuntimeConfiguration.current(bundle: configurationBundle)
+        precondition(!configuration.recordsTransportDiagnostics || serviceType == "myram-verify",
+                     "Verification transport diagnostics require the isolated MPC namespace")
+        runtimeConfiguration = configuration
+        transportDiagnostics = MyRAMSyncTransportDiagnostics(configuration: configuration)
         let deviceName = MyRAMDeviceIdentity.currentDisplayName()
         let storedDeviceID = MyRAMDeviceIdentity.currentDeviceID()
         let peer = MCPeerID(displayName: "\(deviceName)|\(storedDeviceID)")
@@ -319,6 +331,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         self.transport = transport ?? MyRAMMultipeerTransport(browser: browser, session: session)
 
         super.init()
+        transportDiagnostics.record("owner.created", session: session, peer: peer.displayName)
 
         session.delegate = self
         advertiser.delegate = self
@@ -332,9 +345,11 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     func startNetworkingIfNeeded() {
         guard !hasStartedNetworking else { return }
         hasStartedNetworking = true
+        transportDiagnostics.record("networking.start", session: session)
         advertiser.startAdvertisingPeer()
         browser.startBrowsingForPeers()
 
+        guard applicationSyncEnabled else { return }
         Task {
             await updatePendingCount()
             await requestLegacyFlush()
@@ -342,6 +357,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     deinit {
+        transportDiagnostics.record("owner.deinit", session: session)
         reconnectRetryTasks.values.forEach { $0.cancel() }
         advertiser.stopAdvertisingPeer()
         browser.stopBrowsingForPeers()
@@ -465,6 +481,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
         lastConnectionEvent = "Inviting \(peer.displayName)"
         let timeout: TimeInterval = 12
+        transportDiagnostics.record("invitation.outgoing", session: session, peer: peer.peerID.displayName)
         transport.invite(
             peer.peerID,
             context: SyncBatchPeerCapabilityCodec.productionInvitationContext,
@@ -480,6 +497,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         payload: Data,
         updatedAt: Date
     ) {
+        guard applicationSyncEnabled else { return }
         let targetKey = targetMutationKey(entityType: entityType, entityID: entityID)
         let predecessor = targetMutationTails[targetKey]?.task
         let operationID = UUID()
@@ -514,6 +532,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     func publishConflictResolutionChecked(_ payload: MyRAMSyncConflictPayload) async throws {
+        try runtimeConfiguration.requireApplicationSync()
         guard payload.action == .resolved,
               let data = try? MyRAMSyncPayloadCoding.encode(payload) else {
             throw CheckedConflictPublicationError.queueAdmissionNotDurable
@@ -583,6 +602,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     func flushAllOutboundWork() {
+        guard applicationSyncEnabled else { return }
         Task {
             await debouncedSender.flushNow()
             await onFlushLocalConvergenceRequested?()
@@ -592,6 +612,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func requestLegacyFlush() async {
+        guard applicationSyncEnabled else { return }
         if isOutboundSuspendedForRecovery || recoveryRequested || checkedPublicationLeaseCount > 0 {
             outboundFlushRequestedWhileRecoverySuspended = true
             await updatePendingCount()
@@ -623,7 +644,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         do {
             let payload = try JSONEncoder().encode(envelope)
             let data = try MultipeerSyncMessageCoding.encode(kind: .legacySyncEnvelope, payload: payload)
-            try await transport.send(data, toPeers: peers, mode: .reliable)
+            try await sendTransportData(data, toPeers: peers, mode: .reliable)
             lastSyncAt = envelope.sentAt
             lastErrorMessage = nil
         } catch {
@@ -634,7 +655,14 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         finishLegacyFlushAndSchedulePendingIfNeeded()
     }
 
+    private func sendTransportData(_ data: Data, toPeers peers: [MCPeerID], mode: MCSessionSendDataMode) async throws {
+        try runtimeConfiguration.requireApplicationSync()
+        transportDiagnostics.record("application.send", session: session, detail: "bytes=\(data.count)")
+        try await transport.send(data, toPeers: peers, mode: mode)
+    }
+
     func acceptLocalBatch(_ batch: SyncBatch) async throws {
+        try runtimeConfiguration.requireApplicationSync()
         try validateDurableAdmission(batch)
         try await sendBatch(batch)
     }
@@ -775,7 +803,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         do {
             let payload = try JSONEncoder().encode(envelope)
             let data = try MultipeerSyncMessageCoding.encode(kind: .legacySyncEnvelope, payload: payload)
-            try await transport.send(data, toPeers: [peerID], mode: .reliable)
+            try await sendTransportData(data, toPeers: [peerID], mode: .reliable)
             await syncEngine.markAcknowledgementSent(changeIDs.sorted { $0.uuidString < $1.uuidString })
             lastErrorMessage = nil
         } catch {
@@ -919,7 +947,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
         do {
             let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
-            try await transport.send(data, toPeers: pendingRecipients, mode: .reliable)
+            try await sendTransportData(data, toPeers: pendingRecipients, mode: .reliable)
             for deviceID in recipientDeviceIDs {
                 MyRAMSyncBenchmarkTelemetry.shared.record(
                     .batchSendSucceeded,
@@ -973,6 +1001,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func flushUnsentBatches() async {
+        guard applicationSyncEnabled else { return }
         if isOutboundSuspendedForRecovery {
             outboundFlushRequestedWhileRecoverySuspended = true
             await updatePendingCount()
@@ -1083,7 +1112,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                     kind: .batchAcknowledgement,
                     payload: payload
                 )
-                try await transport.send(data, toPeers: [peerID], mode: .reliable)
+                try await sendTransportData(data, toPeers: [peerID], mode: .reliable)
                 acknowledgementOutbox.remove(batchID, forPeerDeviceID: peerDeviceID)
                 MyRAMSyncBenchmarkTelemetry.shared.record(
                     .batchAcknowledgementSent,
@@ -1171,6 +1200,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func beginBootstrap(to peerID: MCPeerID) async {
+        guard applicationSyncEnabled else { return }
         let identity = MyRAMPeerIdentity(peerID: peerID)
         guard peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
             forPeerDeviceID: identity.deviceID
@@ -1295,7 +1325,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                 kind: .bootstrapSnapshot,
                 payload: payload
             )
-            try await transport.send(data, toPeers: [peerID], mode: .reliable)
+            try await sendTransportData(data, toPeers: [peerID], mode: .reliable)
             lastErrorMessage = nil
         } catch {
             lastErrorMessage = "Unable to send nearby bootstrap state."
@@ -1387,7 +1417,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                 kind: .bootstrapAcknowledgement,
                 payload: payload
             )
-            try await transport.send(data, toPeers: [peerID], mode: .reliable)
+            try await sendTransportData(data, toPeers: [peerID], mode: .reliable)
         } catch {
             lastErrorMessage = "Unable to confirm nearby bootstrap state."
             return
@@ -1489,19 +1519,21 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func sendBootstrapCapabilityAnnouncement(to peerID: MCPeerID) async {
+        guard applicationSyncEnabled else { return }
         do {
             let payload = try JSONEncoder().encode(SyncPeerBootstrapCapabilityAnnouncement())
             let data = try MultipeerSyncMessageCoding.encode(
                 kind: .bootstrapCapability,
                 payload: payload
             )
-            try await transport.send(data, toPeers: [peerID], mode: .reliable)
+            try await sendTransportData(data, toPeers: [peerID], mode: .reliable)
         } catch {
             lastErrorMessage = "Unable to announce nearby bootstrap capability."
         }
     }
 
     func resumeBootstrapAfterConflictResolution() async {
+        guard applicationSyncEnabled else { return }
         let connectedPeers = await transport.connectedPeers()
         let connectedDeviceIDs = Set(
             connectedPeers.map { MyRAMPeerIdentity(peerID: $0).deviceID }
@@ -1688,6 +1720,7 @@ extension MyRAMSyncController: PendingSyncQueueAdministrating {
     }
 
     func replaceLegacyQueueSnapshot(_ snapshot: SyncQueueSnapshot) async throws {
+        try runtimeConfiguration.requireApplicationSync()
         await waitForTargetMutations()
         try await syncEngine.replaceQueueSnapshot(snapshot)
         await updatePendingCount()
@@ -1709,6 +1742,7 @@ extension MyRAMSyncController: PendingSyncQueueAdministrating {
     }
 
     func replaceUnsentBatches(_ batches: [SyncBatch]) async throws {
+        try runtimeConfiguration.requireApplicationSync()
         for batch in batches {
             try validateDurableAdmission(batch)
         }
@@ -1760,9 +1794,16 @@ extension MyRAMSyncController: MCSessionDelegate {
                 clearConnectingState(for: identity.deviceID)
             }
 
+            transportDiagnostics.record("session.state", session: session, peer: peerID.displayName, detail: "state=\(state.rawValue)")
             if state == .notConnected {
-                handlePeerDisconnect(peerDeviceID: identity.deviceID)
+                if applicationSyncEnabled { handlePeerDisconnect(peerDeviceID: identity.deviceID) }
                 scheduleReconnectIfPossible(for: identity.deviceID)
+            }
+
+            if state == .connected, !applicationSyncEnabled {
+                cancelReconnectRetry(for: identity.deviceID)
+                rememberTrustedPeer(peerID)
+                return
             }
 
             if state == .connected {
@@ -1782,6 +1823,8 @@ extension MyRAMSyncController: MCSessionDelegate {
 
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         Task { @MainActor in
+            transportDiagnostics.record("application.received", session: session, peer: peerID.displayName, detail: "bytes=\(data.count)")
+            guard applicationSyncEnabled else { return }
             guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
                   message.schemaVersion == MultipeerSyncMessageEnvelope.currentSchemaVersion else {
                 return
@@ -1954,6 +1997,7 @@ extension MyRAMSyncController: MCNearbyServiceAdvertiserDelegate {
             )
             lastConnectionEvent = "Invitation from \(displayName(for: peerID))"
             rememberTrustedPeer(peerID)
+            transportDiagnostics.record("invitation.incoming.accepted", session: session, peer: peerID.displayName)
             invitationHandler(true, session)
         }
     }
@@ -1986,7 +2030,8 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
             ) {
                 bootstrapCapabilityResolutionTasks.removeValue(forKey: identity.deviceID)?.cancel()
             }
-            if (await transport.connectedPeers()).contains(peerID) {
+            transportDiagnostics.record("discovery.found", session: session, peer: peerID.displayName)
+            if applicationSyncEnabled, (await transport.connectedPeers()).contains(peerID) {
                 if peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
                     forPeerDeviceID: identity.deviceID
                 ) {

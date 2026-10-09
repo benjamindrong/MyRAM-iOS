@@ -62,21 +62,28 @@ class VerificationFixtureIdentityTests(unittest.TestCase):
     def test_creator_without_fixture_has_no_fixture_identity_configuration(self):
         self.generate(with_fixture=False)
 
-    def generate(self, with_fixture):
+    def test_transport_only_generation_binds_both_apps_and_audit(self):
+        self.generate(with_fixture=True, transport_only=True)
+
+    def generate(self, with_fixture, transport_only=False):
         before = subprocess.check_output(["git", "-C", str(ROOT), "status", "--porcelain"])
         sha = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
         with tempfile.TemporaryDirectory() as directory:
             worktree = Path(directory) / "Verification"
             command = ["bash", str(ROOT / "Scripts/create-myram-verification-worktree.sh"), "--path", str(worktree)]
             fixture = self.fixture(Path(directory) / "fixture.json")
+            if transport_only:
+                command += ["--transport-only"]
             if with_fixture:
                 command += ["--fixture-manifest", str(fixture)]
             try:
                 subprocess.run(command, cwd=ROOT, check=True, capture_output=True, text=True)
                 manifest = json.loads((worktree / "MYR-221-VERIFICATION-IDENTITY.json").read_text())
                 self.assertEqual(manifest["source_candidate_sha"], sha)
+                self.assertEqual(manifest["transport_mode"], "transportOnly" if transport_only else "application")
                 for platform, relative in [("iphone", "MyRAM/Info.plist"), ("mac", "MyRAM/Mac/Info.plist")]:
                     values = plistlib.loads((worktree / relative).read_bytes())
+                    self.assertEqual(values.get("MyRAMVerificationTransportOnly", False), transport_only)
                     if with_fixture:
                         self.assertEqual(values["MyRAMVerificationFixtureDeviceID"], manifest["fixture_identity"][platform])
                     else:
