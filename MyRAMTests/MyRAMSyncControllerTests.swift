@@ -44,7 +44,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
         controller.session(session, didReceive: try MultipeerSyncMessageCoding.encodeBatch(batch), fromPeer: Self.remotePeerID)
         await waitUntil { controller.lastConnectionEvent.hasPrefix("Connected:") }
         await controller.beginBootstrapForTesting(to: Self.remotePeerID)
-        controller.recordLocalChange(entityType: .note, entityID: UUID().uuidString, payload: Data(), updatedAt: .now)
+        controller.recordLocalChange(entityType: .item, entityID: UUID().uuidString, payload: Data(), updatedAt: .now)
         controller.flushAllOutboundWork()
         do {
             try await controller.acceptLocalBatch(batch)

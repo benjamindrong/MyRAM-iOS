@@ -169,7 +169,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             ?? { retainedSession.disconnect() }
 
         super.init()
-        transportDiagnostics.record("owner.created", session: session, peer: retainedPeerID.displayName)
+        transportDiagnostics.record("owner.created", session: session, peer: retainedPeerID)
 
         session.delegate = self
         advertiser.delegate = self
@@ -341,7 +341,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             return
         }
         lastConnectionEvent = "Inviting \(peer.displayName)"
-        transportDiagnostics.record("invitation.outgoing", session: session, peer: peer.peerID.displayName)
+        transportDiagnostics.record("invitation.outgoing", session: session, peer: peer.peerID)
         invitePeerOperation(
             peer.peerID,
             SyncBatchPeerCapabilityCodec.productionInvitationContext,
@@ -1305,7 +1305,7 @@ extension MacSyncBatchController: MCSessionDelegate {
             )
             connectedPeers = session.connectedPeers.map { displayName(for: $0) }
             lastConnectionEvent = "\(state.syncDescription): \(displayName(for: peerID))"
-            transportDiagnostics.record("session.state", session: session, peer: peerID.displayName, detail: "state=\(state.rawValue)")
+            transportDiagnostics.record("session.state", session: session, peer: peerID, detail: "state=\(state.rawValue)")
             if state == .notConnected {
                 if applicationSyncEnabled { handlePeerDisconnect(peerDeviceID: identity.deviceID) }
             }
@@ -1332,7 +1332,7 @@ extension MacSyncBatchController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         Task { @MainActor in
             guard networkingLifecycle != .stopped else { return }
-            transportDiagnostics.record("application.received", session: session, peer: peerID.displayName, detail: "bytes=\(data.count)")
+            transportDiagnostics.record("application.received", session: session, peer: peerID, detail: "bytes=\(data.count)")
             guard applicationSyncEnabled else { return }
             guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
                   message.schemaVersion == MultipeerSyncMessageEnvelope.currentSchemaVersion else {
@@ -1435,7 +1435,7 @@ extension MacSyncBatchController: MCNearbyServiceAdvertiserDelegate {
             )
             remember(peerID)
             lastConnectionEvent = "Invitation from \(displayName(for: peerID))"
-            transportDiagnostics.record("invitation.incoming.accepted", session: session, peer: peerID.displayName)
+            transportDiagnostics.record("invitation.incoming.accepted", session: session, peer: peerID)
             invitationHandler(true, session)
         }
     }
@@ -1467,7 +1467,7 @@ extension MacSyncBatchController: MCNearbyServiceBrowserDelegate {
             ) {
                 bootstrapCapabilityResolutionTasks.removeValue(forKey: identity.deviceID)?.cancel()
             }
-            transportDiagnostics.record("discovery.found", session: session, peer: peerID.displayName)
+            transportDiagnostics.record("discovery.found", session: session, peer: peerID)
             if applicationSyncEnabled, connectedPeersProvider().contains(peerID) {
                 if peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
                     forPeerDeviceID: identity.deviceID

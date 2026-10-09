@@ -331,7 +331,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         self.transport = transport ?? MyRAMMultipeerTransport(browser: browser, session: session)
 
         super.init()
-        transportDiagnostics.record("owner.created", session: session, peer: peer.displayName)
+        transportDiagnostics.record("owner.created", session: session, peer: peer)
 
         session.delegate = self
         advertiser.delegate = self
@@ -481,7 +481,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
         lastConnectionEvent = "Inviting \(peer.displayName)"
         let timeout: TimeInterval = 12
-        transportDiagnostics.record("invitation.outgoing", session: session, peer: peer.peerID.displayName)
+        transportDiagnostics.record("invitation.outgoing", session: session, peer: peer.peerID)
         transport.invite(
             peer.peerID,
             context: SyncBatchPeerCapabilityCodec.productionInvitationContext,
@@ -1794,7 +1794,7 @@ extension MyRAMSyncController: MCSessionDelegate {
                 clearConnectingState(for: identity.deviceID)
             }
 
-            transportDiagnostics.record("session.state", session: session, peer: peerID.displayName, detail: "state=\(state.rawValue)")
+            transportDiagnostics.record("session.state", session: session, peer: peerID, detail: "state=\(state.rawValue)")
             if state == .notConnected {
                 if applicationSyncEnabled { handlePeerDisconnect(peerDeviceID: identity.deviceID) }
                 scheduleReconnectIfPossible(for: identity.deviceID)
@@ -1823,7 +1823,7 @@ extension MyRAMSyncController: MCSessionDelegate {
 
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         Task { @MainActor in
-            transportDiagnostics.record("application.received", session: session, peer: peerID.displayName, detail: "bytes=\(data.count)")
+            transportDiagnostics.record("application.received", session: session, peer: peerID, detail: "bytes=\(data.count)")
             guard applicationSyncEnabled else { return }
             guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
                   message.schemaVersion == MultipeerSyncMessageEnvelope.currentSchemaVersion else {
@@ -1997,7 +1997,7 @@ extension MyRAMSyncController: MCNearbyServiceAdvertiserDelegate {
             )
             lastConnectionEvent = "Invitation from \(displayName(for: peerID))"
             rememberTrustedPeer(peerID)
-            transportDiagnostics.record("invitation.incoming.accepted", session: session, peer: peerID.displayName)
+            transportDiagnostics.record("invitation.incoming.accepted", session: session, peer: peerID)
             invitationHandler(true, session)
         }
     }
@@ -2030,7 +2030,7 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
             ) {
                 bootstrapCapabilityResolutionTasks.removeValue(forKey: identity.deviceID)?.cancel()
             }
-            transportDiagnostics.record("discovery.found", session: session, peer: peerID.displayName)
+            transportDiagnostics.record("discovery.found", session: session, peer: peerID)
             if applicationSyncEnabled, (await transport.connectedPeers()).contains(peerID) {
                 if peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
                     forPeerDeviceID: identity.deviceID
