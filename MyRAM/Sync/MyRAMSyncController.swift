@@ -7,27 +7,33 @@ import OSLog
 struct TrustedPeerReconnectTracker {
     struct Attempt: Equatable {
         let peerID: String
+        let incarnation: MCPeerID?
         fileprivate let token: UUID
     }
 
     private var connectingAttemptsByPeerID: [String: Attempt] = [:]
 
-    mutating func beginConnecting(to peerID: String) -> Attempt? {
-        guard connectingAttemptsByPeerID[peerID] == nil else { return nil }
+    mutating func beginConnecting(to peerID: String, incarnation: MCPeerID? = nil) -> Attempt? {
+        if let current = connectingAttemptsByPeerID[peerID], current.incarnation == incarnation {
+            return nil
+        }
 
-        let attempt = Attempt(peerID: peerID, token: UUID())
+        let attempt = Attempt(peerID: peerID, incarnation: incarnation, token: UUID())
         connectingAttemptsByPeerID[peerID] = attempt
         return attempt
     }
 
-    mutating func finishConnecting(to peerID: String) {
+    mutating func finishConnecting(to peerID: String, incarnation: MCPeerID? = nil) {
+        if let incarnation, connectingAttemptsByPeerID[peerID]?.incarnation != incarnation { return }
         connectingAttemptsByPeerID.removeValue(forKey: peerID)
     }
 
-    mutating func finishConnecting(_ attempt: Attempt) {
-        guard connectingAttemptsByPeerID[attempt.peerID] == attempt else { return }
+    @discardableResult
+    mutating func finishConnecting(_ attempt: Attempt) -> Bool {
+        guard connectingAttemptsByPeerID[attempt.peerID] == attempt else { return false }
 
         finishConnecting(to: attempt.peerID)
+        return true
     }
 
     func isConnecting(to peerID: String) -> Bool {
@@ -476,7 +482,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             lastConnectionEvent = "Connected: \(peer.displayName)"
             return
         }
-        guard let attempt = reconnectTracker.beginConnecting(to: peer.deviceID) else { return }
+        guard let attempt = reconnectTracker.beginConnecting(to: peer.deviceID, incarnation: peer.peerID) else { return }
         cancelReconnectRetry(for: peer.deviceID)
 
         lastConnectionEvent = "Inviting \(peer.displayName)"
@@ -735,7 +741,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             let nanoseconds = UInt64((timeout + 1) * 1_000_000_000)
             try? await Task.sleep(nanoseconds: nanoseconds)
             guard !Task.isCancelled, let self else { return }
-            self.clearConnectingState(for: attempt)
+            guard self.reconnectTracker.finishConnecting(attempt) else { return }
             self.scheduleReconnectIfPossible(for: attempt.peerID)
         }
     }
@@ -783,12 +789,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 #endif
 
-    private func clearConnectingState(for deviceID: String) {
-        reconnectTracker.finishConnecting(to: deviceID)
-    }
-
-    private func clearConnectingState(for attempt: TrustedPeerReconnectTracker.Attempt) {
-        reconnectTracker.finishConnecting(attempt)
+    private func clearConnectingState(for peerID: MCPeerID) {
+        reconnectTracker.finishConnecting(to: MyRAMPeerIdentity(peerID: peerID).deviceID, incarnation: peerID)
     }
 
     private func sendAcknowledgement(forChangeIDs changeIDs: Set<UUID>, to peerID: MCPeerID) async {
@@ -1782,6 +1784,14 @@ extension MyRAMSyncController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
         Task { @MainActor in
             let identity = MyRAMPeerIdentity(peerID: peerID)
+            transportDiagnostics.record("session.state", session: session, peer: peerID, detail: "state=\(state.rawValue)")
+            // Record the raw callback, but let only its concrete peer mutate invitation state.
+            if state == .notConnected,
+               let current = availablePeers.first(where: { $0.deviceID == identity.deviceID }),
+               current.peerID != peerID {
+                transportDiagnostics.record("session.retiredPeerCallback", session: session, peer: peerID)
+                return
+            }
             MyRAMSyncBenchmarkTelemetry.shared.record(
                 .peerConnectionState,
                 peerDeviceID: identity.deviceID,
@@ -1791,10 +1801,9 @@ extension MyRAMSyncController: MCSessionDelegate {
             lastConnectionEvent = "\(description(for: state)): \(displayName(for: peerID))"
 
             if state == .connected || state == .notConnected {
-                clearConnectingState(for: identity.deviceID)
+                clearConnectingState(for: peerID)
             }
 
-            transportDiagnostics.record("session.state", session: session, peer: peerID, detail: "state=\(state.rawValue)")
             if state == .notConnected {
                 if applicationSyncEnabled { handlePeerDisconnect(peerDeviceID: identity.deviceID) }
                 scheduleReconnectIfPossible(for: identity.deviceID)
@@ -2017,6 +2026,15 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
     nonisolated func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String: String]?) {
         Task { @MainActor in
             let identity = MyRAMPeerIdentity(peerID: peerID)
+            let discoveredPeer = MyRAMDiscoveredPeer(
+                peerID: peerID,
+                deviceID: identity.deviceID,
+                displayName: identity.displayName,
+                isTrusted: trustedPeerStore.contains(peerID: identity.deviceID)
+            )
+            // Publish discovery before suspension. An older callback must not overwrite
+            // a newer peer incarnation when its transport lookup resumes.
+            addOrUpdateAvailablePeer(discoveredPeer)
             peerCapabilityRegistry.recordDiscoveryValue(
                 info?[SyncBatchPeerCapabilityCodec.discoveryInfoKey],
                 forPeerDeviceID: identity.deviceID
@@ -2031,7 +2049,9 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
                 bootstrapCapabilityResolutionTasks.removeValue(forKey: identity.deviceID)?.cancel()
             }
             transportDiagnostics.record("discovery.found", session: session, peer: peerID)
-            if applicationSyncEnabled, (await transport.connectedPeers()).contains(peerID) {
+            let peers = await transport.connectedPeers()
+            guard availablePeers.contains(where: { $0.deviceID == identity.deviceID && $0.peerID == peerID }) else { return }
+            if applicationSyncEnabled, peers.contains(peerID) {
                 if peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
                     forPeerDeviceID: identity.deviceID
                 ) {
@@ -2042,15 +2062,8 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
             }
             lastConnectionEvent = "Found \(identity.displayName)"
 
-            let discoveredPeer = MyRAMDiscoveredPeer(
-                peerID: peerID,
-                deviceID: identity.deviceID,
-                displayName: identity.displayName,
-                isTrusted: trustedPeerStore.contains(peerID: identity.deviceID)
-            )
-            addOrUpdateAvailablePeer(discoveredPeer)
-
-            if discoveredPeer.isTrusted {
+            if discoveredPeer.isTrusted,
+               availablePeers.contains(where: { $0.deviceID == identity.deviceID && $0.peerID == peerID }) {
                 invite(discoveredPeer)
             }
         }
@@ -2059,12 +2072,13 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
     nonisolated func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {
         Task { @MainActor in
             let identity = MyRAMPeerIdentity(peerID: peerID)
+            guard availablePeers.contains(where: { $0.deviceID == identity.deviceID && $0.peerID == peerID }) else { return }
             lastConnectionEvent = "Lost \(identity.displayName)"
             peerCapabilityRegistry.clearDiscoveryEvidence(
                 forPeerDeviceID: identity.deviceID
             )
-            availablePeers.removeAll { $0.deviceID == identity.deviceID }
-            clearConnectingState(for: identity.deviceID)
+            availablePeers.removeAll { $0.peerID == peerID }
+            clearConnectingState(for: peerID)
             cancelReconnectRetry(for: identity.deviceID)
         }
     }
