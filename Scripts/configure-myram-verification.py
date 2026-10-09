@@ -58,6 +58,11 @@ EXPECTED_STORAGE_ROOT_FILES = {
     "MyRAM/Sync/MyRAMSyncConflictService.swift",
 }
 
+EXPECTED_TEST_STORAGE_ROOT_FILES = {
+    "MyRAMTests/MyRAMSyncOperationIDAllocatorTests.swift",
+    "MyRAMTests/SyncBatchAnchoredRecoveryStoreTests.swift",
+}
+
 FIXED_CHANGED_FILES = {
     "MyRAM.xcodeproj/project.pbxproj",
     "MyRAM/Info.plist",
@@ -343,8 +348,9 @@ def configure_storage_roots(root: Path, identity: dict[str, Any]) -> None:
         f'.appendingPathComponent("{identity["storage_root_name"]}", isDirectory: true)'
     )
     found: set[str] = set()
-    myram_root = root / "MyRAM"
-    for path in sorted(myram_root.rglob("*.swift")):
+    storage_sources = [path for name in ("MyRAM", "MyRAMTests", "MyRAMMacTests")
+                       for path in (root / name).rglob("*.swift")]
+    for path in sorted(storage_sources):
         text = path.read_text(encoding="utf-8")
         if token not in text:
             continue
@@ -352,10 +358,11 @@ def configure_storage_roots(root: Path, identity: dict[str, Any]) -> None:
         found.add(relative)
         path.write_text(text.replace(token, replacement), encoding="utf-8")
 
-    if found != EXPECTED_STORAGE_ROOT_FILES:
+    expected = EXPECTED_STORAGE_ROOT_FILES | EXPECTED_TEST_STORAGE_ROOT_FILES
+    if found != expected:
         fail(
             "Application Support topology drifted. "
-            f"Expected {sorted(EXPECTED_STORAGE_ROOT_FILES)}, found {sorted(found)}."
+            f"Expected {sorted(expected)}, found {sorted(found)}."
         )
 
 
@@ -451,7 +458,7 @@ def audit(root: Path, identity: dict[str, Any], source_sha: str, fixture: dict[s
     verification_root_token = (
         f'.appendingPathComponent("{identity["storage_root_name"]}", isDirectory: true)'
     )
-    for relative in EXPECTED_STORAGE_ROOT_FILES:
+    for relative in EXPECTED_STORAGE_ROOT_FILES | EXPECTED_TEST_STORAGE_ROOT_FILES:
         text = (root / relative).read_text(encoding="utf-8")
         if production_root_token in text:
             fail(f"{relative}: Production Application Support root remains.")
@@ -486,7 +493,8 @@ def audit(root: Path, identity: dict[str, Any], source_sha: str, fixture: dict[s
         for line in run_git(root, "diff", "--name-only").splitlines()
         if line.strip()
     }
-    expected_changed_files = FIXED_CHANGED_FILES | EXPECTED_STORAGE_ROOT_FILES
+    expected_changed_files = (FIXED_CHANGED_FILES | EXPECTED_STORAGE_ROOT_FILES
+                              | EXPECTED_TEST_STORAGE_ROOT_FILES)
     if changed_files != expected_changed_files:
         fail(
             "Generated change surface drifted. "

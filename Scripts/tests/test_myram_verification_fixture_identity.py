@@ -15,6 +15,22 @@ spec.loader.exec_module(module)
 
 
 class VerificationFixtureIdentityTests(unittest.TestCase):
+    def test_storage_configuration_isolates_test_paths_as_well_as_application_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = module.EXPECTED_STORAGE_ROOT_FILES | {
+                "MyRAMTests/MyRAMSyncOperationIDAllocatorTests.swift",
+                "MyRAMTests/SyncBatchAnchoredRecoveryStoreTests.swift",
+            }
+            for relative in paths:
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('.appendingPathComponent("MyRAM", isDirectory: true)')
+            module.configure_storage_roots(root, {"storage_root_name": "MyRAM Verification"})
+            for relative in paths:
+                self.assertEqual((root / relative).read_text(),
+                                 '.appendingPathComponent("MyRAM Verification", isDirectory: true)')
+
     def fixture(self, path, iphone="94C3C1CC-4FD0-4E55-97E3-3AAD33F24B8B", mac="5CF4DFED-1278-4D5C-BB0A-D63DC5866DC2"):
         path.write_text(json.dumps({"schema": "myr233.seven-batch-restore-fixture.v1",
                                    "captured_device_ids": {"iphone": iphone, "mac": mac}}))
