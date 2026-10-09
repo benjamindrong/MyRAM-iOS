@@ -106,6 +106,7 @@ final class MacSyncTransportLifecycleTests: XCTestCase {
         let original = try Data(contentsOf: queueURL)
         let remote = MCPeerID(displayName: "remote|transport-only")
         var events: [String] = []
+        var members = [remote]
         let controller = MacSyncBatchController(
             context: container.mainContext,
             conflictStore: SyncConflictStore(fileURL: directory.appendingPathComponent("conflicts.json")),
@@ -114,7 +115,7 @@ final class MacSyncTransportLifecycleTests: XCTestCase {
             identityProvider: { MacSyncDeviceIdentity(id: UUID(), displayName: "Transport test") },
             startAdvertisingOperation: { events.append("advertise") },
             startBrowsingOperation: { events.append("browse") },
-            connectedPeersProvider: { [remote] },
+            connectedPeersProvider: { members },
             sendBatchDataOperation: { _, _, _ in XCTFail("Application send in transport-only mode") },
             invitePeerOperation: { _, _, _ in events.append("invite") }
         )
@@ -123,14 +124,22 @@ final class MacSyncTransportLifecycleTests: XCTestCase {
         controller.startNetworkingIfNeeded()
         // Invitation handling still belongs to the retained MPC session.
         let advertiser = MCNearbyServiceAdvertiser(peer: MCPeerID(displayName: "test"), discoveryInfo: nil, serviceType: "myram-verify")
-        let invited = expectation(description: "Transport invitation accepted")
+        let invited = expectation(description: "Transport invitation accepted after prior membership leaves")
+        var acceptedInvitations = 0
         controller.advertiser(advertiser, didReceiveInvitationFromPeer: remote, withContext: nil) { accepted, session in
+            acceptedInvitations += 1
             XCTAssertTrue(accepted)
             XCTAssertNotNil(session)
             invited.fulfill()
         }
-        await fulfillment(of: [invited], timeout: 2)
+        await Task.yield()
+        XCTAssertEqual(acceptedInvitations, 0)
         let session = MCSession(peer: MCPeerID(displayName: "local"), securityIdentity: nil, encryptionPreference: .required)
+        members = []
+        controller.session(session, peer: remote, didChange: .notConnected)
+        await fulfillment(of: [invited], timeout: 2)
+        XCTAssertEqual(acceptedInvitations, 1)
+        members = [remote]
         controller.session(session, peer: remote, didChange: .connected)
         let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
         controller.session(session, didReceive: data, fromPeer: remote)
