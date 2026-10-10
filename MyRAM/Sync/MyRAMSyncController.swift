@@ -36,6 +36,10 @@ struct TrustedPeerReconnectTracker {
         return true
     }
 
+    func connectingAttempt(to peerID: String) -> Attempt? {
+        connectingAttemptsByPeerID[peerID]
+    }
+
     func isConnecting(to peerID: String) -> Bool {
         connectingAttemptsByPeerID[peerID] != nil
     }
@@ -482,12 +486,17 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     func invite(_ peer: MyRAMDiscoveredPeer) {
+        recordReconnectState("invitation.pending.beforeAdmission", peer: peer.peerID)
         guard !transport.hasConnectedPeer(peer.peerID) else {
             cancelReconnectRetry(for: peer.deviceID)
             lastConnectionEvent = "Connected: \(peer.displayName)"
             return
         }
-        guard reconnectTracker.beginConnecting(to: peer.deviceID, incarnation: peer.peerID) != nil else { return }
+        guard reconnectTracker.beginConnecting(to: peer.deviceID, incarnation: peer.peerID) != nil else {
+            recordReconnectState("invitation.pending.suppressed", peer: peer.peerID)
+            return
+        }
+        recordReconnectState("invitation.pending.admitted", peer: peer.peerID)
         cancelReconnectRetry(for: peer.deviceID)
 
         lastConnectionEvent = "Inviting \(peer.displayName)"
@@ -758,16 +767,22 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                 }
             }
             guard !Task.isCancelled, let self else { return }
+            self.recordReconnectState("retry.wake", peer: peer.peerID)
             self.reconnectRetryTasks.removeValue(forKey: peer.deviceID)
+            self.recordReconnectState("retry.removedBeforeInvite", peer: peer.peerID)
             guard self.availablePeers.contains(where: {
                 $0.deviceID == peer.deviceID && $0.peerID == peer.peerID && $0.isTrusted
             }) else { return }
             self.invite(peer)
         }
+        recordReconnectState("retry.scheduled", peer: peer.peerID)
     }
 
     private func cancelReconnectRetry(for deviceID: String) {
+        let peer = availablePeers.first { $0.deviceID == deviceID }?.peerID
+        if let peer { recordReconnectState("retry.cancel.before", peer: peer) }
         reconnectRetryTasks.removeValue(forKey: deviceID)?.cancel()
+        if let peer { recordReconnectState("retry.cancel.after", peer: peer) }
     }
 
 #if DEBUG
@@ -781,7 +796,30 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 #endif
 
     private func clearConnectingState(for peerID: MCPeerID) {
+        recordReconnectState("invitation.pending.terminal.before", peer: peerID)
         reconnectTracker.finishConnecting(to: MyRAMPeerIdentity(peerID: peerID).deviceID, incarnation: peerID)
+        recordReconnectState("invitation.pending.terminal.after", peer: peerID)
+    }
+
+    private func recordReconnectState(
+        _ event: String, peer: MCPeerID,
+        callbackSession: MCSession? = nil, callbackState: MCSessionState? = nil
+    ) {
+        guard runtimeConfiguration.recordsTransportDiagnostics else { return }
+        let deviceID = MyRAMPeerIdentity(peerID: peer).deviceID
+        let attempt = reconnectTracker.connectingAttempt(to: deviceID)
+        let fields: [String: Any] = [
+            "pendingAttempt": attempt?.token.uuidString ?? "",
+            "pendingPeerObject": attempt?.incarnation.map { String(describing: ObjectIdentifier($0)) } ?? "",
+            "pendingPeerEqualsCallback": attempt?.incarnation == peer,
+            "retryScheduled": reconnectRetryTasks[deviceID] != nil,
+            "callbackSession": callbackSession.map { String(describing: ObjectIdentifier($0)) } ?? "",
+            "callbackOwnsSession": callbackSession.map { $0 === session } ?? false,
+            "callbackState": callbackState?.rawValue ?? -1
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: fields, options: .sortedKeys),
+              let detail = String(data: data, encoding: .utf8) else { return }
+        transportDiagnostics.record(event, session: session, peer: peer, detail: detail, owner: browser)
     }
 
     private func sendAcknowledgement(forChangeIDs changeIDs: Set<UUID>, to peerID: MCPeerID) async {
@@ -1790,6 +1828,10 @@ extension MyRAMSyncController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
         transportDiagnostics.record("session.callback", session: session, peer: peerID, detail: "state=\(state.rawValue)")
         Task { @MainActor in
+            recordReconnectState("session.actor.entered", peer: peerID, callbackSession: session, callbackState: state)
+            defer {
+                recordReconnectState("session.actor.completed", peer: peerID, callbackSession: session, callbackState: state)
+            }
             let identity = MyRAMPeerIdentity(peerID: peerID)
             transportDiagnostics.record("session.state", session: session, peer: peerID, detail: "state=\(state.rawValue)")
             // Record the raw callback, but let only its concrete peer mutate invitation state.
@@ -1837,6 +1879,7 @@ extension MyRAMSyncController: MCSessionDelegate {
                 flushAllOutboundWork()
             }
         }
+        transportDiagnostics.record("session.callback.enqueued", session: session, peer: peerID, detail: "state=\(state.rawValue)")
     }
 
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
