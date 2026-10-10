@@ -510,7 +510,11 @@ final class NotesViewModel: ObservableObject {
             + regularNotes.map(NotesListItem.note)
     }
 
-    func fetchRecentlyDeletedNotes(now: Date = .now) -> [Note] {
+    func fetchRecentlyDeletedNotes(
+        now: Date = .now,
+        includeRetainedExpired: Bool = false,
+        configuration: MyRAMSyncRuntimeConfiguration = .current()
+    ) -> [Note] {
         let cutoff = now.addingTimeInterval(-Self.recentlyDeletedRetention)
         // UI expiry cannot authorize destroying shared deletion/sequence state.
         // Retain the tombstone and its children until sync has a safe GC owner.
@@ -521,6 +525,7 @@ final class NotesViewModel: ObservableObject {
         return ((try? context.fetch(descriptor)) ?? []).filter {
             guard let deletedAt = $0.deletedAt else { return false }
             return deletedAt >= cutoff
+                || (includeRetainedExpired && configuration.allowsRetainedDeletedNoteInspection)
         }
     }
 

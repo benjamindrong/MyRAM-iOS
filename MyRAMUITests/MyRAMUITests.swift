@@ -17,6 +17,42 @@ final class MyRAMUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    /// Opt-in physical acceptance against the preserved Verification fixture.
+    /// Uses the installed app and its ordinary restoration flow, without a test store or reset.
+    func testMYR233PhysicalRetainedNoteRestoration() throws {
+        guard ProcessInfo.processInfo.environment["MYR233_PHYSICAL_RESTORATION"] == "1" else {
+            throw XCTSkip("Requires explicitly bound physical Verification acceptance")
+        }
+        let app = XCUIApplication(bundleIdentifier: "com.northsignalstudio.myram.verification")
+        app.activate()
+        let more = app.buttons["notes-list-more"]
+        XCTAssertTrue(more.waitForExistence(timeout: Timeout.standard))
+        more.tap()
+        let deleted = app.buttons["Recently Deleted"]
+        XCTAssertTrue(deleted.waitForExistence(timeout: Timeout.standard))
+        deleted.tap()
+        let includeExpired = app.descendants(matching: .any)["verification-retained-deleted-notes"].firstMatch
+        XCTAssertTrue(includeExpired.waitForExistence(timeout: Timeout.standard),
+                      "Restoration requires the app's immutable Verification identity and service gate")
+        includeExpired.tap()
+        let ids = ["4F390252-1147-4575-B855-BCE319D88B0D", "DBC72F2B-EA8B-4309-980D-428FFF0A10D0"]
+        // Both retained parents must exist before either is restored.
+        for id in ids {
+            XCTAssertTrue(app.descendants(matching: .any)["deleted-note-\(id)"].firstMatch
+                .waitForExistence(timeout: Timeout.standard))
+        }
+        for id in ids {
+            let row = app.descendants(matching: .any)["deleted-note-\(id)"].firstMatch
+            row.swipeRight()
+            let restore = app.buttons["Restore"].firstMatch
+            XCTAssertTrue(restore.waitForExistence(timeout: Timeout.standard))
+            restore.tap()
+            let removed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: row)
+            XCTAssertEqual(XCTWaiter.wait(for: [removed], timeout: Timeout.standard), .completed)
+        }
+        app.buttons["Done"].tap()
+    }
+
     func testNewNoteOpensWithoutAttachments() throws {
         let app = makeApp()
         app.launch()

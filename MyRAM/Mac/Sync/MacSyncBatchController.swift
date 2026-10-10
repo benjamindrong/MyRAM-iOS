@@ -38,7 +38,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 #endif
 
     private let runtimeConfiguration: MyRAMSyncRuntimeConfiguration
-    private let transportDiagnostics: MyRAMSyncTransportDiagnostics
+    nonisolated private let transportDiagnostics: MyRAMSyncTransportDiagnostics
     var applicationSyncEnabled: Bool { runtimeConfiguration.applicationSyncEnabled }
 
     private let serviceType = "myram-sync"
@@ -1322,6 +1322,7 @@ extension MacSyncBatchController: SyncConvergenceRemoteAcknowledgementRetaining 
 
 extension MacSyncBatchController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
+        transportDiagnostics.record("session.callback", session: session, peer: peerID, detail: "state=\(state.rawValue)")
         Task { @MainActor in
             guard networkingLifecycle != .stopped else { return }
             let identity = MacSyncPeerIdentity(peerID: peerID)
@@ -1462,6 +1463,7 @@ extension MacSyncBatchController {
         lastConnectionEvent = "Invitation from \(displayName(for: peerID))"
         transportDiagnostics.record("invitation.incoming.accepted", session: session, peer: peerID)
         handler(true, session)
+        transportDiagnostics.record("invitation.incoming.handlerReturned", session: session, peer: peerID)
     }
 }
 

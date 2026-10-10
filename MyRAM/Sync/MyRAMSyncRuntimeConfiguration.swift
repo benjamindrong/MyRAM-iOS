@@ -18,6 +18,8 @@ struct MyRAMSyncRuntimeConfiguration {
 
     enum AdmissionError: Error { case applicationSyncDisabled }
 
+    var allowsRetainedDeletedNoteInspection: Bool { recordsTransportDiagnostics }
+
     let applicationSyncEnabled: Bool
     let recordsTransportDiagnostics: Bool
 
@@ -56,7 +58,7 @@ struct MyRAMSyncRuntimeConfiguration {
 }
 
 /// Logs the existing MPC owner; does not create or control a transport.
-struct MyRAMSyncTransportDiagnostics {
+struct MyRAMSyncTransportDiagnostics: Sendable {
     private let enabled: Bool
     private let mode: String
     private let incarnation = UUID().uuidString

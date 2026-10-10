@@ -7194,6 +7194,40 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(deletedNotes.contains(where: { $0.id == preexistingDeletedNote.id }))
     }
 
+    func testMYR233RetainedExpiredRestorationPresentationRequiresVerificationIdentity() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let now = Date(timeIntervalSinceReferenceDate: 813283200)
+        let note = Note(title: "Retained", content: "Body")
+        note.deletedAt = now.addingTimeInterval(-20 * 24 * 60 * 60)
+        let deletion = note.deletedAt
+        context.insert(note)
+        let child = PinnedThought(text: "Retained pinned text", order: 0, note: note)
+        context.insert(child)
+        try context.save()
+        let vm = NotesViewModel(context: context)
+        for bundleID in ["com.northsignalstudio.myram.verification", "com.northsignalstudio.myram.mac.verification"] {
+            let isolated = try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: bundleID, bonjourServices: ["_myram-verify._tcp"], transportOnlyValue: nil)
+            XCTAssertTrue(vm.fetchRecentlyDeletedNotes(now: now, configuration: isolated).isEmpty)
+            XCTAssertEqual(vm.fetchRecentlyDeletedNotes(now: now, includeRetainedExpired: true,
+                                                       configuration: isolated).map(\.id), [note.id])
+        }
+        for (bundleID, service) in [
+            ("com.northsignalstudio.myram", "_myram-verify._tcp"),
+            ("com.northsignalstudio.myram.verification", "_myram-sync._tcp")
+        ] {
+            let excluded = try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: bundleID, bonjourServices: [service], transportOnlyValue: nil)
+            XCTAssertFalse(excluded.allowsRetainedDeletedNoteInspection)
+            XCTAssertTrue(vm.fetchRecentlyDeletedNotes(now: now, includeRetainedExpired: true,
+                                                       configuration: excluded).isEmpty)
+        }
+        XCTAssertEqual(note.deletedAt, deletion)
+        XCTAssertEqual(note.pinnedThoughts.map(\.id), [child.id])
+        XCTAssertFalse(context.hasChanges)
+    }
+
     func testRecentlyDeletedNotesExpireFromPresentationWithoutPurgingSharedState() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext

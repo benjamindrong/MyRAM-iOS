@@ -58,9 +58,12 @@ private final class MyRAMMultipeerTransport: MyRAMSyncTransporting {
     private let session: MCSession
     private let queue = DispatchQueue(label: "com.myram.nearby-sync.transport")
 
-    init(browser: MCNearbyServiceBrowser, session: MCSession) {
+    private let diagnostics: MyRAMSyncTransportDiagnostics
+
+    init(browser: MCNearbyServiceBrowser, session: MCSession, diagnostics: MyRAMSyncTransportDiagnostics) {
         self.browser = browser
         self.session = session
+        self.diagnostics = diagnostics
     }
 
     func invite(
@@ -68,13 +71,15 @@ private final class MyRAMMultipeerTransport: MyRAMSyncTransporting {
         context: Data,
         timeout: TimeInterval
     ) {
-        queue.async { [browser, session] in
+        queue.async { [browser, session, diagnostics] in
+            diagnostics.record("invitation.dispatched", session: session, peer: peerID)
             browser.invitePeer(
                 peerID,
                 to: session,
                 withContext: context,
                 timeout: timeout
             )
+            diagnostics.record("invitation.returned", session: session, peer: peerID)
         }
     }
 
@@ -256,7 +261,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 #endif
 
     private let runtimeConfiguration: MyRAMSyncRuntimeConfiguration
-    private let transportDiagnostics: MyRAMSyncTransportDiagnostics
+    nonisolated private let transportDiagnostics: MyRAMSyncTransportDiagnostics
     var applicationSyncEnabled: Bool { runtimeConfiguration.applicationSyncEnabled }
 
     private let serviceType = "myram-sync"
@@ -334,7 +339,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         )
         browser = MCNearbyServiceBrowser(peer: peer, serviceType: serviceType)
         unsentBatches = FileBackedSyncBatchQueue(fileURL: unsentBatchQueueFileURL)
-        self.transport = transport ?? MyRAMMultipeerTransport(browser: browser, session: session)
+        self.transport = transport ?? MyRAMMultipeerTransport(browser: browser, session: session, diagnostics: transportDiagnostics)
 
         super.init()
         transportDiagnostics.record("owner.created", session: session, peer: peer)
@@ -1783,6 +1788,7 @@ extension MyRAMSyncController: SyncConvergenceRemoteAcknowledgementRetaining {
 
 extension MyRAMSyncController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
+        transportDiagnostics.record("session.callback", session: session, peer: peerID, detail: "state=\(state.rawValue)")
         Task { @MainActor in
             let identity = MyRAMPeerIdentity(peerID: peerID)
             transportDiagnostics.record("session.state", session: session, peer: peerID, detail: "state=\(state.rawValue)")
