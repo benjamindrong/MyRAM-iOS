@@ -392,7 +392,6 @@ final class NotesViewModel: ObservableObject {
     func completeStartupInitializationAfterMigration() {
         guard !didCompleteStartupModelInitialization else { return }
         didCompleteStartupModelInitialization = true
-        purgeExpiredDeletedNotes()
         refreshCurrentFolderContent()
         loadLastNote()
     }
@@ -511,13 +510,18 @@ final class NotesViewModel: ObservableObject {
             + regularNotes.map(NotesListItem.note)
     }
 
-    func fetchRecentlyDeletedNotes() -> [Note] {
-        purgeExpiredDeletedNotes()
+    func fetchRecentlyDeletedNotes(now: Date = .now) -> [Note] {
+        let cutoff = now.addingTimeInterval(-Self.recentlyDeletedRetention)
+        // UI expiry cannot authorize destroying shared deletion/sequence state.
+        // Retain the tombstone and its children until sync has a safe GC owner.
         let descriptor = FetchDescriptor<Note>(
             predicate: #Predicate { $0.deletedAt != nil },
             sortBy: [SortDescriptor(\.deletedAt, order: .reverse)]
         )
-        return (try? context.fetch(descriptor)) ?? []
+        return ((try? context.fetch(descriptor)) ?? []).filter {
+            guard let deletedAt = $0.deletedAt else { return false }
+            return deletedAt >= cutoff
+        }
     }
 
     func fetchSearchableNotes() -> [Note] {
@@ -528,10 +532,6 @@ final class NotesViewModel: ObservableObject {
             sortBy: [SortDescriptor(\.modifiedAt, order: .reverse)]
         )
         return ((try? context.fetch(descriptor)) ?? []).sorted(by: sortNotes)
-    }
-
-    func refreshRecentlyDeletedNotes() {
-        purgeExpiredDeletedNotes()
     }
 
     private func loadLastNote() {
@@ -3032,20 +3032,6 @@ final class NotesViewModel: ObservableObject {
         }
 
         return result
-    }
-
-    private func purgeExpiredDeletedNotes() {
-        let cutoff = Date().addingTimeInterval(-Self.recentlyDeletedRetention)
-        let descriptor = FetchDescriptor<Note>(predicate: #Predicate { $0.deletedAt != nil })
-        let deletedNotes = (try? context.fetch(descriptor)) ?? []
-
-        for note in deletedNotes {
-            if let deletedAt = note.deletedAt, deletedAt < cutoff {
-                context.delete(note)
-            }
-        }
-
-        try? context.save()
     }
 
     func exportNotesForSharing(

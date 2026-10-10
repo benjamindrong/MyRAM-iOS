@@ -6993,7 +6993,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(deletedNotes.contains(where: { $0.id == preexistingDeletedNote.id }))
     }
 
-    func testRefreshRecentlyDeletedNotesPurgesExpiredDeletedNotes() throws {
+    func testRecentlyDeletedNotesExpireFromPresentationWithoutPurgingSharedState() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
 
@@ -7008,11 +7008,13 @@ final class MyRAMTests: XCTestCase {
         try context.save()
 
         let vm = NotesViewModel(context: context)
-        vm.refreshRecentlyDeletedNotes()
         let deletedNotes = vm.fetchRecentlyDeletedNotes()
 
         XCTAssertFalse(deletedNotes.contains(where: { $0.id == staleDeletedNote.id }))
         XCTAssertTrue(deletedNotes.contains(where: { $0.id == recentDeletedNote.id }))
+        let retained = try context.fetch(FetchDescriptor<Note>())
+        XCTAssertTrue(retained.contains(where: { $0.id == staleDeletedNote.id }))
+        XCTAssertEqual(staleDeletedNote.deletedAt, retained.first { $0.id == staleDeletedNote.id }?.deletedAt)
     }
 
 #if DEBUG
