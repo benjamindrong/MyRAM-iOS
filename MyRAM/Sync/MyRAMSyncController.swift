@@ -1874,7 +1874,7 @@ extension MyRAMSyncController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
         transportDiagnostics.record("session.callback", session: session, peer: peerID, detail: "state=\(state.rawValue)")
         Task { @MainActor in
-            guard session === self.session else {
+            if comparisonRetirementConsumed && session !== self.session {
                 transportDiagnostics.record("comparison.session.retiredCallback", session: session, peer: peerID)
                 return
             }
@@ -1942,7 +1942,7 @@ extension MyRAMSyncController: MCSessionDelegate {
 
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         Task { @MainActor in
-            guard session === self.session else { return }
+            if comparisonRetirementConsumed && session !== self.session { return }
             transportDiagnostics.record("application.received", session: session, peer: peerID, detail: "bytes=\(data.count)")
             guard applicationSyncEnabled else { return }
             guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
