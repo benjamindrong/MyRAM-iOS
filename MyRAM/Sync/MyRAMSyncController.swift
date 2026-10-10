@@ -13,6 +13,8 @@ struct TrustedPeerReconnectTracker {
 
     private var connectingAttemptsByPeerID: [String: Attempt] = [:]
 
+    var isEmpty: Bool { connectingAttemptsByPeerID.isEmpty }
+
     mutating func beginConnecting(to peerID: String, incarnation: MCPeerID? = nil) -> Attempt? {
         // Discovery of a replacement does not retire an outstanding invitation.
         // The retained session must finish that attempt before another can begin.
@@ -91,6 +93,19 @@ private final class MyRAMMultipeerTransport: MyRAMSyncTransporting {
         await withCheckedContinuation { continuation in
             queue.async { [session] in
                 continuation.resume(returning: session.connectedPeers)
+            }
+        }
+    }
+
+    // A queue boundary drains submitted invitations/sends before disconnecting.
+    // Used only by the isolated session-lifecycle comparison, never as retry policy.
+    func retireForVerificationComparison() async {
+        await withCheckedContinuation { continuation in
+            queue.async { [session, diagnostics] in
+                diagnostics.record("comparison.session.disconnect.begin", session: session)
+                session.disconnect()
+                diagnostics.record("comparison.session.disconnect.returned", session: session)
+                continuation.resume()
             }
         }
     }
@@ -273,10 +288,13 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private let trustedPeerStore = UserDefaultsTrustedPeerStore(key: "myram.sync.trustedPeers")
     private let syncStore = InMemorySyncStore()
     private let syncEngine: SyncEngine
-    private let session: MCSession
+    private var session: MCSession
     private let advertiser: MCNearbyServiceAdvertiser
     private let browser: MCNearbyServiceBrowser
-    private let transport: MyRAMSyncTransporting
+    private var transport: MyRAMSyncTransporting
+    private var comparisonHadConnection = false
+    private var comparisonRetirementConsumed = false
+    private var comparisonRetirementInProgress = false
     private var reconnectTracker = TrustedPeerReconnectTracker()
     private var reconnectRetryTasks: [String: Task<Void, Never>] = [:]
     private var reconnectRetryDelayNanoseconds: UInt64 = 1_000_000_000
@@ -377,6 +395,33 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         advertiser.stopAdvertisingPeer()
         browser.stopBrowsingForPeers()
         session.disconnect()
+    }
+
+    private func retireCompletedOfflineSessionForVerificationComparison(_ completedSession: MCSession) async {
+        guard runtimeConfiguration.recordsTransportDiagnostics,
+              ProcessInfo.processInfo.environment["MYRAM_VERIFICATION_RETIRE_OFFLINE_SESSION"] == "1",
+              !comparisonRetirementConsumed,
+              completedSession === session,
+              session.connectedPeers.isEmpty,
+              reconnectTracker.isEmpty,
+              let oldTransport = transport as? MyRAMMultipeerTransport else { return }
+        comparisonRetirementConsumed = true
+        comparisonRetirementInProgress = true
+        reconnectRetryTasks.values.forEach { $0.cancel() }
+        reconnectRetryTasks.removeAll()
+        transportDiagnostics.record("comparison.session.retirement.begin", session: completedSession, peer: peerID,
+                                    detail: "browser/advertiser retained; no pending invitations; no connected members", owner: browser)
+        completedSession.delegate = nil
+        await oldTransport.retireForVerificationComparison()
+        // No replacement is constructed until the old owner's transport queue has
+        // drained and disconnect has returned. The persistent peer object is reused.
+        let replacement = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required)
+        session = replacement
+        transport = MyRAMMultipeerTransport(browser: browser, session: replacement, diagnostics: transportDiagnostics)
+        replacement.delegate = self
+        comparisonRetirementInProgress = false
+        transportDiagnostics.record("comparison.session.replacement.ready", session: replacement, peer: peerID,
+                                    detail: "advertiser=\(ObjectIdentifier(advertiser)); storage untouched", owner: browser)
     }
 
     var connectionSummary: String {
@@ -486,6 +531,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     func invite(_ peer: MyRAMDiscoveredPeer) {
+        guard !comparisonRetirementInProgress else { return }
         recordReconnectState("invitation.pending.beforeAdmission", peer: peer.peerID)
         guard !transport.hasConnectedPeer(peer.peerID) else {
             cancelReconnectRetry(for: peer.deviceID)
@@ -1828,9 +1874,21 @@ extension MyRAMSyncController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
         transportDiagnostics.record("session.callback", session: session, peer: peerID, detail: "state=\(state.rawValue)")
         Task { @MainActor in
+            guard session === self.session else {
+                transportDiagnostics.record("comparison.session.retiredCallback", session: session, peer: peerID)
+                return
+            }
+            let finishedOfflineInvitation = comparisonHadConnection && state == .notConnected
+                && reconnectTracker.connectingAttempt(to: MyRAMPeerIdentity(peerID: peerID).deviceID)?.incarnation == peerID
+            if state == .connected { comparisonHadConnection = true }
             recordReconnectState("session.actor.entered", peer: peerID, callbackSession: session, callbackState: state)
             defer {
                 recordReconnectState("session.actor.completed", peer: peerID, callbackSession: session, callbackState: state)
+                if finishedOfflineInvitation {
+                    Task { @MainActor in
+                        await retireCompletedOfflineSessionForVerificationComparison(session)
+                    }
+                }
             }
             let identity = MyRAMPeerIdentity(peerID: peerID)
             transportDiagnostics.record("session.state", session: session, peer: peerID, detail: "state=\(state.rawValue)")
@@ -1884,6 +1942,7 @@ extension MyRAMSyncController: MCSessionDelegate {
 
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         Task { @MainActor in
+            guard session === self.session else { return }
             transportDiagnostics.record("application.received", session: session, peer: peerID, detail: "bytes=\(data.count)")
             guard applicationSyncEnabled else { return }
             guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
