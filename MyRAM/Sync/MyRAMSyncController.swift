@@ -14,9 +14,9 @@ struct TrustedPeerReconnectTracker {
     private var connectingAttemptsByPeerID: [String: Attempt] = [:]
 
     mutating func beginConnecting(to peerID: String, incarnation: MCPeerID? = nil) -> Attempt? {
-        if let current = connectingAttemptsByPeerID[peerID], current.incarnation == incarnation {
-            return nil
-        }
+        // Discovery of a replacement does not retire an outstanding invitation.
+        // The retained session must finish that attempt before another can begin.
+        guard connectingAttemptsByPeerID[peerID] == nil else { return nil }
 
         let attempt = Attempt(peerID: peerID, incarnation: incarnation, token: UUID())
         connectingAttemptsByPeerID[peerID] = attempt
@@ -482,7 +482,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             lastConnectionEvent = "Connected: \(peer.displayName)"
             return
         }
-        guard let attempt = reconnectTracker.beginConnecting(to: peer.deviceID, incarnation: peer.peerID) else { return }
+        guard reconnectTracker.beginConnecting(to: peer.deviceID, incarnation: peer.peerID) != nil else { return }
         cancelReconnectRetry(for: peer.deviceID)
 
         lastConnectionEvent = "Inviting \(peer.displayName)"
@@ -493,7 +493,6 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             context: SyncBatchPeerCapabilityCodec.productionInvitationContext,
             timeout: timeout
         )
-        clearConnectingStateAfterInviteTimeout(for: attempt, timeout: timeout)
     }
 
     func recordLocalChange(
@@ -731,19 +730,6 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             issues.append(PendingSyncHealthIssue(domain: .unsentBatches, description: "Unsent batch queue could not be read or saved."))
         }
         return issues
-    }
-
-    private func clearConnectingStateAfterInviteTimeout(
-        for attempt: TrustedPeerReconnectTracker.Attempt,
-        timeout: TimeInterval
-    ) {
-        Task { [weak self] in
-            let nanoseconds = UInt64((timeout + 1) * 1_000_000_000)
-            try? await Task.sleep(nanoseconds: nanoseconds)
-            guard !Task.isCancelled, let self else { return }
-            guard self.reconnectTracker.finishConnecting(attempt) else { return }
-            self.scheduleReconnectIfPossible(for: attempt.peerID)
-        }
     }
 
     private func scheduleReconnectIfPossible(for deviceID: String) {
@@ -1805,6 +1791,8 @@ extension MyRAMSyncController: MCSessionDelegate {
                let current = availablePeers.first(where: { $0.deviceID == identity.deviceID }),
                current.peerID != peerID {
                 transportDiagnostics.record("session.retiredPeerCallback", session: session, peer: peerID)
+                clearConnectingState(for: peerID)
+                scheduleReconnectIfPossible(for: identity.deviceID)
                 return
             }
             MyRAMSyncBenchmarkTelemetry.shared.record(
@@ -2093,7 +2081,7 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
                 forPeerDeviceID: identity.deviceID
             )
             availablePeers.removeAll { $0.peerID == peerID }
-            clearConnectingState(for: peerID)
+            // Discovery loss is not the terminal session callback for an invitation.
             cancelReconnectRetry(for: identity.deviceID)
         }
     }

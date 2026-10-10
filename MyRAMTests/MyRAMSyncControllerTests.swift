@@ -6,17 +6,48 @@ import XCTest
 
 @MainActor
 final class MyRAMSyncControllerTests: XCTestCase {
-    func testMYR233NewTransportIncarnationSupersedesStaleInvitationWithoutTimeout() throws {
+    func testMYR233ReplacementInvitationWaitsForOutstandingAttemptToFinish() throws {
         var tracker = TrustedPeerReconnectTracker()
         let oldPeer = MCPeerID(displayName: "Remote|same-device")
-        let currentPeer = MCPeerID(displayName: "Remote|same-device")
-        let obsolete = try XCTUnwrap(tracker.beginConnecting(to: "same-device", incarnation: oldPeer))
-        let current = try XCTUnwrap(tracker.beginConnecting(to: "same-device", incarnation: currentPeer))
-        XCTAssertNotEqual(obsolete, current)
-        tracker.finishConnecting(to: "same-device", incarnation: oldPeer)
-        XCTAssertFalse(tracker.finishConnecting(obsolete))
-        XCTAssertNil(tracker.beginConnecting(to: "same-device", incarnation: currentPeer))
-        XCTAssertTrue(tracker.finishConnecting(current))
+        let newPeer = MCPeerID(displayName: "Remote|same-device")
+        let oldAttempt = try XCTUnwrap(tracker.beginConnecting(to: "same-device", incarnation: oldPeer))
+        XCTAssertNil(tracker.beginConnecting(to: "same-device", incarnation: newPeer))
+        XCTAssertTrue(tracker.finishConnecting(oldAttempt))
+        XCTAssertNotNil(tracker.beginConnecting(to: "same-device", incarnation: newPeer))
+        XCTAssertFalse(tracker.finishConnecting(oldAttempt))
+        XCTAssertTrue(tracker.isConnecting(to: "same-device"))
+    }
+
+    func testMYR233ReplacementDiscoveryWaitsForTerminalCallbackBeforeInviting() async throws {
+        let key = "myram.sync.trustedPeers"
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: key)
+        defer {
+            if let previous { defaults.set(previous, forKey: key) }
+            else { defaults.removeObject(forKey: key) }
+        }
+        let deviceID = UUID().uuidString
+        UserDefaultsTrustedPeerStore(key: key).trust(TrustedPeer(id: deviceID, displayName: "Remote"))
+        let oldPeer = MCPeerID(displayName: "Remote|\(deviceID)")
+        let newPeer = MCPeerID(displayName: "Remote|\(deviceID)")
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        let browser = MCNearbyServiceBrowser(peer: MCPeerID(displayName: "Local"), serviceType: "myram-verify")
+        controller.browser(browser, foundPeer: oldPeer, withDiscoveryInfo: nil)
+        await waitUntil { transport.invitedPeerIDs == [oldPeer] }
+        controller.browser(browser, lostPeer: oldPeer)
+        controller.browser(browser, foundPeer: newPeer, withDiscoveryInfo: nil)
+        await waitUntil { controller.availablePeers.map(\.peerID) == [newPeer] }
+        controller.invite(MyRAMDiscoveredPeer(peerID: newPeer, deviceID: deviceID, displayName: "Remote", isTrusted: true))
+        XCTAssertEqual(transport.invitedPeerIDs, [oldPeer])
+        let session = MCSession(peer: MCPeerID(displayName: "Local"), securityIdentity: nil, encryptionPreference: .required)
+        controller.session(session, peer: oldPeer, didChange: .notConnected)
+        await waitUntil { transport.invitedPeerIDs == [oldPeer, newPeer] }
+        XCTAssertEqual(transport.invitedPeerIDs, [oldPeer, newPeer])
+        controller.session(session, peer: oldPeer, didChange: .notConnected)
+        await Task.yield()
+        controller.invite(MyRAMDiscoveredPeer(peerID: newPeer, deviceID: deviceID, displayName: "Remote", isTrusted: true))
+        XCTAssertEqual(transport.invitedPeerIDs, [oldPeer, newPeer])
     }
 
     func testMYR233SuspendedDiscoveryCannotInviteOrRestoreRetiredPeer() async throws {
