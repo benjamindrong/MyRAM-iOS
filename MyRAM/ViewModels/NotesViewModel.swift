@@ -1262,20 +1262,53 @@ final class NotesViewModel: ObservableObject {
 
     func deletePinnedParagraph(_ thought: PinnedThought) {
         let note = thought.note
-        let deletionPayload = MyRAMPinnedThoughtSyncPayload(thought: thought, isDeleted: true)
+        let originalModifiedAt = thought.modifiedAt
+        var snapshot: SyncConflictStoreSnapshot?
+        let deletionPayload: MyRAMPinnedThoughtSyncPayload
+        do {
+            try saveContext()
+            snapshot = try syncConflictStore.snapshot()
+            thought.modifiedAt = .now
+            deletionPayload = MyRAMPinnedThoughtSyncPayload(thought: thought, isDeleted: true)
+            if !hasActivePinnedTextConflict(thought) {
+                try syncConflictStore.saveRemoteBaselineChecked(SyncRemoteTextBaseline(
+                    entityType: .pinnedThought, entityID: thought.id, field: .pinnedText,
+                    text: thought.text, richTextContentData: nil,
+                    modifiedAt: thought.modifiedAt, originDeviceID: nil, isDeleted: true
+                ))
+            }
+        } catch {
+            thought.modifiedAt = originalModifiedAt
+            if let snapshot {
+                do { try syncConflictStore.restore(snapshot) } catch {
+                    syncBatchErrorMessage = "Unable to restore pinned text deletion metadata."
+                    return
+                }
+            }
+            syncBatchErrorMessage = "Unable to preserve the pinned text deletion."
+            return
+        }
         note?.pinnedThoughts.removeAll { $0.id == thought.id }
         context.delete(thought)
         reorderPinnedThoughts(for: note)
         note?.modifiedAt = .now
         note?.folder?.modifiedAt = .now
-        try? context.save()
+        do {
+            try saveContext()
+        } catch {
+            context.rollback()
+            if let snapshot {
+                do { try syncConflictStore.restore(snapshot) } catch {
+                    syncBatchErrorMessage = "Unable to restore pinned text deletion metadata."
+                    return
+                }
+            }
+            syncBatchErrorMessage = "Unable to delete the pinned text."
+            return
+        }
         recordPinnedThoughtSyncDeletion(deletionPayload)
-        if let note {
-            recordNoteSyncChange(note)
-        }
-        if let folder = note?.folder {
-            recordFolderSyncChange(folder)
-        }
+        if let note { recordNoteSyncChange(note) }
+        if let folder = note?.folder { recordFolderSyncChange(folder) }
         refreshCurrentFolderContent()
     }
 
@@ -1485,6 +1518,12 @@ final class NotesViewModel: ObservableObject {
             change: IPhoneSyncBatchCaptureHook.lifecycleChanged(note),
             evidence: nil
         ))
+        // Restoration changes the parent's lifecycle, not the retained children's
+        // edit identities or timestamps. Send each child through its existing
+        // ordinary sync owner so a peer missing that retained state can recover it.
+        for pinnedText in sortedPinnedThoughts(for: note) {
+            recordPinnedThoughtSyncChange(pinnedText)
+        }
         if let folder = note.folder {
             recordFolderSyncChange(folder)
         }

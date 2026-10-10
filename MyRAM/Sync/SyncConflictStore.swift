@@ -63,6 +63,7 @@ struct SyncRemoteTextBaseline: Codable, Equatable {
     let richTextContentData: Data?
     let modifiedAt: Date
     let originDeviceID: String?
+    var isDeleted: Bool? = nil
 }
 
 protocol SyncConflictStoring: AnyObject {
@@ -266,6 +267,7 @@ final class BufferedSyncConflictStore: SyncConflictStoring {
     }
 
     func saveRemoteBaseline(_ baseline: SyncRemoteTextBaseline) {
+        guard remoteBaseline(entityType: baseline.entityType, entityID: baseline.entityID, field: baseline.field)?.supersedes(baseline) != true else { return }
         baselinesByKey[ConflictKey(
             entityType: baseline.entityType,
             entityID: baseline.entityID,
@@ -368,6 +370,13 @@ struct SyncConflictStoreSnapshot {
 }
 
 extension SyncRemoteTextBaseline {
+    func supersedes(_ incoming: SyncRemoteTextBaseline) -> Bool {
+        guard entityType == .pinnedThought,
+              isDeleted == true || incoming.isDeleted == true else { return false }
+        return modifiedAt > incoming.modifiedAt
+            || (modifiedAt == incoming.modifiedAt && isDeleted == true && incoming.isDeleted != true)
+    }
+
     var syncTextBaseline: SyncTextTrackedBaseline {
         SyncTextTrackedBaseline(
             text: text,
@@ -794,6 +803,7 @@ final class SyncConflictStore: SyncConflictStoring, SyncConflictLegacyInspecting
     }
 
     func saveRemoteBaseline(_ baseline: SyncRemoteTextBaseline) {
+        guard remoteBaseline(entityType: baseline.entityType, entityID: baseline.entityID, field: baseline.field)?.supersedes(baseline) != true else { return }
         var baselines = loadBaselines()
         if let index = baselines.firstIndex(where: {
             $0.entityType == baseline.entityType
@@ -1367,7 +1377,9 @@ final class SyncConflictStore: SyncConflictStoring, SyncConflictLegacyInspecting
                     && $0.entityID == baseline.entityID
                     && $0.field == baseline.field
             }) {
-                updatedBaselines[index] = baseline
+                if !updatedBaselines[index].supersedes(baseline) {
+                    updatedBaselines[index] = baseline
+                }
             } else {
                 updatedBaselines.append(baseline)
             }
