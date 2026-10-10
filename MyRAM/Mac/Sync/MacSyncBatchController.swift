@@ -178,7 +178,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             ?? { retainedSession.disconnect() }
 
         super.init()
-        transportDiagnostics.record("owner.created", session: session, peer: retainedPeerID)
+        transportDiagnostics.record("owner.created", session: session, peer: retainedPeerID, detail: "advertiser=\(ObjectIdentifier(advertiser))", owner: browser)
 
         session.delegate = self
         advertiser.delegate = self
@@ -1461,9 +1461,9 @@ extension MacSyncBatchController {
         peerCapabilityRegistry.recordInvitationContext(context, forPeerDeviceID: identity.deviceID)
         remember(peerID)
         lastConnectionEvent = "Invitation from \(displayName(for: peerID))"
-        transportDiagnostics.record("invitation.incoming.accepted", session: session, peer: peerID)
+        transportDiagnostics.record("invitation.incoming.accepted", session: session, peer: peerID, owner: advertiser, context: context)
         handler(true, session)
-        transportDiagnostics.record("invitation.incoming.handlerReturned", session: session, peer: peerID)
+        transportDiagnostics.record("invitation.incoming.handlerReturned", session: session, peer: peerID, owner: advertiser, context: context)
     }
 }
 
@@ -1474,6 +1474,7 @@ extension MacSyncBatchController: MCNearbyServiceAdvertiserDelegate {
         withContext context: Data?,
         invitationHandler: @escaping (Bool, MCSession?) -> Void
     ) {
+        transportDiagnostics.record("invitation.incoming.callback", peer: peerID, owner: advertiser, context: context)
         Task { @MainActor in
             guard networkingLifecycle != .stopped else {
                 invitationHandler(false, nil)

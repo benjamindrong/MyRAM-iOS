@@ -68,16 +68,19 @@ struct MyRAMSyncTransportDiagnostics: Sendable {
         mode = configuration.applicationSyncEnabled ? "application" : "transportOnly"
     }
 
-    func record(_ event: String, session: MCSession, peer: MCPeerID? = nil, detail: String? = nil) {
+    func record(_ event: String, session: MCSession? = nil, peer: MCPeerID? = nil, detail: String? = nil, owner: AnyObject? = nil, context: Data? = nil) {
         guard enabled else { return }
         let value: [String: Any] = [
             "event": event, "mode": mode, "incarnation": incarnation,
-            "session": String(describing: ObjectIdentifier(session)),
+            "session": session.map { String(describing: ObjectIdentifier($0)) } ?? "",
+            "owner": owner.map { String(describing: ObjectIdentifier($0)) } ?? "",
+            "peerObject": peer.map { String(describing: ObjectIdentifier($0)) } ?? "",
+            "contextSHA256": context.map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() } ?? "",
             "pid": ProcessInfo.processInfo.processIdentifier,
             "at": Date().timeIntervalSince1970,
-            "local": identity(session.myPeerID),
+            "local": session.map { identity($0.myPeerID) } ?? "",
             "peer": peer.map(identity) ?? "",
-            "members": session.connectedPeers.map(identity).sorted(),
+            "members": session?.connectedPeers.map(identity).sorted() ?? [],
             "detail": detail ?? ""
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: value, options: .sortedKeys),

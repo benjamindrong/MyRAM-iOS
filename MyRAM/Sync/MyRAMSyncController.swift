@@ -72,14 +72,14 @@ private final class MyRAMMultipeerTransport: MyRAMSyncTransporting {
         timeout: TimeInterval
     ) {
         queue.async { [browser, session, diagnostics] in
-            diagnostics.record("invitation.dispatched", session: session, peer: peerID)
+            diagnostics.record("invitation.dispatched", session: session, peer: peerID, owner: browser, context: context)
             browser.invitePeer(
                 peerID,
                 to: session,
                 withContext: context,
                 timeout: timeout
             )
-            diagnostics.record("invitation.returned", session: session, peer: peerID)
+            diagnostics.record("invitation.returned", session: session, peer: peerID, owner: browser, context: context)
         }
     }
 
@@ -342,7 +342,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         self.transport = transport ?? MyRAMMultipeerTransport(browser: browser, session: session, diagnostics: transportDiagnostics)
 
         super.init()
-        transportDiagnostics.record("owner.created", session: session, peer: peer)
+        transportDiagnostics.record("owner.created", session: session, peer: peer, detail: "advertiser=\(ObjectIdentifier(advertiser))", owner: browser)
 
         session.delegate = self
         advertiser.delegate = self
@@ -2007,6 +2007,7 @@ extension MyRAMSyncController: MCNearbyServiceAdvertiserDelegate {
         withContext context: Data?,
         invitationHandler: @escaping (Bool, MCSession?) -> Void
     ) {
+        transportDiagnostics.record("invitation.incoming.callback", peer: peerID, owner: advertiser, context: context)
         Task { @MainActor in
             let identity = MyRAMPeerIdentity(peerID: peerID)
             peerCapabilityRegistry.recordInvitationContext(
@@ -2015,7 +2016,7 @@ extension MyRAMSyncController: MCNearbyServiceAdvertiserDelegate {
             )
             lastConnectionEvent = "Invitation from \(displayName(for: peerID))"
             rememberTrustedPeer(peerID)
-            transportDiagnostics.record("invitation.incoming.accepted", session: session, peer: peerID)
+            transportDiagnostics.record("invitation.incoming.accepted", session: session, peer: peerID, owner: advertiser, context: context)
             invitationHandler(true, session)
         }
     }
@@ -2033,6 +2034,7 @@ extension MyRAMSyncController: MCNearbyServiceAdvertiserDelegate {
 
 extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
     nonisolated func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String: String]?) {
+        transportDiagnostics.record("discovery.callback", peer: peerID, owner: browser)
         Task { @MainActor in
             let identity = MyRAMPeerIdentity(peerID: peerID)
             let discoveredPeer = MyRAMDiscoveredPeer(
