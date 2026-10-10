@@ -930,6 +930,13 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             lastErrorMessage = "Unable to confirm nearby bootstrap state."
             return
         }
+        for batchID in acknowledgement.coveredBatchIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .batchAcknowledgementSent, batchID: batchID.uuidString,
+                peerDeviceID: peerDeviceID, outcome: "bootstrapCoverage",
+                detail: acknowledgement.benchmarkDetail
+            )
+        }
         var persistedIncomingBatchIDsFromPeer: Set<SyncBatchID> = []
         if let originDeviceID = UUID(uuidString: peerDeviceID),
            let convergenceCoordinator {
@@ -1026,6 +1033,14 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         } catch {
             lastErrorMessage = "Unable to update pending sync queues."
             return
+        }
+
+        for batchID in coveredBatchIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .batchAcknowledgementReceived, batchID: batchID.uuidString,
+                peerDeviceID: deviceID, outcome: "bootstrapOwnershipReleased",
+                detail: acknowledgement.benchmarkDetail
+            )
         }
 
         if establishesSharedSequenceBaseline {

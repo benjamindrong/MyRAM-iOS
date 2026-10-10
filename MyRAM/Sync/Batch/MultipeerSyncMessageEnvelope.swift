@@ -134,6 +134,12 @@ struct SyncPeerBootstrapAcknowledgement: Codable, Equatable, Sendable {
         self.coveredBatchIDs = coveredBatchIDs
         self.coveredNoteIDs = coveredNoteIDs
     }
+
+    /// Metadata-only correlation for durable bootstrap coverage and queue release.
+    var benchmarkDetail: String {
+        let noteIDs = (coveredNoteIDs ?? []).map(\.uuidString).sorted().joined(separator: ",")
+        return "snapshotID=\(snapshotID.uuidString);coveredNoteIDs=\(noteIDs)"
+    }
 }
 
 struct SyncPeerBootstrapApplyDisposition: Equatable, Sendable {

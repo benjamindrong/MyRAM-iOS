@@ -1425,6 +1425,13 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             return
         }
 
+        for batchID in acknowledgement.coveredBatchIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .batchAcknowledgementSent, batchID: batchID.uuidString,
+                peerDeviceID: deviceID, outcome: "bootstrapCoverage",
+                detail: acknowledgement.benchmarkDetail
+            )
+        }
         lastErrorMessage = nil
         await onResumeIncomingAfterBootstrap?()
     }
@@ -1505,6 +1512,14 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             lastErrorMessage = "Unable to update pending sync queues."
             await updatePendingCount()
             return
+        }
+
+        for batchID in coveredBatchIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .batchAcknowledgementReceived, batchID: batchID.uuidString,
+                peerDeviceID: deviceID, outcome: "bootstrapOwnershipReleased",
+                detail: acknowledgement.benchmarkDetail
+            )
         }
 
         if establishesSharedSequenceBaseline {
