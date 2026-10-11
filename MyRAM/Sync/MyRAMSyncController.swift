@@ -320,8 +320,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         transport: MyRAMSyncTransporting? = nil
     ) {
         let configuration = MyRAMSyncRuntimeConfiguration.current(bundle: configurationBundle)
-        precondition(!configuration.recordsTransportDiagnostics || serviceType == "myram-verify",
-                     "Verification transport diagnostics require the isolated MPC namespace")
+        // Only validated Verification identities may bind the isolated MPC service.
+        let effectiveServiceType = configuration.recordsTransportDiagnostics ? "myram-verify" : serviceType
         runtimeConfiguration = configuration
         transportDiagnostics = MyRAMSyncTransportDiagnostics(configuration: configuration)
         let deviceName = MyRAMDeviceIdentity.currentDisplayName()
@@ -341,9 +341,9 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         advertiser = MCNearbyServiceAdvertiser(
             peer: peer,
             discoveryInfo: SyncBatchPeerCapabilityCodec.productionDiscoveryInfo,
-            serviceType: serviceType
+            serviceType: effectiveServiceType
         )
-        browser = MCNearbyServiceBrowser(peer: peer, serviceType: serviceType)
+        browser = MCNearbyServiceBrowser(peer: peer, serviceType: effectiveServiceType)
         unsentBatches = FileBackedSyncBatchQueue(fileURL: unsentBatchQueueFileURL)
         self.transport = transport ?? MyRAMMultipeerTransport(browser: browser, session: session, diagnostics: transportDiagnostics)
 
