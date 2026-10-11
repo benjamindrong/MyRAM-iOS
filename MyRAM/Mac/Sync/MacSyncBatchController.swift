@@ -116,8 +116,8 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             ((MCPeerID, Data, TimeInterval) -> Void)? = nil
     ) {
         let configuration = MyRAMSyncRuntimeConfiguration.current(bundle: configurationBundle)
-        precondition(!configuration.recordsTransportDiagnostics || serviceType == "myram-verify",
-                     "Verification transport diagnostics require the isolated MPC namespace")
+        // Only validated Verification identities may bind the isolated MPC service.
+        let effectiveServiceType = configuration.recordsTransportDiagnostics ? "myram-verify" : serviceType
         runtimeConfiguration = configuration
         transportDiagnostics = MyRAMSyncTransportDiagnostics(configuration: configuration)
         let identity = identityProvider()
@@ -130,11 +130,11 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         let retainedAdvertiser = MCNearbyServiceAdvertiser(
             peer: retainedPeerID,
             discoveryInfo: SyncBatchPeerCapabilityCodec.productionDiscoveryInfo,
-            serviceType: serviceType
+            serviceType: effectiveServiceType
         )
         let retainedBrowser = MCNearbyServiceBrowser(
             peer: retainedPeerID,
-            serviceType: serviceType
+            serviceType: effectiveServiceType
         )
         peerID = retainedPeerID
         session = retainedSession
