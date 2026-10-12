@@ -6,6 +6,151 @@ import XCTest
 
 @MainActor
 final class MyRAMSyncControllerTests: XCTestCase {
+    func testMYR233ReplacementInvitationWaitsForOutstandingAttemptToFinish() throws {
+        var tracker = TrustedPeerReconnectTracker()
+        let oldPeer = MCPeerID(displayName: "Remote|same-device")
+        let newPeer = MCPeerID(displayName: "Remote|same-device")
+        let oldAttempt = try XCTUnwrap(tracker.beginConnecting(to: "same-device", incarnation: oldPeer))
+        XCTAssertNil(tracker.beginConnecting(to: "same-device", incarnation: newPeer))
+        XCTAssertTrue(tracker.finishConnecting(oldAttempt))
+        XCTAssertNotNil(tracker.beginConnecting(to: "same-device", incarnation: newPeer))
+        XCTAssertFalse(tracker.finishConnecting(oldAttempt))
+        XCTAssertTrue(tracker.isConnecting(to: "same-device"))
+    }
+
+    func testMYR233ReplacementDiscoveryWaitsForTerminalCallbackBeforeInviting() async throws {
+        let key = "myram.sync.trustedPeers"
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: key)
+        defer {
+            if let previous { defaults.set(previous, forKey: key) }
+            else { defaults.removeObject(forKey: key) }
+        }
+        let deviceID = UUID().uuidString
+        UserDefaultsTrustedPeerStore(key: key).trust(TrustedPeer(id: deviceID, displayName: "Remote"))
+        let oldPeer = MCPeerID(displayName: "Remote|\(deviceID)")
+        let newPeer = MCPeerID(displayName: "Remote|\(deviceID)")
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        let browser = MCNearbyServiceBrowser(peer: MCPeerID(displayName: "Local"), serviceType: "myram-verify")
+        controller.browser(browser, foundPeer: oldPeer, withDiscoveryInfo: nil)
+        await waitUntil { transport.invitedPeerIDs == [oldPeer] }
+        controller.browser(browser, lostPeer: oldPeer)
+        controller.browser(browser, foundPeer: newPeer, withDiscoveryInfo: nil)
+        await waitUntil { controller.availablePeers.map(\.peerID) == [newPeer] }
+        controller.invite(MyRAMDiscoveredPeer(peerID: newPeer, deviceID: deviceID, displayName: "Remote", isTrusted: true))
+        XCTAssertEqual(transport.invitedPeerIDs, [oldPeer])
+        let session = MCSession(peer: MCPeerID(displayName: "Local"), securityIdentity: nil, encryptionPreference: .required)
+        controller.session(session, peer: oldPeer, didChange: .notConnected)
+        await waitUntil { transport.invitedPeerIDs == [oldPeer, newPeer] }
+        XCTAssertEqual(transport.invitedPeerIDs, [oldPeer, newPeer])
+        controller.session(session, peer: oldPeer, didChange: .notConnected)
+        await Task.yield()
+        controller.invite(MyRAMDiscoveredPeer(peerID: newPeer, deviceID: deviceID, displayName: "Remote", isTrusted: true))
+        XCTAssertEqual(transport.invitedPeerIDs, [oldPeer, newPeer])
+    }
+
+    func testMYR233SuspendedDiscoveryCannotInviteOrRestoreRetiredPeer() async throws {
+        let key = "myram.sync.trustedPeers"
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: key)
+        defer {
+            if let previous { defaults.set(previous, forKey: key) }
+            else { defaults.removeObject(forKey: key) }
+        }
+        let deviceID = UUID().uuidString
+        UserDefaultsTrustedPeerStore(key: key).trust(TrustedPeer(id: deviceID, displayName: "Remote"))
+        let oldPeer = MCPeerID(displayName: "Remote|\(deviceID)")
+        let currentPeer = MCPeerID(displayName: "Remote|\(deviceID)")
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        transport.suspendConnectedPeerLookups = true
+        let controller = try makeController(transport: transport)
+        let local = MCPeerID(displayName: "Local")
+        let browser = MCNearbyServiceBrowser(peer: local, serviceType: "myram-verify")
+        controller.browser(browser, foundPeer: oldPeer, withDiscoveryInfo: nil)
+        await waitUntil { transport.suspendedConnectedPeerLookupCount == 1 }
+        controller.browser(browser, foundPeer: currentPeer, withDiscoveryInfo: nil)
+        await waitUntil { transport.suspendedConnectedPeerLookupCount == 2 }
+        XCTAssertEqual(transport.suspendedConnectedPeerLookupCount, 2)
+        transport.resumeConnectedPeerLookup(at: 1)
+        await waitUntil { transport.invitedPeerIDs == [currentPeer] }
+        transport.resumeConnectedPeerLookup(at: 0)
+        await Task.yield()
+        XCTAssertEqual(controller.availablePeers.map(\.peerID), [currentPeer])
+        XCTAssertEqual(transport.invitedPeerIDs, [currentPeer])
+        let currentEvent = controller.lastConnectionEvent
+        controller.browser(browser, lostPeer: oldPeer)
+        let session = MCSession(peer: local, securityIdentity: nil, encryptionPreference: .required)
+        controller.session(session, peer: oldPeer, didChange: .notConnected)
+        await Task.yield()
+        await Task.yield()
+        XCTAssertEqual(controller.lastConnectionEvent, currentEvent)
+        controller.invite(MyRAMDiscoveredPeer(peerID: currentPeer, deviceID: deviceID, displayName: "Remote", isTrusted: true))
+        XCTAssertEqual(controller.availablePeers.map(\.peerID), [currentPeer])
+        XCTAssertEqual(transport.invitedPeerIDs, [currentPeer])
+    }
+
+    func testMYR233TransportOnlyRetainsDiscoveryAndRejectsSyncWithoutMutatingQueues() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bundlePath = directory.appendingPathComponent("Diagnostic.bundle")
+        try FileManager.default.createDirectory(at: bundlePath, withIntermediateDirectories: true)
+        let info: [String: Any] = [
+            "CFBundleIdentifier": "com.northsignalstudio.myram.verification",
+            "NSBonjourServices": ["_myram-verify._tcp"],
+            MyRAMSyncRuntimeConfiguration.transportOnlyKey: true
+        ]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: bundlePath.appendingPathComponent("Info.plist"))
+        let batch = makeBatch(idSuffix: 23390)
+        let queueURL = directory.appendingPathComponent("unsent.json")
+        try FileBackedSyncBatchQueue(fileURL: queueURL).enqueueDurably(batch)
+        let original = try Data(contentsOf: queueURL)
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = MyRAMSyncController(
+            unsentBatchQueueFileURL: queueURL,
+            pendingChangesFileURL: directory.appendingPathComponent("legacy.json"),
+            startsNetworking: false,
+            configurationBundle: try XCTUnwrap(Bundle(path: bundlePath.path)), transport: transport
+        )
+        XCTAssertFalse(controller.applicationSyncEnabled)
+        controller.invite(MyRAMDiscoveredPeer(peerID: Self.remotePeerID, deviceID: "remote-device", displayName: "Remote", isTrusted: true))
+        XCTAssertEqual(transport.invitedPeerIDs, [Self.remotePeerID])
+        var bootstrapPrepared = false
+        controller.onPrepareLocalOwnershipForBootstrap = { bootstrapPrepared = true }
+        var incomingCaptured = false
+        controller.onDurablyCaptureIncomingBatch = { _ in incomingCaptured = true; return true }
+        var incomingApplied = false
+        controller.onChangesReceived = { _ in incomingApplied = true; return [] }
+        let session = MCSession(peer: MCPeerID(displayName: "local"), securityIdentity: nil, encryptionPreference: .required)
+        controller.session(session, peer: Self.remotePeerID, didChange: .connected)
+        controller.session(session, didReceive: try MultipeerSyncMessageCoding.encodeBatch(batch), fromPeer: Self.remotePeerID)
+        await waitUntil { controller.lastConnectionEvent.hasPrefix("Connected:") }
+        await controller.beginBootstrapForTesting(to: Self.remotePeerID)
+        controller.recordLocalChange(entityType: .item, entityID: UUID().uuidString, payload: Data(), updatedAt: .now)
+        controller.flushAllOutboundWork()
+        do {
+            try await controller.acceptLocalBatch(batch)
+            XCTFail("Suppressed admission must not report success")
+        } catch {
+            XCTAssertTrue(error is MyRAMSyncRuntimeConfiguration.AdmissionError)
+        }
+        let container = try makeContainer()
+        let viewModel = NotesViewModel(context: container.mainContext, syncController: controller,
+                                      pendingIncomingBatchQueueFileURL: directory.appendingPathComponent("incoming.json"),
+                                      pendingLocalConvergenceBatchQueueFileURL: directory.appendingPathComponent("local.json"))
+        viewModel.resumePendingConvergencePresentationIfNeeded()
+        await Task.yield()
+        let legacy = await controller.legacyQueueSnapshot()
+        XCTAssertTrue(legacy.pendingChanges.isEmpty)
+        XCTAssertFalse(bootstrapPrepared)
+        XCTAssertFalse(incomingCaptured)
+        XCTAssertFalse(incomingApplied)
+        XCTAssertTrue(transport.sentData.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: queueURL), original)
+    }
+
     func testBootstrapPresentationRefreshPublishesSelectedMountedEditorReload() throws {
         let transport = FakeMyRAMSyncTransport(connectedPeers: [])
         let controller = try makeController(transport: transport)
@@ -1086,6 +1231,14 @@ final class MyRAMSyncControllerTests: XCTestCase {
 
 private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
     var connectedPeers: [MCPeerID]
+    var suspendConnectedPeerLookups = false
+    private var connectedPeerLookups: [CheckedContinuation<[MCPeerID], Never>] = []
+    var suspendedConnectedPeerLookupCount: Int { connectedPeerLookups.count }
+
+    func resumeConnectedPeerLookup(at index: Int) {
+        guard connectedPeerLookups.indices.contains(index) else { return }
+        connectedPeerLookups.remove(at: index).resume(returning: connectedPeers)
+    }
     var suspendLegacySends = false
     private(set) var sentData: [Data] = []
     private(set) var sentLegacyEnvelopes: [SyncEnvelope] = []
@@ -1117,7 +1270,10 @@ private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
     }
 
     func connectedPeers() async -> [MCPeerID] {
-        connectedPeers
+        if suspendConnectedPeerLookups {
+            return await withCheckedContinuation { connectedPeerLookups.append($0) }
+        }
+        return connectedPeers
     }
 
     func send(_ data: Data, toPeers peers: [MCPeerID], mode: MCSessionSendDataMode) async throws {

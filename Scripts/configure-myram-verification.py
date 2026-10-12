@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import plistlib
 import re
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +56,11 @@ EXPECTED_STORAGE_ROOT_FILES = {
     "MyRAM/Sync/Recovery/PendingSyncRecoveryJournal.swift",
     "MyRAM/Sync/SyncConflictStore.swift",
     "MyRAM/Sync/MyRAMSyncConflictService.swift",
+}
+
+EXPECTED_TEST_STORAGE_ROOT_FILES = {
+    "MyRAMTests/MyRAMSyncOperationIDAllocatorTests.swift",
+    "MyRAMTests/SyncBatchAnchoredRecoveryStoreTests.swift",
 }
 
 FIXED_CHANGED_FILES = {
@@ -190,6 +197,24 @@ def replace_required(path: Path, old: str, new: str, *, minimum: int = 1) -> int
     return count
 
 
+def load_fixture_identity(path: Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    try:
+        data = path.read_bytes()
+        manifest = json.loads(data)
+        if manifest["schema"] != "myr233.seven-batch-restore-fixture.v1":
+            fail("Unsupported Verification fixture manifest schema.")
+        ids = manifest["captured_device_ids"]
+        iphone = str(uuid.UUID(ids["iphone"])).upper()
+        mac = str(uuid.UUID(ids["mac"])).upper()
+        if iphone == mac:
+            fail("Verification fixture peer identities must be distinct.")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        fail(f"Invalid Verification fixture identity manifest: {error}")
+    return {"manifest_sha256": hashlib.sha256(data).hexdigest(), "iphone": iphone, "mac": mac}
+
+
 def configure_project(root: Path, identity: dict[str, Any]) -> None:
     project = root / "MyRAM.xcodeproj" / "project.pbxproj"
     ios = identity["ios"]
@@ -254,7 +279,7 @@ def configure_project(root: Path, identity: dict[str, Any]) -> None:
     )
 
 
-def configure_plists(root: Path, identity: dict[str, Any]) -> None:
+def configure_plists(root: Path, identity: dict[str, Any], fixture: dict[str, Any] | None = None, transport_only: bool = False) -> None:
     ios_path = root / "MyRAM" / "Info.plist"
     with ios_path.open("rb") as handle:
         ios_plist = plistlib.load(handle)
@@ -267,6 +292,10 @@ def configure_plists(root: Path, identity: dict[str, Any]) -> None:
         fail("iOS Info.plist Production URL scheme drifted.")
 
     ios = identity["ios"]
+    if fixture:
+        ios_plist["MyRAMVerificationFixtureDeviceID"] = fixture["iphone"]
+    if transport_only:
+        ios_plist["MyRAMVerificationTransportOnly"] = True
     ios_plist["CFBundleDisplayName"] = identity["display_name"]
     ios_plist["NSBonjourServices"] = [identity["bonjour_service"]]
     url_types[0]["CFBundleURLSchemes"] = [ios["url_scheme"]]
@@ -305,6 +334,10 @@ def configure_plists(root: Path, identity: dict[str, Any]) -> None:
         fail("macOS Info.plist Production URL scheme drifted.")
 
     macos = identity["macos"]
+    if fixture:
+        mac_plist["MyRAMVerificationFixtureDeviceID"] = fixture["mac"]
+    if transport_only:
+        mac_plist["MyRAMVerificationTransportOnly"] = True
     mac_plist["CFBundleDisplayName"] = identity["display_name"]
     mac_plist["NSBonjourServices"] = [identity["bonjour_service"]]
     mac_url_types[0]["CFBundleURLSchemes"] = [macos["url_scheme"]]
@@ -319,8 +352,9 @@ def configure_storage_roots(root: Path, identity: dict[str, Any]) -> None:
         f'.appendingPathComponent("{identity["storage_root_name"]}", isDirectory: true)'
     )
     found: set[str] = set()
-    myram_root = root / "MyRAM"
-    for path in sorted(myram_root.rglob("*.swift")):
+    storage_sources = [path for name in ("MyRAM", "MyRAMTests", "MyRAMMacTests")
+                       for path in (root / name).rglob("*.swift")]
+    for path in sorted(storage_sources):
         text = path.read_text(encoding="utf-8")
         if token not in text:
             continue
@@ -328,10 +362,11 @@ def configure_storage_roots(root: Path, identity: dict[str, Any]) -> None:
         found.add(relative)
         path.write_text(text.replace(token, replacement), encoding="utf-8")
 
-    if found != EXPECTED_STORAGE_ROOT_FILES:
+    expected = EXPECTED_STORAGE_ROOT_FILES | EXPECTED_TEST_STORAGE_ROOT_FILES
+    if found != expected:
         fail(
             "Application Support topology drifted. "
-            f"Expected {sorted(EXPECTED_STORAGE_ROOT_FILES)}, found {sorted(found)}."
+            f"Expected {sorted(expected)}, found {sorted(found)}."
         )
 
 
@@ -367,7 +402,7 @@ def configure_runtime_identities(root: Path, identity: dict[str, Any]) -> None:
     )
 
 
-def audit(root: Path, identity: dict[str, Any], source_sha: str) -> dict[str, Any]:
+def audit(root: Path, identity: dict[str, Any], source_sha: str, fixture: dict[str, Any] | None = None, transport_only: bool = False) -> dict[str, Any]:
     project = root / "MyRAM.xcodeproj" / "project.pbxproj"
     project_text = project.read_text(encoding="utf-8")
     ios = identity["ios"]
@@ -427,7 +462,7 @@ def audit(root: Path, identity: dict[str, Any], source_sha: str) -> dict[str, An
     verification_root_token = (
         f'.appendingPathComponent("{identity["storage_root_name"]}", isDirectory: true)'
     )
-    for relative in EXPECTED_STORAGE_ROOT_FILES:
+    for relative in EXPECTED_STORAGE_ROOT_FILES | EXPECTED_TEST_STORAGE_ROOT_FILES:
         text = (root / relative).read_text(encoding="utf-8")
         if production_root_token in text:
             fail(f"{relative}: Production Application Support root remains.")
@@ -452,12 +487,20 @@ def audit(root: Path, identity: dict[str, Any], source_sha: str) -> dict[str, An
     if mac_plist["CFBundleURLTypes"][0]["CFBundleURLSchemes"] != [macos["url_scheme"]]:
         fail("macOS Verification URL scheme audit failed.")
 
+    for platform, values in (("iphone", ios_plist), ("mac", mac_plist)):
+        if values.get("MyRAMVerificationTransportOnly", False) is not transport_only:
+            fail(f"{platform}: Verification transport mode audit failed.")
+        expected_fixture_id = fixture[platform] if fixture else None
+        if values.get("MyRAMVerificationFixtureDeviceID") != expected_fixture_id:
+            fail(f"{platform}: Verification fixture device identity audit failed.")
+
     changed_files = {
         line
         for line in run_git(root, "diff", "--name-only").splitlines()
         if line.strip()
     }
-    expected_changed_files = FIXED_CHANGED_FILES | EXPECTED_STORAGE_ROOT_FILES
+    expected_changed_files = (FIXED_CHANGED_FILES | EXPECTED_STORAGE_ROOT_FILES
+                              | EXPECTED_TEST_STORAGE_ROOT_FILES)
     if changed_files != expected_changed_files:
         fail(
             "Generated change surface drifted. "
@@ -469,6 +512,8 @@ def audit(root: Path, identity: dict[str, Any], source_sha: str) -> dict[str, An
 
     return {
         "source_candidate_sha": source_sha,
+        "transport_mode": "transportOnly" if transport_only else "application",
+        "fixture_identity": fixture,
         "environment": identity["environment"],
         "display_name": identity["display_name"],
         "application_identifiers": {
@@ -522,17 +567,20 @@ def main() -> int:
         type=Path,
         help="Optional path for the generated isolation audit JSON.",
     )
+    parser.add_argument("--fixture-manifest", type=Path, help="Approved fixture manifest; binds peer identities only inside Verification apps.")
+    parser.add_argument("--transport-only", action="store_true", help="Disable application sync inside the existing isolated Verification MPC owners.")
     args = parser.parse_args()
     root = args.root.resolve()
 
     try:
         source_sha = require_disposable_detached_worktree(root)
         identity = load_identity(root)
+        fixture = load_fixture_identity(args.fixture_manifest)
         configure_project(root, identity)
-        configure_plists(root, identity)
+        configure_plists(root, identity, fixture, args.transport_only)
         configure_storage_roots(root, identity)
         configure_runtime_identities(root, identity)
-        report = audit(root, identity, source_sha)
+        report = audit(root, identity, source_sha, fixture, args.transport_only)
         rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
         if args.manifest_output:
             args.manifest_output.parent.mkdir(parents=True, exist_ok=True)

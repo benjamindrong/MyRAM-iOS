@@ -7,6 +7,207 @@ import UIKit
 
 @MainActor
 final class MyRAMTests: XCTestCase {
+    func testMYR233RestorePublishesRetainedPinnedTexts() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let recorder = RecordingSyncController()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = SyncConflictStore(fileURL: root.appendingPathComponent("conflicts.json"))
+        let vm = NotesViewModel(context: context, syncController: recorder, syncConflictStore: store,
+            pendingIncomingBatchQueueFileURL: nil,
+            anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore(fileURL: root.appendingPathComponent("recovery.json")),
+            pendingLocalConvergenceBatchQueueFileURL: nil, resumesPendingConvergenceOnInit: false)
+        let ids = ["4F390252-1147-4575-B855-BCE319D88B0D", "DBC72F2B-EA8B-4309-980D-428FFF0A10D0"]
+        let childIDs = ["56D27941-95D5-4B87-B25A-B4FFFA5275C9", "45DD7D09-D94D-45EC-BFC9-388AB5E3158E"]
+        var expectedChildren: [UUID: MyRAMPinnedThoughtSyncPayload] = [:]
+        for (index, value) in ids.enumerated() {
+            let note = Note(title: "Synthetic restored parent", content: "Synthetic retained body")
+            note.id = try XCTUnwrap(UUID(uuidString: value))
+            let child = PinnedThought(text: "Synthetic retained child", order: 0, note: note)
+            child.id = try XCTUnwrap(UUID(uuidString: childIDs[index]))
+            child.modifiedAt = Date(timeIntervalSince1970: 90 + Double(index))
+            expectedChildren[child.id] = MyRAMPinnedThoughtSyncPayload(thought: child)
+            note.deletedAt = Date(timeIntervalSince1970: 100)
+            context.insert(note)
+            context.insert(child)
+            try context.save()
+            vm.restoreNote(note)
+            XCTAssertNil(note.deletedAt)
+            XCTAssertEqual(note.pinnedThoughts.map(\.id), [child.id])
+        }
+        let markers = recorder.recordedChanges.filter { $0.entityType == .marker }
+        XCTAssertEqual(markers.count, 2)
+        let peerContainer = try makeContainer(isStoredInMemoryOnly: true)
+        let peerContext = peerContainer.mainContext
+        for value in ids {
+            let peerNote = Note(title: "Synthetic restored parent", content: "Synthetic retained body")
+            peerNote.id = try XCTUnwrap(UUID(uuidString: value))
+            peerContext.insert(peerNote)
+        }
+        try peerContext.save()
+        let peerStore = SyncConflictStore(fileURL: root.appendingPathComponent("peer/conflicts.json"))
+        let applier = MyRAMSyncChangeApplier(context: peerContext, conflictStore: peerStore)
+        for marker in markers {
+            let payload = try MyRAMSyncPayloadCoding.decodePinnedThought(from: marker.payload)
+            XCTAssertEqual(payload, expectedChildren[payload.id])
+            XCTAssertEqual(marker.updatedAt, payload.modifiedAt)
+            let change = SyncChange(entityType: .marker, entityID: payload.id.uuidString,
+                operation: .upsert, payload: marker.payload, updatedAt: marker.updatedAt,
+                originDeviceID: "synthetic-peer")
+            _ = applier.apply([change, change], activeNoteID: nil, currentNoteID: nil, currentFolderID: nil)
+        }
+        try peerContext.save()
+        let peerChildren = try peerContext.fetch(FetchDescriptor<PinnedThought>())
+        XCTAssertEqual(peerChildren.count, 2)
+        for child in peerChildren {
+            XCTAssertEqual(MyRAMPinnedThoughtSyncPayload(thought: child), expectedChildren[child.id])
+        }
+    }
+
+    func testMYR233DeletedPinnedTextCannotBeResurrectedByRetainedReplay() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = SyncConflictStore(fileURL: root.appendingPathComponent("conflicts.json"))
+        let note = Note(title: "Synthetic parent")
+        let child = PinnedThought(text: "Synthetic retained child", order: 0, note: note)
+        context.insert(note)
+        context.insert(child)
+        try context.save()
+        let retainedPayload = MyRAMPinnedThoughtSyncPayload(thought: child, baseText: child.text)
+        let deletedPayload = MyRAMPinnedThoughtSyncPayload(thought: child, isDeleted: true, baseText: child.text)
+        let id = child.id
+        let applier = MyRAMSyncChangeApplier(context: context, conflictStore: store)
+        let deletion = SyncChange(entityType: .marker, entityID: id.uuidString, operation: .delete,
+            payload: try MyRAMSyncPayloadCoding.encode(deletedPayload), updatedAt: child.modifiedAt, originDeviceID: "synthetic-peer")
+        _ = applier.apply([deletion], activeNoteID: nil, currentNoteID: nil, currentFolderID: nil)
+        try context.save()
+        XCTAssertTrue(try context.fetch(FetchDescriptor<PinnedThought>()).isEmpty)
+        let replay = SyncChange(entityType: .marker, entityID: id.uuidString, operation: .upsert,
+            payload: try MyRAMSyncPayloadCoding.encode(retainedPayload), updatedAt: retainedPayload.modifiedAt, originDeviceID: "synthetic-peer")
+        let reopenedStore = SyncConflictStore(fileURL: root.appendingPathComponent("conflicts.json"))
+        let reopenedApplier = MyRAMSyncChangeApplier(context: context, conflictStore: reopenedStore)
+        _ = reopenedApplier.apply([deletion, replay], activeNoteID: nil, currentNoteID: nil, currentFolderID: nil)
+        try context.save()
+        XCTAssertTrue(try context.fetch(FetchDescriptor<PinnedThought>()).isEmpty)
+        XCTAssertEqual(reopenedStore.remoteBaseline(entityType: .pinnedThought, entityID: id, field: .pinnedText)?.isDeleted, true)
+        reopenedStore.savePinnedTextBaseline(thoughtID: id, text: retainedPayload.text,
+            modifiedAt: retainedPayload.modifiedAt, originDeviceID: "late-acknowledgement")
+        XCTAssertEqual(reopenedStore.remoteBaseline(entityType: .pinnedThought, entityID: id, field: .pinnedText)?.isDeleted, true)
+    }
+
+    func testMYR233LocalPinnedTextDeletionRetainsAuthorityAgainstRestoreReplay() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = SyncConflictStore(fileURL: root.appendingPathComponent("conflicts.json"))
+        let recorder = RecordingSyncController()
+        let vm = NotesViewModel(context: context, syncController: recorder, syncConflictStore: store,
+            pendingIncomingBatchQueueFileURL: nil,
+            anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore(fileURL: root.appendingPathComponent("recovery.json")),
+            pendingLocalConvergenceBatchQueueFileURL: nil, resumesPendingConvergenceOnInit: false)
+        let note = Note(title: "Pinned text host")
+        let child = PinnedThought(text: "Retained text", order: 0, note: note)
+        child.modifiedAt = Date(timeIntervalSince1970: 90)
+        context.insert(note); context.insert(child); try context.save()
+        let payload = MyRAMPinnedThoughtSyncPayload(thought: child)
+        vm.deletePinnedParagraph(child)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<PinnedThought>()).isEmpty)
+        let deletion = try XCTUnwrap(recorder.recordedChanges.first { $0.entityType == .marker })
+        XCTAssertEqual(deletion.operation, .delete)
+        XCTAssertGreaterThan(deletion.updatedAt, payload.modifiedAt)
+        let reopened = SyncConflictStore(fileURL: root.appendingPathComponent("conflicts.json"))
+        let applier = MyRAMSyncChangeApplier(context: context, conflictStore: reopened)
+        let replay = SyncChange(entityType: .marker, entityID: payload.id.uuidString, operation: .upsert,
+            payload: try MyRAMSyncPayloadCoding.encode(payload), updatedAt: payload.modifiedAt,
+            originDeviceID: "synthetic-peer")
+        _ = applier.apply([replay], activeNoteID: nil, currentNoteID: nil, currentFolderID: nil)
+        try context.save()
+        XCTAssertTrue(try context.fetch(FetchDescriptor<PinnedThought>()).isEmpty)
+    }
+
+    func testMYR233PinnedTextDeleteSaveFailureRetainsChildAndDoesNotPublish() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = SyncConflictStore(fileURL: root.appendingPathComponent("conflicts.json"))
+        let recorder = RecordingSyncController()
+        var failSave = false
+        var savesAfterFailureEnabled = 0
+        let vm = NotesViewModel(context: context, syncController: recorder, syncConflictStore: store,
+            pendingIncomingBatchQueueFileURL: nil,
+            anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore(fileURL: root.appendingPathComponent("recovery.json")),
+            pendingLocalConvergenceBatchQueueFileURL: nil, resumesPendingConvergenceOnInit: false,
+            saveContext: {
+                if failSave {
+                    savesAfterFailureEnabled += 1
+                    if savesAfterFailureEnabled == 2 { throw CocoaError(.fileWriteUnknown) }
+                }
+                try context.save()
+            })
+        let note = Note(title: "Preserved host")
+        let child = PinnedThought(text: "Preserved text", order: 0, note: note)
+        context.insert(note); context.insert(child); try context.save()
+        let id = child.id
+        failSave = true
+        vm.deletePinnedParagraph(child)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<PinnedThought>()).map(\.id), [id])
+        XCTAssertFalse(recorder.recordedChanges.contains { $0.entityType == .marker })
+        XCTAssertNil(store.remoteBaseline(entityType: .pinnedThought, entityID: id, field: .pinnedText))
+        XCTAssertNotNil(vm.syncBatchErrorMessage)
+    }
+
+
+    func testMYR233RetainedPinnedTextReplayPreservesNewerValidText() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = SyncConflictStore(fileURL: root.appendingPathComponent("conflicts.json"))
+        let note = Note(title: "Newer state host")
+        let child = PinnedThought(text: "Retained old text", order: 0, note: note)
+        child.modifiedAt = Date(timeIntervalSince1970: 90)
+        let retained = MyRAMPinnedThoughtSyncPayload(thought: child)
+        child.text = "Legitimate newer text"
+        child.modifiedAt = Date(timeIntervalSince1970: 110)
+        context.insert(note); context.insert(child); try context.save()
+        let applier = MyRAMSyncChangeApplier(context: context, conflictStore: store)
+        let replay = SyncChange(entityType: .marker, entityID: child.id.uuidString, operation: .upsert,
+            payload: try MyRAMSyncPayloadCoding.encode(retained), updatedAt: retained.modifiedAt,
+            originDeviceID: "synthetic-peer")
+        _ = applier.apply([replay], activeNoteID: nil, currentNoteID: nil, currentFolderID: nil)
+        try context.save()
+        XCTAssertEqual(child.text, "Legitimate newer text")
+        XCTAssertEqual(try context.fetch(FetchDescriptor<PinnedThought>()).count, 1)
+    }
+
+    func testMYR233MissingChildDeletionBlocksLaterRetainedReplay() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = SyncConflictStore(fileURL: root.appendingPathComponent("conflicts.json"))
+        let note = Note(title: "Missing child host")
+        context.insert(note); try context.save()
+        let child = PinnedThought(text: "Remote retained text", order: 0, note: note)
+        child.modifiedAt = Date(timeIntervalSince1970: 90)
+        let retained = MyRAMPinnedThoughtSyncPayload(thought: child)
+        let deleted = MyRAMPinnedThoughtSyncPayload(thought: child, isDeleted: true)
+        let buffer = BufferedSyncConflictStore(base: store)
+        let applier = MyRAMSyncChangeApplier(context: context, conflictStore: buffer)
+        let deletion = SyncChange(entityType: .marker, entityID: child.id.uuidString, operation: .delete,
+            payload: try MyRAMSyncPayloadCoding.encode(deleted), updatedAt: deleted.modifiedAt,
+            originDeviceID: "synthetic-peer")
+        _ = applier.apply([deletion], activeNoteID: nil, currentNoteID: nil, currentFolderID: nil)
+        try store.commitLegacyIncomingEffectsChecked(buffer.effects)
+        let reopened = SyncConflictStore(fileURL: root.appendingPathComponent("conflicts.json"))
+        let replay = SyncChange(entityType: .marker, entityID: child.id.uuidString, operation: .upsert,
+            payload: try MyRAMSyncPayloadCoding.encode(retained), updatedAt: retained.modifiedAt,
+            originDeviceID: "synthetic-peer")
+        let resumed = MyRAMSyncChangeApplier(context: context, conflictStore: reopened)
+        _ = resumed.apply([replay], activeNoteID: nil, currentNoteID: nil, currentFolderID: nil)
+        try context.save()
+        XCTAssertTrue(try context.fetch(FetchDescriptor<PinnedThought>()).isEmpty)
+    }
+
     private struct EncodedNoteSyncPayload: Encodable {
         let kind: MyRAMSyncPayloadKind
         let id: UUID
@@ -6993,7 +7194,41 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(deletedNotes.contains(where: { $0.id == preexistingDeletedNote.id }))
     }
 
-    func testRefreshRecentlyDeletedNotesPurgesExpiredDeletedNotes() throws {
+    func testMYR233RetainedExpiredRestorationPresentationRequiresVerificationIdentity() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let now = Date(timeIntervalSinceReferenceDate: 813283200)
+        let note = Note(title: "Retained", content: "Body")
+        note.deletedAt = now.addingTimeInterval(-20 * 24 * 60 * 60)
+        let deletion = note.deletedAt
+        context.insert(note)
+        let child = PinnedThought(text: "Retained pinned text", order: 0, note: note)
+        context.insert(child)
+        try context.save()
+        let vm = NotesViewModel(context: context)
+        for bundleID in ["com.northsignalstudio.myram.verification", "com.northsignalstudio.myram.mac.verification"] {
+            let isolated = try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: bundleID, bonjourServices: ["_myram-verify._tcp"], transportOnlyValue: nil)
+            XCTAssertTrue(vm.fetchRecentlyDeletedNotes(now: now, configuration: isolated).isEmpty)
+            XCTAssertEqual(vm.fetchRecentlyDeletedNotes(now: now, includeRetainedExpired: true,
+                                                       configuration: isolated).map(\.id), [note.id])
+        }
+        for (bundleID, service) in [
+            ("com.northsignalstudio.myram", "_myram-verify._tcp"),
+            ("com.northsignalstudio.myram.verification", "_myram-sync._tcp")
+        ] {
+            let excluded = try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: bundleID, bonjourServices: [service], transportOnlyValue: nil)
+            XCTAssertFalse(excluded.allowsRetainedDeletedNoteInspection)
+            XCTAssertTrue(vm.fetchRecentlyDeletedNotes(now: now, includeRetainedExpired: true,
+                                                       configuration: excluded).isEmpty)
+        }
+        XCTAssertEqual(note.deletedAt, deletion)
+        XCTAssertEqual(note.pinnedThoughts.map(\.id), [child.id])
+        XCTAssertFalse(context.hasChanges)
+    }
+
+    func testRecentlyDeletedNotesExpireFromPresentationWithoutPurgingSharedState() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
 
@@ -7008,11 +7243,13 @@ final class MyRAMTests: XCTestCase {
         try context.save()
 
         let vm = NotesViewModel(context: context)
-        vm.refreshRecentlyDeletedNotes()
         let deletedNotes = vm.fetchRecentlyDeletedNotes()
 
         XCTAssertFalse(deletedNotes.contains(where: { $0.id == staleDeletedNote.id }))
         XCTAssertTrue(deletedNotes.contains(where: { $0.id == recentDeletedNote.id }))
+        let retained = try context.fetch(FetchDescriptor<Note>())
+        XCTAssertTrue(retained.contains(where: { $0.id == staleDeletedNote.id }))
+        XCTAssertEqual(staleDeletedNote.deletedAt, retained.first { $0.id == staleDeletedNote.id }?.deletedAt)
     }
 
 #if DEBUG

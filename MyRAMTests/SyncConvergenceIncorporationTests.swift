@@ -9,6 +9,56 @@ import AnchoredSequenceCore
 #endif
 
 final class SyncConvergenceIncorporationTests: XCTestCase {
+    func testSameBatchCreationTitleUsesProjectedPreState() throws {
+        let (noteID, input) = try creationTitleInput(existing: false)
+        let transaction = InMemoryConvergenceTransaction(notes: [:])
+        let result = SyncConvergenceIncorporationExecutor().incorporate(
+            input: input, transaction: transaction, committedAt: date(4))
+        guard case .incorporated = result else {
+            return XCTFail("Expected atomic create-and-title application, got \(result)")
+        }
+        XCTAssertEqual(transaction.notes[noteID]?.title, "Assigned")
+        XCTAssertEqual(transaction.noteInsertCount, 1)
+        XCTAssertEqual(transaction.titleWinnerWriteCount, 1)
+    }
+
+    func testSameBatchCreationTitleRejectsMissingIdempotentNote() throws {
+        let (noteID, input) = try creationTitleInput(existing: true)
+        let transaction = InMemoryConvergenceTransaction(notes: [:])
+        let result = SyncConvergenceIncorporationExecutor().incorporate(
+            input: input, transaction: transaction, committedAt: date(4))
+        XCTAssertEqual(result, .failedBeforeCommit(.staleAuthoritativeState(noteID: noteID)))
+        assertNoPreflightMutation(transaction, "missing idempotent create-and-title note")
+    }
+
+    func testSameBatchCreationTitleRejectsOrphanedWinner() throws {
+        let (noteID, input) = try creationTitleInput(existing: false)
+        let transaction = InMemoryConvergenceTransaction(notes: [:])
+        let title = try XCTUnwrap(input.plan.affectedNotePlans.first?.titleEffect)
+        transaction.titleWinners[noteID] = .init(noteID: noteID, title: "Assigned",
+            canonicalReplayKey: title.candidateCanonicalKey, operationIdentity: title.candidateOperationIdentity)
+        let result = SyncConvergenceIncorporationExecutor().incorporate(
+            input: input, transaction: transaction, committedAt: date(4))
+        XCTAssertEqual(result, .failedBeforeCommit(.staleAuthoritativeState(noteID: noteID)))
+        assertNoPreflightMutation(transaction, "orphaned create-and-title winner")
+    }
+
+    private func creationTitleInput(existing: Bool) throws -> (UUID, ValidatedSyncConvergenceIncorporationInput) {
+        let noteID = uuid("00000000-0000-0000-0000-000000233c01")
+        let batch = SyncBatch(id: uuid("00000000-0000-0000-0000-000000233c02"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000233c03"), createdAt: date(3), changes: [
+                .noteCreated(.init(noteID: noteID, title: "Initial", body: "", folderID: nil,
+                    createdAt: date(1), modifiedAt: date(1))),
+                .noteTitleChanged(.init(noteID: noteID, title: "Assigned", modifiedAt: date(2)))
+            ])
+        let current: [SyncConvergenceProjectedNote] = existing
+            ? [.init(noteID: noteID, folderID: nil, title: "Initial", body: "", createdAt: date(1), modifiedAt: date(1))]
+            : []
+        let result = SyncConvergencePlanner().plan(input: .init(incomingBatch: batch, currentNotes: current))
+        let input: ValidatedSyncConvergenceIncorporationInput? = if case .planned(let value) = result { value } else { nil }
+        return (noteID, try XCTUnwrap(input, "Expected create-and-title plan, got \(result)"))
+    }
+
     func testDivergedLifecycleDeleteIncorporatesWithoutChangingDeletedAt() {
         let noteID = uuid("00000000-0000-0000-0000-000000165201")
         let initial = SyncConvergenceMutableNoteRecord(

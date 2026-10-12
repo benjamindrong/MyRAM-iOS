@@ -663,6 +663,36 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertEqual(transport.sentMessageKinds.last, .bootstrapSnapshot)
     }
 
+    func testConflictResolutionReappliesBlockedBootstrapAndSendsUpdatedAcknowledgement() async throws {
+        let peer = MCPeerID(displayName: "Remote|conflict-resolution-peer")
+        let transport = CapabilityRecordingTransport(connectedPeers: [peer])
+        let controller = makeController(transport: transport)
+        let noteID = UUID(uuidString: "23300000-0000-0000-0000-0000000002A1")!
+        let snapshot = try makeBootstrapSnapshot(id: UUID(), noteID: noteID)
+        var conflictResolved = false
+        controller.applyBootstrapSnapshot = { _ in
+            SyncPeerBootstrapApplyDisposition(
+                coveredBatchIDs: [],
+                coveredNoteIDs: conflictResolved ? [noteID] : [],
+                insertedNoteIDs: [],
+                presentationRefreshRequired: false
+            )
+        }
+
+        await controller.receiveBootstrapSnapshotForTesting(snapshot, from: peer)
+
+        XCTAssertEqual(transport.sentBootstrapAcknowledgements.count, 1)
+        XCTAssertEqual(transport.sentBootstrapAcknowledgements[0].snapshotID, snapshot.id)
+        XCTAssertEqual(transport.sentBootstrapAcknowledgements[0].coveredNoteIDs, [])
+
+        conflictResolved = true
+        await controller.resumeBootstrapAfterConflictResolution()
+
+        XCTAssertEqual(transport.sentBootstrapAcknowledgements.count, 2)
+        XCTAssertEqual(transport.sentBootstrapAcknowledgements[1].snapshotID, snapshot.id)
+        XCTAssertEqual(transport.sentBootstrapAcknowledgements[1].coveredNoteIDs, [noteID])
+    }
+
     func testBootstrapSnapshotSendFailureAutomaticallyRetriesSameSnapshot() async throws {
         let peer = MCPeerID(displayName: "Remote|retry-peer")
         let transport = CapabilityRecordingTransport(connectedPeers: [peer])

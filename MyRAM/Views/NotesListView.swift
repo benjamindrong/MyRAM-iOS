@@ -151,6 +151,7 @@ struct NotesListView: View {
     @State private var selectedNote: Note? = nil
     @State private var showingRecentlyDeleted = false
     @State private var recentlyDeletedNotes: [Note] = []
+    @State private var includesRetainedExpiredNotes = false
     @State private var selectedNoteIDs: Set<UUID> = []
     @State private var sharePayload: SharePayload?
     @State private var exportErrorMessage: String?
@@ -347,16 +348,18 @@ struct NotesListView: View {
             .sheet(isPresented: $showingRecentlyDeleted) {
                 RecentlyDeletedView(
                     notes: recentlyDeletedNotes,
+                    includesRetainedExpired: $includesRetainedExpiredNotes,
+                    allowsRetainedExpiredInspection: MyRAMSyncRuntimeConfiguration.current().allowsRetainedDeletedNoteInspection,
                     onAppear: {
-                        recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes()
+                        recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes(includeRetainedExpired: includesRetainedExpiredNotes)
                     },
                     onRestore: { note in
                         vm.restoreNote(note)
-                        recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes()
+                        recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes(includeRetainedExpired: includesRetainedExpiredNotes)
                     },
                     onDelete: { note in
                         vm.permanentlyDeleteNote(note)
-                        recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes()
+                        recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes(includeRetainedExpired: includesRetainedExpiredNotes)
                     }
                 )
             }
@@ -2371,6 +2374,8 @@ struct ActivityShareSheet: UIViewControllerRepresentable {
 private struct RecentlyDeletedView: View {
     @Environment(\.dismiss) private var dismiss
     let notes: [Note]
+    @Binding var includesRetainedExpired: Bool
+    let allowsRetainedExpiredInspection: Bool
     let onAppear: () -> Void
     let onRestore: (Note) -> Void
     let onDelete: (Note) -> Void
@@ -2400,6 +2405,7 @@ private struct RecentlyDeletedView: View {
                                         .foregroundStyle(.secondary)
                                 }
                             }
+                            .accessibilityIdentifier("deleted-note-\(note.id.uuidString)")
                             .swipeActions(edge: .leading, allowsFullSwipe: true) {
                                 Button("Restore") {
                                     onRestore(note)
@@ -2407,10 +2413,10 @@ private struct RecentlyDeletedView: View {
                                 .tint(.green)
                             }
                             .swipeActions(edge: .trailing) {
-                                Button("Delete") {
-                                    onDelete(note)
+                                if !includesRetainedExpired {
+                                    Button("Delete") { onDelete(note) }
+                                        .tint(.red)
                                 }
-                                .tint(.red)
                             }
                         }
                     }
@@ -2423,7 +2429,9 @@ private struct RecentlyDeletedView: View {
                     Image(systemName: "clock.arrow.circlepath")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    Text("Deleted notes are kept here for 7 days.")
+                    Text(includesRetainedExpired
+                         ? "Verification: retained expired notes can be restored."
+                         : "Deleted notes are kept here for 7 days.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -2432,11 +2440,16 @@ private struct RecentlyDeletedView: View {
                 .background(.ultraThinMaterial)
             }
             .toolbar {
+                if allowsRetainedExpiredInspection {
+                    Toggle("Include retained expired notes", isOn: $includesRetainedExpired)
+                        .accessibilityIdentifier("verification-retained-deleted-notes")
+                }
                 Button("Done") {
                     dismiss()
                 }
             }
         }
         .onAppear(perform: onAppear)
+        .onChange(of: includesRetainedExpired) { _, _ in onAppear() }
     }
 }

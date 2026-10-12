@@ -392,7 +392,6 @@ final class NotesViewModel: ObservableObject {
     func completeStartupInitializationAfterMigration() {
         guard !didCompleteStartupModelInitialization else { return }
         didCompleteStartupModelInitialization = true
-        purgeExpiredDeletedNotes()
         refreshCurrentFolderContent()
         loadLastNote()
     }
@@ -511,13 +510,23 @@ final class NotesViewModel: ObservableObject {
             + regularNotes.map(NotesListItem.note)
     }
 
-    func fetchRecentlyDeletedNotes() -> [Note] {
-        purgeExpiredDeletedNotes()
+    func fetchRecentlyDeletedNotes(
+        now: Date = .now,
+        includeRetainedExpired: Bool = false,
+        configuration: MyRAMSyncRuntimeConfiguration = .current()
+    ) -> [Note] {
+        let cutoff = now.addingTimeInterval(-Self.recentlyDeletedRetention)
+        // UI expiry cannot authorize destroying shared deletion/sequence state.
+        // Retain the tombstone and its children until sync has a safe GC owner.
         let descriptor = FetchDescriptor<Note>(
             predicate: #Predicate { $0.deletedAt != nil },
             sortBy: [SortDescriptor(\.deletedAt, order: .reverse)]
         )
-        return (try? context.fetch(descriptor)) ?? []
+        return ((try? context.fetch(descriptor)) ?? []).filter {
+            guard let deletedAt = $0.deletedAt else { return false }
+            return deletedAt >= cutoff
+                || (includeRetainedExpired && configuration.allowsRetainedDeletedNoteInspection)
+        }
     }
 
     func fetchSearchableNotes() -> [Note] {
@@ -528,10 +537,6 @@ final class NotesViewModel: ObservableObject {
             sortBy: [SortDescriptor(\.modifiedAt, order: .reverse)]
         )
         return ((try? context.fetch(descriptor)) ?? []).sorted(by: sortNotes)
-    }
-
-    func refreshRecentlyDeletedNotes() {
-        purgeExpiredDeletedNotes()
     }
 
     private func loadLastNote() {
@@ -1262,20 +1267,53 @@ final class NotesViewModel: ObservableObject {
 
     func deletePinnedParagraph(_ thought: PinnedThought) {
         let note = thought.note
-        let deletionPayload = MyRAMPinnedThoughtSyncPayload(thought: thought, isDeleted: true)
+        let originalModifiedAt = thought.modifiedAt
+        var snapshot: SyncConflictStoreSnapshot?
+        let deletionPayload: MyRAMPinnedThoughtSyncPayload
+        do {
+            try saveContext()
+            snapshot = try syncConflictStore.snapshot()
+            thought.modifiedAt = .now
+            deletionPayload = MyRAMPinnedThoughtSyncPayload(thought: thought, isDeleted: true)
+            if !hasActivePinnedTextConflict(thought) {
+                try syncConflictStore.saveRemoteBaselineChecked(SyncRemoteTextBaseline(
+                    entityType: .pinnedThought, entityID: thought.id, field: .pinnedText,
+                    text: thought.text, richTextContentData: nil,
+                    modifiedAt: thought.modifiedAt, originDeviceID: nil, isDeleted: true
+                ))
+            }
+        } catch {
+            thought.modifiedAt = originalModifiedAt
+            if let snapshot {
+                do { try syncConflictStore.restore(snapshot) } catch {
+                    syncBatchErrorMessage = "Unable to restore pinned text deletion metadata."
+                    return
+                }
+            }
+            syncBatchErrorMessage = "Unable to preserve the pinned text deletion."
+            return
+        }
         note?.pinnedThoughts.removeAll { $0.id == thought.id }
         context.delete(thought)
         reorderPinnedThoughts(for: note)
         note?.modifiedAt = .now
         note?.folder?.modifiedAt = .now
-        try? context.save()
+        do {
+            try saveContext()
+        } catch {
+            context.rollback()
+            if let snapshot {
+                do { try syncConflictStore.restore(snapshot) } catch {
+                    syncBatchErrorMessage = "Unable to restore pinned text deletion metadata."
+                    return
+                }
+            }
+            syncBatchErrorMessage = "Unable to delete the pinned text."
+            return
+        }
         recordPinnedThoughtSyncDeletion(deletionPayload)
-        if let note {
-            recordNoteSyncChange(note)
-        }
-        if let folder = note?.folder {
-            recordFolderSyncChange(folder)
-        }
+        if let note { recordNoteSyncChange(note) }
+        if let folder = note?.folder { recordFolderSyncChange(folder) }
         refreshCurrentFolderContent()
     }
 
@@ -1368,6 +1406,9 @@ final class NotesViewModel: ObservableObject {
                 publishActiveEditorReload(noteID: conflict.entityID, reason: .unsupportedIntegratedChange)
             }
             refreshCurrentFolderContent()
+            if let bootstrapController = syncController as? MyRAMSyncBootstrapConfiguring {
+                await bootstrapController.resumeBootstrapAfterConflictResolution()
+            }
             resumePendingConvergencePresentationIfNeeded()
         }
     }
@@ -1482,6 +1523,12 @@ final class NotesViewModel: ObservableObject {
             change: IPhoneSyncBatchCaptureHook.lifecycleChanged(note),
             evidence: nil
         ))
+        // Restoration changes the parent's lifecycle, not the retained children's
+        // edit identities or timestamps. Send each child through its existing
+        // ordinary sync owner so a peer missing that retained state can recover it.
+        for pinnedText in sortedPinnedThoughts(for: note) {
+            recordPinnedThoughtSyncChange(pinnedText)
+        }
         if let folder = note.folder {
             recordFolderSyncChange(folder)
         }
@@ -2786,11 +2833,13 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func handleReadyLocalBatch(_ obligation: SyncConvergenceLocalObligation) async {
+        guard syncController?.applicationSyncEnabled != false else { return }
         let outcome = await syncConvergenceRuntime.submitLocalObligation(obligation)
         await handleConvergenceRuntimeOutcome(outcome)
     }
 
     func resumePendingConvergencePresentationIfNeeded() {
+        guard syncController?.applicationSyncEnabled != false else { return }
         guard pendingConvergenceResumeTask == nil else { return }
         pendingConvergenceResumeTask = Task { [weak self] in
             await self?.resumePendingConvergencePresentation()
@@ -2801,6 +2850,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func resumePendingConvergencePresentation() async {
+        guard syncController?.applicationSyncEnabled != false else { return }
         let outcome = await syncConvergenceRuntime.resumePendingWork()
         await handleConvergenceRuntimeOutcome(outcome)
     }
@@ -3026,20 +3076,6 @@ final class NotesViewModel: ObservableObject {
         }
 
         return result
-    }
-
-    private func purgeExpiredDeletedNotes() {
-        let cutoff = Date().addingTimeInterval(-Self.recentlyDeletedRetention)
-        let descriptor = FetchDescriptor<Note>(predicate: #Predicate { $0.deletedAt != nil })
-        let deletedNotes = (try? context.fetch(descriptor)) ?? []
-
-        for note in deletedNotes {
-            if let deletedAt = note.deletedAt, deletedAt < cutoff {
-                context.delete(note)
-            }
-        }
-
-        try? context.save()
     }
 
     func exportNotesForSharing(

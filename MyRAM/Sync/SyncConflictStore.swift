@@ -63,6 +63,7 @@ struct SyncRemoteTextBaseline: Codable, Equatable {
     let richTextContentData: Data?
     let modifiedAt: Date
     let originDeviceID: String?
+    var isDeleted: Bool? = nil
 }
 
 protocol SyncConflictStoring: AnyObject {
@@ -122,6 +123,12 @@ struct LegacyIncomingBufferedEffects: Equatable {
     var removedResolvedConflicts: [SyncConflictVersion] = []
     var remoteBaselines: [SyncRemoteTextBaseline] = []
     var lifecycleResolutions: [SyncConflictVersion] = []
+}
+
+enum SyncLegacyConflictMaterializationOutcome: Equatable {
+    case active
+    case alreadyTerminal
+    case blocked
 }
 
 final class BufferedSyncConflictStore: SyncConflictStoring {
@@ -260,6 +267,7 @@ final class BufferedSyncConflictStore: SyncConflictStoring {
     }
 
     func saveRemoteBaseline(_ baseline: SyncRemoteTextBaseline) {
+        guard remoteBaseline(entityType: baseline.entityType, entityID: baseline.entityID, field: baseline.field)?.supersedes(baseline) != true else { return }
         baselinesByKey[ConflictKey(
             entityType: baseline.entityType,
             entityID: baseline.entityID,
@@ -362,6 +370,13 @@ struct SyncConflictStoreSnapshot {
 }
 
 extension SyncRemoteTextBaseline {
+    func supersedes(_ incoming: SyncRemoteTextBaseline) -> Bool {
+        guard entityType == .pinnedThought,
+              isDeleted == true || incoming.isDeleted == true else { return false }
+        return modifiedAt > incoming.modifiedAt
+            || (modifiedAt == incoming.modifiedAt && isDeleted == true && incoming.isDeleted != true)
+    }
+
     var syncTextBaseline: SyncTextTrackedBaseline {
         SyncTextTrackedBaseline(
             text: text,
@@ -788,6 +803,7 @@ final class SyncConflictStore: SyncConflictStoring, SyncConflictLegacyInspecting
     }
 
     func saveRemoteBaseline(_ baseline: SyncRemoteTextBaseline) {
+        guard remoteBaseline(entityType: baseline.entityType, entityID: baseline.entityID, field: baseline.field)?.supersedes(baseline) != true else { return }
         var baselines = loadBaselines()
         if let index = baselines.firstIndex(where: {
             $0.entityType == baseline.entityType
@@ -838,6 +854,40 @@ final class SyncConflictStore: SyncConflictStoring, SyncConflictLegacyInspecting
                 try persistDeferredRemoteLifecycleResolutionChecked(conflict)
             }
         }
+    }
+
+    func materializeLegacyConflictChecked(
+        _ conflict: SyncConflictVersion
+    ) throws -> SyncLegacyConflictMaterializationOutcome {
+        try commitLegacyIncomingEffectsChecked(
+            LegacyIncomingBufferedEffects(preservedConflicts: [conflict])
+        )
+
+        let legacyConflicts = legacyActiveConflicts(now: Date())
+        if let exactID = legacyConflicts.first(where: { $0.id == conflict.id }) {
+            return exactID == conflict ? .active : .blocked
+        }
+        if legacyConflicts.contains(where: {
+            SyncTextConflictStore.isExactRemoteMatch(
+                $0.syncTextConflict,
+                conflict.syncTextConflict
+            )
+        }) {
+            return .blocked
+        }
+
+        let textConflict = conflict.syncTextConflict
+        if let queued = textConflictStore.queuedConflict(
+            entityType: textConflict.entityType,
+            entityID: textConflict.entityID,
+            fieldID: textConflict.fieldID
+        ), SyncTextConflictStore.isExactRemoteMatch(queued.conflict, textConflict) {
+            return .blocked
+        }
+
+        // NearbySyncCore's checked preserve has only one non-active,
+        // non-queued success path: an exact durable resolved-conflict tombstone.
+        return .alreadyTerminal
     }
 
     func saveNoteTitleBaseline(noteID: UUID, title: String, modifiedAt: Date, originDeviceID: String?) {
@@ -1327,7 +1377,9 @@ final class SyncConflictStore: SyncConflictStoring, SyncConflictLegacyInspecting
                     && $0.entityID == baseline.entityID
                     && $0.field == baseline.field
             }) {
-                updatedBaselines[index] = baseline
+                if !updatedBaselines[index].supersedes(baseline) {
+                    updatedBaselines[index] = baseline
+                }
             } else {
                 updatedBaselines.append(baseline)
             }

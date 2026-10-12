@@ -4,7 +4,284 @@ import SwiftData
 import XCTest
 @testable import MyRAMMac
 
+@MainActor
+final class MacSyncTransportLifecycleTests: XCTestCase {
+    @MainActor
+    func testMYR233TerminalShutdownStopsDiscoveryBeforeDisconnectAndCannotRestart() throws {
+        let container = try makeContainer()
+        var events: [String] = []
+        let controller = makeLifecycleController(container: container) { events.append($0) }
+        controller.startNetworkingIfNeeded()
+        controller.startNetworkingIfNeeded()
+        controller.stopNetworking()
+        controller.stopNetworking()
+        controller.startNetworkingIfNeeded()
+        XCTAssertEqual(events, ["advertise", "browse", "stopAdvertise", "stopBrowse", "disconnect"])
+        XCTAssertFalse(controller.hasConnectedPeers)
+    }
+
+    @MainActor
+    func testMYR233ShutdownBeforeStartupCannotOpenTransport() throws {
+        let container = try makeContainer()
+        var events: [String] = []
+        let controller = makeLifecycleController(container: container) { events.append($0) }
+        controller.stopNetworking()
+        controller.startNetworkingIfNeeded()
+        XCTAssertEqual(events, ["stopAdvertise", "stopBrowse", "disconnect"])
+    }
+
+    @MainActor
+    func testMYR233QueuedDiscoveryAndInvitationCannotReopenRetiredOwner() async throws {
+        let container = try makeContainer()
+        var events: [String] = []
+        let controller = makeLifecycleController(container: container) { events.append($0) }
+        let local = MCPeerID(displayName: "local")
+        let remote = MCPeerID(displayName: "remote|myr233-replacement")
+        let browser = MCNearbyServiceBrowser(peer: local, serviceType: "myram-verify")
+        let advertiser = MCNearbyServiceAdvertiser(peer: local, discoveryInfo: nil, serviceType: "myram-verify")
+        let finished = expectation(description: "Queued invitation is rejected")
+        controller.browser(browser, foundPeer: remote, withDiscoveryInfo: nil)
+        controller.advertiser(advertiser, didReceiveInvitationFromPeer: remote, withContext: nil) { accepted, session in
+            XCTAssertFalse(accepted)
+            XCTAssertNil(session)
+            finished.fulfill()
+        }
+        controller.stopNetworking()
+        controller.invite(MacSyncDiscoveredPeer(peerID: remote, deviceID: "myr233-replacement", displayName: "remote"))
+        await fulfillment(of: [finished], timeout: 2)
+        XCTAssertTrue(controller.availablePeers.isEmpty)
+        XCTAssertEqual(events, ["stopAdvertise", "stopBrowse", "disconnect"])
+        XCTAssertTrue(controller.unsentBatchQueueSnapshotForTesting().pendingBatches.isEmpty)
+    }
+
+    @MainActor
+    func testMYR233RapidOwnerReplacementCannotReviveOldTransport() throws {
+        let container = try makeContainer()
+        var events: [String] = []
+        let retired = makeLifecycleController(container: container) { events.append("old:" + $0) }
+        retired.startNetworkingIfNeeded()
+        retired.stopNetworking()
+        let replacement = makeLifecycleController(container: container) { events.append("new:" + $0) }
+        replacement.startNetworkingIfNeeded()
+        retired.startNetworkingIfNeeded()
+        replacement.startNetworkingIfNeeded()
+        XCTAssertEqual(events, ["old:advertise", "old:browse", "old:stopAdvertise", "old:stopBrowse", "old:disconnect", "new:advertise", "new:browse"])
+        replacement.stopNetworking()
+    }
+
+    func testMYR233DisconnectReconnectKeepsTheRunningOwner() async throws {
+        let container = try makeContainer()
+        var events: [String] = []
+        let controller = makeLifecycleController(container: container) { events.append($0) }
+        controller.startNetworkingIfNeeded()
+        let local = MCPeerID(displayName: "local")
+        let remote = MCPeerID(displayName: "remote|myr233-reconnect")
+        let session = MCSession(peer: local, securityIdentity: nil, encryptionPreference: .required)
+        controller.session(session, peer: remote, didChange: .notConnected)
+        // Let the production delegate's main-actor hop finish before reconnecting.
+        await Task.yield()
+        controller.startNetworkingIfNeeded()
+        controller.invite(MacSyncDiscoveredPeer(peerID: remote, deviceID: "myr233-reconnect", displayName: "remote"))
+        XCTAssertEqual(events, ["advertise", "browse", "invite"])
+        controller.stopNetworking()
+    }
+
+    func testMYR233TransportOnlyRetainsMPCAndPreservesPersistedQueue() async throws {
+        let container = try makeContainer()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bundlePath = directory.appendingPathComponent("Diagnostic.bundle")
+        try FileManager.default.createDirectory(at: bundlePath, withIntermediateDirectories: true)
+        let info: [String: Any] = [
+            "CFBundleIdentifier": "com.northsignalstudio.myram.mac.verification",
+            "NSBonjourServices": ["_myram-verify._tcp"],
+            MyRAMSyncRuntimeConfiguration.transportOnlyKey: true
+        ]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: bundlePath.appendingPathComponent("Info.plist"))
+        let queueURL = directory.appendingPathComponent("unsent.json")
+        let batch = SyncBatch(id: UUID(), originDeviceID: UUID(), createdAt: .now, changes: [])
+        try FileBackedSyncBatchQueue(fileURL: queueURL).enqueueDurably(batch)
+        let original = try Data(contentsOf: queueURL)
+        let remote = MCPeerID(displayName: "remote|transport-only")
+        var events: [String] = []
+        var members = [remote]
+        let controller = MacSyncBatchController(
+            context: container.mainContext,
+            conflictStore: SyncConflictStore(fileURL: directory.appendingPathComponent("conflicts.json")),
+            unsentBatchQueueFileURL: queueURL, startsNetworking: false,
+            configurationBundle: try XCTUnwrap(Bundle(path: bundlePath.path)),
+            identityProvider: { MacSyncDeviceIdentity(id: UUID(), displayName: "Transport test") },
+            startAdvertisingOperation: { events.append("advertise") },
+            startBrowsingOperation: { events.append("browse") },
+            connectedPeersProvider: { members },
+            sendBatchDataOperation: { _, _, _ in XCTFail("Application send in transport-only mode") },
+            invitePeerOperation: { _, _, _ in events.append("invite") }
+        )
+        XCTAssertFalse(controller.applicationSyncEnabled)
+        controller.startNetworkingIfNeeded()
+        controller.startNetworkingIfNeeded()
+        // Invitation handling still belongs to the retained MPC session.
+        let advertiser = MCNearbyServiceAdvertiser(peer: MCPeerID(displayName: "test"), discoveryInfo: nil, serviceType: "myram-verify")
+        let invited = expectation(description: "Transport invitation accepted after prior membership leaves")
+        var acceptedInvitations = 0
+        controller.advertiser(advertiser, didReceiveInvitationFromPeer: remote, withContext: nil) { accepted, session in
+            acceptedInvitations += 1
+            XCTAssertTrue(accepted)
+            XCTAssertNotNil(session)
+            invited.fulfill()
+        }
+        await Task.yield()
+        XCTAssertEqual(acceptedInvitations, 0)
+        let session = MCSession(peer: MCPeerID(displayName: "local"), securityIdentity: nil, encryptionPreference: .required)
+        members = []
+        controller.session(session, peer: remote, didChange: .notConnected)
+        await fulfillment(of: [invited], timeout: 2)
+        XCTAssertEqual(acceptedInvitations, 1)
+        members = [remote]
+        controller.session(session, peer: remote, didChange: .connected)
+        let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
+        controller.session(session, didReceive: data, fromPeer: remote)
+        controller.flushPendingBatch()
+        await controller.beginReconnectBootstrapForTesting(to: remote)
+        await controller.resumeBootstrapAfterConflictResolution()
+        do {
+            try await controller.acceptLocalBatch(batch)
+            XCTFail("Suppressed admission must not report success")
+        } catch {
+            XCTAssertTrue(error is MyRAMSyncRuntimeConfiguration.AdmissionError)
+        }
+        await Task.yield()
+        XCTAssertEqual(events, ["advertise", "browse"])
+        XCTAssertEqual(try Data(contentsOf: queueURL), original)
+        XCTAssertNil(controller.bootstrapStateForTesting(peerDeviceID: "transport-only"))
+        controller.stopNetworking()
+    }
+
+    @MainActor
+    private func makeLifecycleController(
+        container: ModelContainer, event: @escaping (String) -> Void
+    ) -> MacSyncBatchController {
+        MacSyncBatchController(
+            context: container.mainContext,
+            conflictStore: SyncConflictStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("MYR233-lifecycle-\(UUID().uuidString).json")),
+            unsentBatchQueueFileURL: nil,
+            startsNetworking: false,
+            identityProvider: { MacSyncDeviceIdentity(id: UUID(), displayName: "Lifecycle test") },
+            startAdvertisingOperation: { event("advertise") },
+            startBrowsingOperation: { event("browse") },
+            stopAdvertisingOperation: { event("stopAdvertise") },
+            stopBrowsingOperation: { event("stopBrowse") },
+            disconnectSessionOperation: { event("disconnect") },
+            invitePeerOperation: { _, _, _ in event("invite") }
+        )
+    }
+
+    private func makeContainer() throws -> ModelContainer {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR233-lifecycle-\(UUID().uuidString)", schema: schema, isStoredInMemoryOnly: true
+        )
+        return try ModelContainer(for: schema, configurations: configuration)
+    }
+}
+
 final class MacSyncDeviceIdentityTests: XCTestCase {
+    func testMYR233TransportIdentitySurvivesDefaultsOwnerRelaunch() throws {
+        let suite = "MYR233-peer-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let name = "Device|\(UUID().uuidString)"
+        let original = try MyRAMSyncDeviceIdentityStore.resolvePeerID(displayName: name, defaults: defaults)
+        XCTAssertNotEqual(original, MCPeerID(displayName: name))
+        let relaunchedDefaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let replacement = try MyRAMSyncDeviceIdentityStore.resolvePeerID(displayName: name, defaults: relaunchedDefaults)
+        XCTAssertEqual(original, replacement)
+        XCTAssertEqual(defaults.data(forKey: MyRAMSyncDeviceIdentityStore.transportPeerIDKey),
+                       relaunchedDefaults.data(forKey: MyRAMSyncDeviceIdentityStore.transportPeerIDKey))
+    }
+
+    func testMYR233TransportIdentityChangesOnlyWithBoundDisplayIdentity() throws {
+        let defaults = makeDefaults()
+        let original = try MyRAMSyncDeviceIdentityStore.resolvePeerID(displayName: "Original|device-a", defaults: defaults)
+        let renamed = try MyRAMSyncDeviceIdentityStore.resolvePeerID(displayName: "Renamed|device-a", defaults: defaults)
+        XCTAssertNotEqual(original, renamed)
+        XCTAssertEqual(renamed, try MyRAMSyncDeviceIdentityStore.resolvePeerID(displayName: "Renamed|device-a", defaults: defaults))
+        XCTAssertNotEqual(renamed, try MyRAMSyncDeviceIdentityStore.resolvePeerID(displayName: "Renamed|device-b", defaults: defaults))
+    }
+
+    func testMYR233InvalidTransportArchiveCannotSilentlyCreateAnotherPeer() throws {
+        let defaults = makeDefaults()
+        for invalid: Any in ["not an archive", Data([0, 1, 2])] {
+            defaults.set(invalid, forKey: MyRAMSyncDeviceIdentityStore.transportPeerIDKey)
+            XCTAssertThrowsError(try MyRAMSyncDeviceIdentityStore.resolvePeerID(displayName: "Device|device-a", defaults: defaults))
+            XCTAssertEqual(defaults.object(forKey: MyRAMSyncDeviceIdentityStore.transportPeerIDKey) as? NSObject, invalid as? NSObject)
+        }
+    }
+
+    func testMYR233ProductionCannotEnableTransportOnlyMode() throws {
+        for id in ["com.northsignalstudio.myram", "com.northsignalstudio.myram.dev",
+                   "com.northsignalstudio.myram.mac", "com.northsignalstudio.myram.mac.dev", "unknown"] {
+            XCTAssertTrue(try MyRAMSyncRuntimeConfiguration(bundleIdentifier: id, bonjourServices: nil, transportOnlyValue: nil).applicationSyncEnabled)
+            for value in [true, false] {
+                XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(bundleIdentifier: id, bonjourServices: ["_myram-verify._tcp"], transportOnlyValue: value))
+            }
+        }
+    }
+
+    func testMYR233TransportOnlyRequiresExactVerificationIdentityAndNamespace() throws {
+        for id in MyRAMSyncRuntimeConfiguration.verificationBundleIDs {
+            let mode = try MyRAMSyncRuntimeConfiguration(bundleIdentifier: id, bonjourServices: ["_myram-verify._tcp"], transportOnlyValue: true)
+            XCTAssertFalse(mode.applicationSyncEnabled)
+            XCTAssertThrowsError(try mode.requireApplicationSync())
+            XCTAssertTrue(mode.recordsTransportDiagnostics)
+            for namespace in [nil, ["_myram-sync._tcp"], ["_myram-verify._tcp", "_myram-sync._tcp"]] as [[String]?] {
+                XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(bundleIdentifier: id, bonjourServices: namespace, transportOnlyValue: true))
+            }
+            XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(bundleIdentifier: id, bonjourServices: ["_myram-verify._tcp"], transportOnlyValue: "true"))
+            let normal = try MyRAMSyncRuntimeConfiguration(bundleIdentifier: id, bonjourServices: ["_myram-verify._tcp"], transportOnlyValue: nil)
+            XCTAssertTrue(normal.applicationSyncEnabled)
+            XCTAssertTrue(normal.recordsTransportDiagnostics)
+            XCTAssertNoThrow(try normal.requireApplicationSync())
+        }
+    }
+
+    func testVerificationFixtureIdentityPersistsAndRebindsEveryProviderBeforePeerConstruction() throws {
+        let defaults = makeDefaults()
+        defaults.set(UUID().uuidString, forKey: MacSyncDeviceIdentity.deviceIDKey)
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).bundle")
+        try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let fixtureID = UUID(uuidString: "5CF4DFED-1278-4D5C-BB0A-D63DC5866DC2")!
+        let info: [String: Any] = [
+            "CFBundleIdentifier": "com.northsignalstudio.myram.mac.verification",
+            "MyRAMVerificationFixtureDeviceID": fixtureID.uuidString
+        ]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: path.appendingPathComponent("Info.plist"))
+        let bundle = try XCTUnwrap(Bundle(path: path.path))
+        let first = MacSyncDeviceIdentityProvider(defaults: defaults, bundle: bundle).currentIdentity()
+        XCTAssertEqual(first.id, fixtureID)
+        XCTAssertEqual(defaults.string(forKey: MacSyncDeviceIdentity.deviceIDKey), fixtureID.uuidString)
+        defaults.set(UUID().uuidString, forKey: MacSyncDeviceIdentity.deviceIDKey)
+        let recreated = MacSyncDeviceIdentityProvider(defaults: defaults, bundle: bundle).currentIdentity()
+        XCTAssertEqual(recreated.id, fixtureID)
+        XCTAssertTrue(recreated.peerDisplayName.hasSuffix("|\(fixtureID.uuidString)"))
+    }
+
+    func testMacProductionBundleRejectsFixtureIdentityWithoutChangingExistingDefaults() {
+        let defaults = makeDefaults()
+        let existing = UUID().uuidString
+        defaults.set(existing, forKey: MacSyncDeviceIdentity.deviceIDKey)
+        for bundleID in ["com.northsignalstudio.myram.mac", "com.northsignalstudio.myram.mac.dev"] {
+            XCTAssertThrowsError(try MyRAMSyncDeviceIdentityStore.resolve(
+                defaults: defaults, bundleIdentifier: bundleID, configuredDeviceID: UUID().uuidString
+            ))
+            XCTAssertEqual(defaults.string(forKey: MacSyncDeviceIdentity.deviceIDKey), existing)
+        }
+    }
+
     func testCurrentIdentityReusesExistingStableDeviceIDKey() {
         let defaults = makeDefaults()
         let existingID = UUID(uuidString: "00000000-0000-0000-0000-000000000123")!

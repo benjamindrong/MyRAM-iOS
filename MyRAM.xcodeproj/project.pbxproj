@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        F23311000000000000000001 /* MyRAMSyncRuntimeConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = F23312000000000000000001 /* MyRAMSyncRuntimeConfiguration.swift */; };
+        F23311000000000000000002 /* MyRAMSyncRuntimeConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = F23312000000000000000001 /* MyRAMSyncRuntimeConfiguration.swift */; };
+        F23301000000000000000001 /* MyRAMSyncDeviceIdentityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F23302000000000000000001 /* MyRAMSyncDeviceIdentityStore.swift */; };
+        F23301000000000000000002 /* MyRAMSyncDeviceIdentityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F23302000000000000000001 /* MyRAMSyncDeviceIdentityStore.swift */; };
 		AC50000000000000000000A3 /* AnchoredSequenceCore in Frameworks */ = {isa = PBXBuildFile; productRef = AC50000000000000000000A2 /* AnchoredSequenceCore */; };
 		AC50000000000000000000A4 /* AnchoredSequenceCore in Frameworks */ = {isa = PBXBuildFile; productRef = AC50000000000000000000A2 /* AnchoredSequenceCore */; };
 		BC24E3042FDF8F94004694D1 /* SyncConflictStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */; };
@@ -421,6 +425,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+        F23312000000000000000001 /* MyRAMSyncRuntimeConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncRuntimeConfiguration.swift; sourceTree = "<group>"; };
+        F23302000000000000000001 /* MyRAMSyncDeviceIdentityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncDeviceIdentityStore.swift; sourceTree = "<group>"; };
 		BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConflictStore.swift; sourceTree = "<group>"; };
 		BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncChangeApplier.swift; sourceTree = "<group>"; };
 		BC24E3082FDF8F94004694D1 /* SyncStatusIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncStatusIndicator.swift; sourceTree = "<group>"; };
@@ -1148,6 +1154,8 @@
 				BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */,
 				BC24E30C2FDF8F94004694D1 /* MyRAMSyncConflictService.swift */,
 				BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */,
+				F23302000000000000000001 /* MyRAMSyncDeviceIdentityStore.swift */,
+                F23312000000000000000001 /* MyRAMSyncRuntimeConfiguration.swift */,
 				C07100182FF0000000000001 /* MyRAMDeviceIdentity.swift */,
 				C071001E2FF1600000000001 /* MyRAMLegacySyncPayloadBuilder.swift */,
 				C07100192FF0000000000001 /* MyRAMSyncController.swift */,
@@ -1574,6 +1582,8 @@
 				BC9F1BB42EA47D2F0045FD72 /* Item.swift in Sources */,
 				BCA104010000000000000001 /* RTFCoding.swift in Sources */,
 				BCA164010000000000000001 /* AttributedTextStorageKeys.swift in Sources */,
+				F23301000000000000000001 /* MyRAMSyncDeviceIdentityStore.swift in Sources */,
+                F23311000000000000000001 /* MyRAMSyncRuntimeConfiguration.swift in Sources */,
 				BCA123010000000000000001 /* SyncBatchPayload.swift in Sources */,
 				C17101000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift in Sources */,
 				C17901000000000000000001 /* SyncBatchAnchoredLocalCapture.swift in Sources */,
@@ -1788,6 +1798,8 @@
 				BCA132010000000000000006 /* MyRAMSchema.swift in Sources */,
 				BCA109010000000000000004 /* PersistenceManager.swift in Sources */,
 				BCA10A010000000000000001 /* MacSidebarCollapsePolicy.swift in Sources */,
+				F23301000000000000000002 /* MyRAMSyncDeviceIdentityStore.swift in Sources */,
+                F23311000000000000000002 /* MyRAMSyncRuntimeConfiguration.swift in Sources */,
 				BCA123010000000000000006 /* SyncBatchPayload.swift in Sources */,
 				C17101000000000000000002 /* SyncBatchAnchoredPayloadAdapter.swift in Sources */,
 				C17901000000000000000002 /* SyncBatchAnchoredLocalCapture.swift in Sources */,

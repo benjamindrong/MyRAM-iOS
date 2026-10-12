@@ -2,7 +2,7 @@
 import Foundation
 
 struct MacSyncDeviceIdentity: Equatable {
-    static let deviceIDKey = "myram.sync.deviceID"
+    static let deviceIDKey = MyRAMSyncDeviceIdentityStore.deviceIDKey
     static let maximumPeerDisplayNameUTF8ByteCount = 63
 
     let id: MacSyncDeviceID
@@ -26,15 +26,18 @@ struct MacSyncDeviceIdentity: Equatable {
 
 struct MacSyncDeviceIdentityProvider {
     private let defaults: UserDefaults
+    private let bundle: Bundle
     private let hostNameProvider: () -> String?
     private let uuidProvider: () -> UUID
 
     init(
         defaults: UserDefaults = .standard,
+        bundle: Bundle = .main,
         hostNameProvider: @escaping () -> String? = { Host.current().localizedName },
         uuidProvider: @escaping () -> UUID = UUID.init
     ) {
         self.defaults = defaults
+        self.bundle = bundle
         self.hostNameProvider = hostNameProvider
         self.uuidProvider = uuidProvider
     }
@@ -52,14 +55,9 @@ struct MacSyncDeviceIdentityProvider {
     }
 
     private func storedDeviceID() -> UUID {
-        if let storedValue = defaults.string(forKey: MacSyncDeviceIdentity.deviceIDKey),
-           let storedID = UUID(uuidString: storedValue) {
-            return storedID
-        }
-
-        let newID = uuidProvider()
-        defaults.set(newID.uuidString, forKey: MacSyncDeviceIdentity.deviceIDKey)
-        return newID
+        UUID(uuidString: MyRAMSyncDeviceIdentityStore.currentID(
+            defaults: defaults, bundle: bundle, uuidProvider: uuidProvider
+        ))!
     }
 }
 
