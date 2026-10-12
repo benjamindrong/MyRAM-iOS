@@ -340,7 +340,7 @@ struct MyRAMMacRootView: View {
     }
 
     private func configureSyncConvergenceIfNeeded() {
-        guard syncConvergenceCoordinator == nil else { return }
+        guard syncController.applicationSyncEnabled, syncConvergenceCoordinator == nil else { return }
 
         let presentationSurface = MacSyncConvergencePresentationSurface(
             selectedNoteID: { selectedNoteID },
@@ -421,6 +421,8 @@ struct MyRAMMacRootView: View {
             (conflict.entityType == .note && selectedNoteID == conflict.entityID) {
             reloadSelectedEditor(reason: .unsafeIncrementalApply)
         }
+        await syncController.resumeBootstrapAfterConflictResolution()
+        resumeSyncConvergence()
     }
 
     private func resumeSyncConvergence() {

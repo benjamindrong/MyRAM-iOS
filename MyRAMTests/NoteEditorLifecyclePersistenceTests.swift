@@ -6,6 +6,42 @@ import UIKit
 
 @MainActor
 final class NoteEditorLifecyclePersistenceTests: XCTestCase {
+    func testMYR233ExpiredDeletionRetainsPinnedTextAcrossStartupAndBootstrap() throws {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let container = try ModelContainer(for: schema, configurations:
+            ModelConfiguration(schema: schema, isStoredInMemoryOnly: true))
+        let context = container.mainContext
+        let note = Note(title: "Expired deletion", content: "Retained body")
+        note.id = try XCTUnwrap(UUID(uuidString: "1B323F1E-F216-4AA3-B92D-B5E97050DDAD"))
+        note.deletedAt = Date(timeIntervalSinceReferenceDate: 811687093.866592)
+        let pin = PinnedThought(text: "Retained pinned text", order: 0, note: note)
+        pin.id = try XCTUnwrap(UUID(uuidString: "2846A922-529C-4901-8B3E-F5FAEA0A32CD"))
+        context.insert(note)
+        context.insert(pin)
+        try context.save()
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
+        let peerSnapshot = try SyncPeerBootstrapSnapshotPersistence.build(from: context)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let vm = NotesViewModel(context: context,
+            syncConflictStore: SyncConflictStore(fileURL: root.appendingPathComponent("conflicts.json")),
+            pendingIncomingBatchQueueFileURL: nil,
+            anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore(fileURL: root.appendingPathComponent("recovery.json")),
+            pendingLocalConvergenceBatchQueueFileURL: nil, resumesPendingConvergenceOnInit: false)
+
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Note>()).map(\.id), [note.id])
+        XCTAssertEqual(try context.fetch(FetchDescriptor<PinnedThought>()).map(\.id), [pin.id])
+        let applied = try SyncPeerBootstrapSnapshotPersistence.apply(peerSnapshot, to: context)
+        XCTAssertFalse(applied.presentationRefreshRequired)
+        let retained = try XCTUnwrap(context.fetch(FetchDescriptor<Note>()).first)
+        XCTAssertEqual(retained.deletedAt, note.deletedAt)
+        XCTAssertEqual(retained.pinnedThoughts.map(\.id), [pin.id])
+        XCTAssertEqual(retained.pinnedThoughts.map(\.text), ["Retained pinned text"])
+        XCTAssertFalse(vm.notes.contains { $0.id == note.id })
+        XCTAssertTrue(vm.fetchRecentlyDeletedNotes(now: Date(timeIntervalSinceReferenceDate: 813283200)).isEmpty)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<PinnedThought>()).count, 1)
+    }
+
     func testActivationOnLifecycleBoundaryCommitsThroughAsynchronousDurability() async throws {
         XCTAssertTrue(SyncBatchAnchoredPayloadCapability.isEnabled)
         let schema = Schema(MyRAMModelRegistry.models)

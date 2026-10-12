@@ -3086,7 +3086,12 @@ struct SyncConvergenceIncorporationExecutor {
                 current: current,
                 creationEffect: notePlan.creationEffect
             )
-            try verifyTitlePrecondition(notePlan.titleEffect, current: current, transaction: transaction)
+            try verifyTitlePrecondition(
+                notePlan.titleEffect,
+                current: current,
+                creationEffect: notePlan.creationEffect,
+                transaction: transaction
+            )
         }
     }
 
@@ -3383,6 +3388,7 @@ struct SyncConvergenceIncorporationExecutor {
     private func verifyTitlePrecondition(
         _ effect: SyncConvergenceTitleEffect?,
         current: SyncConvergenceMutableNoteRecord?,
+        creationEffect: SyncConvergenceCreationEffect?,
         transaction: SyncConvergencePersistenceTransaction
     ) throws {
         guard let effect else { return }
@@ -3397,7 +3403,17 @@ struct SyncConvergenceIncorporationExecutor {
             return
         }
         guard let current else {
-            throw ExecutorFailure(.staleAuthoritativeState(noteID: effect.resultEvidence.noteID))
+            // Before this atomic save, a same-batch creation has no persisted
+            // note or title winner. Validate against its exact projected title;
+            // an idempotent creation must still have an authoritative note.
+            guard let creationEffect, creationEffect.verdict == .create,
+                  effect.verdict == .apply,
+                  effect.priorTitle == creationEffect.title,
+                  effect.priorWinningKey == nil,
+                  winner == nil else {
+                throw ExecutorFailure(.staleAuthoritativeState(noteID: effect.resultEvidence.noteID))
+            }
+            return
         }
         switch effect.verdict {
         case .apply:

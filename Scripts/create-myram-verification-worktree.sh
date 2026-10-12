@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: bash Scripts/create-myram-verification-worktree.sh [--path PATH]
+Usage: bash Scripts/create-myram-verification-worktree.sh [--path PATH] [--fixture-manifest PATH] [--transport-only]
 
 Creates a detached sibling worktree at the current candidate HEAD and converts
 only that disposable checkout into the isolated "MyRAM Verification" variant.
@@ -15,12 +15,23 @@ EOF
 }
 
 requested_path=""
+fixture_manifest=""
+transport_only=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --path)
       [[ $# -ge 2 ]] || { echo "Missing value for --path" >&2; exit 2; }
       requested_path="$2"
       shift 2
+      ;;
+    --fixture-manifest)
+      [[ $# -ge 2 ]] || { echo "Missing value for --fixture-manifest" >&2; exit 2; }
+      fixture_manifest="$2"
+      shift 2
+      ;;
+    --transport-only)
+      transport_only=true
+      shift
       ;;
     -h|--help)
       usage
@@ -62,9 +73,14 @@ cleanup_on_error() {
 trap cleanup_on_error EXIT
 
 git -C "$repo_root" worktree add --detach "$worktree_path" "$candidate_sha"
-python3 "$worktree_path/Scripts/configure-myram-verification.py" \
-  --root "$worktree_path" \
-  --manifest-output "$worktree_path/MYR-221-VERIFICATION-IDENTITY.json"
+configure_args=(--root "$worktree_path" --manifest-output "$worktree_path/MYR-221-VERIFICATION-IDENTITY.json")
+if [[ -n "$fixture_manifest" ]]; then
+  configure_args+=(--fixture-manifest "$fixture_manifest")
+fi
+if [[ "$transport_only" == true ]]; then
+  configure_args+=(--transport-only)
+fi
+python3 "$worktree_path/Scripts/configure-myram-verification.py" "${configure_args[@]}"
 
 trap - EXIT
 

@@ -176,6 +176,7 @@ final class MyRAMSyncChangeApplier {
         guard let payload = try? MyRAMSyncPayloadCoding.decodePinnedThought(from: change.payload) else {
             return .rejectedInvalidState
         }
+        if pinnedTextDeletionSupersedes(payload) { return .alreadySatisfiedOrSuperseded }
         guard let existingThought = fetchPinnedThought(withID: payload.id) else {
             return change.operation == .delete && payload.isDeleted ? .alreadySatisfiedOrSuperseded : .applied
         }
@@ -401,9 +402,13 @@ final class MyRAMSyncChangeApplier {
     private func applyIncomingPinnedThoughtChange(_ change: SyncChange, activeNoteID: UUID?) -> Bool {
         guard let payload = try? MyRAMSyncPayloadCoding.decodePinnedThought(from: change.payload) else { return false }
 
+        guard !pinnedTextDeletionSupersedes(payload) else { return false }
         if change.operation == .delete && payload.isDeleted {
-            guard let thought = fetchPinnedThought(withID: payload.id),
-                  thought.modifiedAt <= payload.modifiedAt else { return false }
+            guard let thought = fetchPinnedThought(withID: payload.id) else {
+                savePinnedTextBaseline(thoughtID: payload.id, payload: payload, originDeviceID: change.originDeviceID)
+                return false
+            }
+            guard thought.modifiedAt <= payload.modifiedAt else { return false }
             if shouldFreezeIncomingPinnedThoughtPayload(thought: thought, payload: payload, originDeviceID: change.originDeviceID) {
                 preserveIncomingPinnedTextConflictIfNeeded(
                     thought: thought,
@@ -419,6 +424,7 @@ final class MyRAMSyncChangeApplier {
             ) {
                 return activeNoteID == thought.note?.id
             }
+            savePinnedTextBaseline(thoughtID: thought.id, payload: payload, originDeviceID: change.originDeviceID)
             let note = thought.note
             note?.pinnedThoughts.removeAll { $0.id == thought.id }
             context.delete(thought)
@@ -1012,17 +1018,25 @@ final class MyRAMSyncChangeApplier {
         )
     }
 
+    private func pinnedTextDeletionSupersedes(_ payload: MyRAMPinnedThoughtSyncPayload) -> Bool {
+        guard let baseline = conflictStore.remoteBaseline(
+            entityType: .pinnedThought, entityID: payload.id, field: .pinnedText
+        ), baseline.isDeleted == true else { return false }
+        return baseline.modifiedAt > payload.modifiedAt
+            || (baseline.modifiedAt == payload.modifiedAt && !payload.isDeleted)
+    }
+
     private func savePinnedTextBaseline(
         thoughtID: UUID,
         payload: MyRAMPinnedThoughtSyncPayload,
         originDeviceID: String
     ) {
-        conflictStore.savePinnedTextBaseline(
-            thoughtID: thoughtID,
-            text: payload.text,
-            modifiedAt: payload.modifiedAt,
-            originDeviceID: originDeviceID
-        )
+        conflictStore.saveRemoteBaseline(SyncRemoteTextBaseline(
+            entityType: .pinnedThought, entityID: thoughtID, field: .pinnedText,
+            text: payload.text, richTextContentData: nil,
+            modifiedAt: payload.modifiedAt, originDeviceID: originDeviceID,
+            isDeleted: payload.isDeleted ? true : nil
+        ))
     }
 
     private func applyIncomingConflictChange(_ change: SyncChange) throws -> Bool {
