@@ -714,6 +714,9 @@ final class NotesListStateBootstrapTests: XCTestCase {
 
     func testBootstrapFailsClosedWhenLaunchRecoveryFails() async throws {
         let container = try makeContainer()
+        let saved = Note(title: "Preserved title", content: "Preserved body")
+        container.mainContext.insert(saved)
+        try container.mainContext.save()
         var events: [String] = []
         let state = NotesListState(
             context: container.mainContext,
@@ -749,9 +752,87 @@ final class NotesListStateBootstrapTests: XCTestCase {
         XCTAssertEqual(
             state.bootstrapState,
             .failed(
-                "Startup recovery or note-state preparation failed. Restart MyRAM before syncing or editing."
+                "Pending sync recovery failed. Saved notes can be read below. Editing and syncing are paused to protect pending work."
             )
         )
+        XCTAssertEqual(state.readableNotesDuringStartupFailure.map(\.id), [saved.id])
+        XCTAssertEqual(state.readableNotesDuringStartupFailure.first?.content, "Preserved body")
+        XCTAssertFalse(state.didFailToReadNotesDuringStartupFailure)
+        XCTAssertFalse(state.isBootstrapping)
+    }
+
+    func testMigrationFailurePreservesReadOnlyAccessWithoutStartingSync() async throws {
+        let container = try makeContainer()
+        let saved = Note(title: "Original", content: "Unchanged content")
+        container.mainContext.insert(saved)
+        try container.mainContext.save()
+        var events: [String] = []
+        let state = NotesListState(
+            context: container.mainContext,
+            startsBootstrapAutomatically: false,
+            bootstrapActionsFactory: { _, _ in
+                NotesListState.BootstrapActions(
+                    rollbackIfNeededOnLaunch: { events.append("rollback") },
+                    migrateNoteSequenceStates: {
+                        events.append("migration")
+                        throw NoteSequenceStateStoreError.persistenceFailure
+                    },
+                    completeModelInitializationAfterMigration: { events.append("initialize") },
+                    refreshPendingSyncStatus: { events.append("status") },
+                    resumeOutboundAfterRecovery: { events.append("outbound") },
+                    startNetworkingIfNeeded: { events.append("networking") },
+                    resumePendingConvergencePresentationIfNeeded: { events.append("convergence") }
+                )
+            }
+        )
+
+        await state.bootstrapAfterRecovery()
+
+        XCTAssertEqual(events, ["rollback", "migration"])
+        XCTAssertEqual(state.readableNotesDuringStartupFailure.map(\.id), [saved.id])
+        XCTAssertEqual(state.readableNotesDuringStartupFailure.first?.content, "Unchanged content")
+        XCTAssertFalse(state.didFailToReadNotesDuringStartupFailure)
+        guard case .failed = state.bootstrapState else {
+            return XCTFail("Unfinished migration must not enable editing or syncing")
+        }
+    }
+
+    func testSuccessfulRetryRestoresNormalBootstrapWithoutDroppingNotes() async throws {
+        let container = try makeContainer()
+        let saved = Note(title: "Original", content: "Durable text")
+        container.mainContext.insert(saved)
+        try container.mainContext.save()
+        var rollbackFails = true
+        var starts = 0
+        let state = NotesListState(
+            context: container.mainContext,
+            startsBootstrapAutomatically: false,
+            bootstrapActionsFactory: { _, _ in
+                NotesListState.BootstrapActions(
+                    rollbackIfNeededOnLaunch: {
+                        if rollbackFails {
+                            throw PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed
+                        }
+                    },
+                    migrateNoteSequenceStates: {},
+                    refreshPendingSyncStatus: {},
+                    resumeOutboundAfterRecovery: {},
+                    startNetworkingIfNeeded: { starts += 1 },
+                    resumePendingConvergencePresentationIfNeeded: {}
+                )
+            }
+        )
+
+        await state.bootstrapAfterRecovery()
+        XCTAssertEqual(starts, 0)
+        XCTAssertEqual(state.readableNotesDuringStartupFailure.map(\.id), [saved.id])
+
+        rollbackFails = false
+        await state.bootstrapAfterRecovery()
+        XCTAssertEqual(state.bootstrapState, .ready)
+        XCTAssertEqual(starts, 1)
+        XCTAssertTrue(state.readableNotesDuringStartupFailure.isEmpty)
+        XCTAssertEqual(try container.mainContext.fetch(FetchDescriptor<Note>()).first?.content, "Durable text")
     }
 
     private func makeContainer() throws -> ModelContainer {
