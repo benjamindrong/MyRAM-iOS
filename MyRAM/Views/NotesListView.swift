@@ -105,32 +105,20 @@ final class NotesListState: ObservableObject {
     }
 
     func bootstrapAfterRecovery() async {
-        var failures: [String] = []
-
+        var currentStage = "Pending-sync recovery"
         do {
             try await bootstrapActions.rollbackIfNeededOnLaunch()
-        } catch {
-            failures.append("Pending-sync recovery failed: \(String(reflecting: error))")
-        }
-
-        // Local note preparation is independent of pending-sync queue rollback.
-        // A queue failure must not prevent unaffected notes from being loaded.
-        do {
+            currentStage = "Note-state preparation"
             try await bootstrapActions.migrateNoteSequenceStates()
         } catch {
-            failures.append("Note-state preparation failed: \(String(reflecting: error))")
-        }
-
-        // Reading notes must not depend on every persisted note passing migration.
-        // Per-note edit persistence still validates the authoritative sequence state.
-        bootstrapActions.completeModelInitializationAfterMigration()
-
-        guard failures.isEmpty else {
-            // Never activate networking or resume outbound work after an incomplete startup.
-            bootstrapState = .failed(failures.joined(separator: "\n"))
+            // A failed rollback must not start migrations or networking.
+            // Reading existing notes is independent of completing startup recovery.
+            bootstrapActions.completeModelInitializationAfterMigration()
+            bootstrapState = .failed("\(currentStage) failed: \(String(reflecting: error))")
             return
         }
 
+        bootstrapActions.completeModelInitializationAfterMigration()
         await bootstrapActions.refreshPendingSyncStatus()
         bootstrapActions.resumeOutboundAfterRecovery()
         bootstrapActions.startNetworkingIfNeeded()
