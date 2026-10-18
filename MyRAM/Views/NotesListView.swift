@@ -105,20 +105,37 @@ final class NotesListState: ObservableObject {
     }
 
     func bootstrapAfterRecovery() async {
+        var failures: [String] = []
+
         do {
             try await bootstrapActions.rollbackIfNeededOnLaunch()
-            try await bootstrapActions.migrateNoteSequenceStates()
-            bootstrapActions.completeModelInitializationAfterMigration()
-            await bootstrapActions.refreshPendingSyncStatus()
-            bootstrapActions.resumeOutboundAfterRecovery()
-            bootstrapActions.startNetworkingIfNeeded()
-            bootstrapActions.resumePendingConvergencePresentationIfNeeded()
-            bootstrapState = .ready
         } catch {
-            bootstrapState = .failed(
-                "Startup recovery or note-state preparation failed. Restart MyRAM before syncing or editing."
-            )
+            failures.append("Pending-sync recovery failed: \(String(reflecting: error))")
         }
+
+        // Local note preparation is independent of pending-sync queue rollback.
+        // A queue failure must not prevent unaffected notes from being loaded.
+        do {
+            try await bootstrapActions.migrateNoteSequenceStates()
+        } catch {
+            failures.append("Note-state preparation failed: \(String(reflecting: error))")
+        }
+
+        // Reading notes must not depend on every persisted note passing migration.
+        // Per-note edit persistence still validates the authoritative sequence state.
+        bootstrapActions.completeModelInitializationAfterMigration()
+
+        guard failures.isEmpty else {
+            // Never activate networking or resume outbound work after an incomplete startup.
+            bootstrapState = .failed(failures.joined(separator: "\n"))
+            return
+        }
+
+        await bootstrapActions.refreshPendingSyncStatus()
+        bootstrapActions.resumeOutboundAfterRecovery()
+        bootstrapActions.startNetworkingIfNeeded()
+        bootstrapActions.resumePendingConvergencePresentationIfNeeded()
+        bootstrapState = .ready
     }
 }
 
@@ -209,25 +226,7 @@ struct NotesListView: View {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(editorChromeStyle.appBackgroundColor.ignoresSafeArea())
-            case .failed(let message):
-                VStack(spacing: 12) {
-                    Text(message)
-                        .font(.body)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.red)
-                    Button("Copy Support Details") {
-                        UIPasteboard.general.string = message
-                    }
-                        .buttonStyle(.borderedProminent)
-                    Text("Close and reopen MyRAM before syncing or editing.")
-                        .font(.footnote)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.secondary)
-                }
-                .padding()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(editorChromeStyle.appBackgroundColor.ignoresSafeArea())
-            case .ready:
+            case .ready, .failed:
                 readyContent
             }
         }
@@ -303,6 +302,29 @@ struct NotesListView: View {
 
     private var readyContent: some View {
         VStack(spacing: 6) {
+            if case .failed(let details) = state.bootstrapState {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Label("Startup error — Nearby Sync paused", systemImage: "exclamationmark.triangle.fill")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer(minLength: 4)
+                        Button("Copy Details") {
+                            UIPasteboard.general.string = details
+                        }
+                        .font(.caption)
+                        .buttonStyle(.borderless)
+                    }
+                    Text(details)
+                        .font(.footnote)
+                        .lineLimit(3)
+                        .textSelection(.enabled)
+                }
+                .accessibilityIdentifier("startup-recovery-error")
+                .padding(10)
+                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                .padding(.horizontal)
+            }
+
             notesListTopBar
                 .padding(.horizontal)
                 .padding(.top, 6)
