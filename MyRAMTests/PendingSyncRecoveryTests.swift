@@ -712,46 +712,124 @@ final class NotesListStateBootstrapTests: XCTestCase {
         XCTAssertEqual(state.bootstrapState, .ready)
     }
 
-    func testBootstrapFailsClosedWhenLaunchRecoveryFails() async throws {
+    func testRecoveryFailureKeepsNotesAccessibleWithoutResumingSync() async throws {
         let container = try makeContainer()
+        let note = Note(title: "Accessible after recovery error", content: "Local note body")
+        container.mainContext.insert(note)
+        try container.mainContext.save()
+
         var events: [String] = []
         let state = NotesListState(
             context: container.mainContext,
             startsBootstrapAutomatically: false,
-            bootstrapActionsFactory: { _, _ in
+            bootstrapActionsFactory: { vm, _ in
                 NotesListState.BootstrapActions(
                     rollbackIfNeededOnLaunch: {
                         events.append("rollback")
                         throw PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed
                     },
                     migrateNoteSequenceStates: {
-                        events.append("migrate-note-sequence-states")
+                        events.append("migration")
                     },
-                    refreshPendingSyncStatus: {
-                        events.append("refresh-status")
+                    completeModelInitializationAfterMigration: {
+                        events.append("initialize")
+                        vm.completeStartupInitializationAfterMigration()
                     },
-                    resumeOutboundAfterRecovery: {
-                        events.append("resume-outbound")
-                    },
-                    startNetworkingIfNeeded: {
-                        events.append("start-networking")
-                    },
-                    resumePendingConvergencePresentationIfNeeded: {
-                        events.append("resume-convergence-presentation")
-                    }
+                    refreshPendingSyncStatus: { events.append("refresh") },
+                    resumeOutboundAfterRecovery: { events.append("resume-outbound") },
+                    startNetworkingIfNeeded: { events.append("start-networking") },
+                    resumePendingConvergencePresentationIfNeeded: { events.append("convergence") }
                 )
             }
         )
 
         await state.bootstrapAfterRecovery()
 
-        XCTAssertEqual(events, ["rollback"])
+        XCTAssertEqual(events, ["rollback", "migration", "initialize"])
+        XCTAssertTrue(state.vm.notes.contains(where: { $0.id == note.id }))
         XCTAssertEqual(
             state.bootstrapState,
-            .failed(
-                "Startup recovery or note-state preparation failed. Restart MyRAM before syncing or editing."
-            )
+            .failed("Pending-sync recovery failed: \(String(reflecting: PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed))")
         )
+    }
+
+    func testMigrationFailureKeepsNotesAccessibleAndShowsCause() async throws {
+        let container = try makeContainer()
+        let note = Note(title: "Existing note", content: "Preserved body")
+        container.mainContext.insert(note)
+        try container.mainContext.save()
+
+        var events: [String] = []
+        let state = NotesListState(
+            context: container.mainContext,
+            startsBootstrapAutomatically: false,
+            bootstrapActionsFactory: { vm, _ in
+                NotesListState.BootstrapActions(
+                    rollbackIfNeededOnLaunch: { events.append("rollback") },
+                    migrateNoteSequenceStates: {
+                        events.append("migration")
+                        throw NoteSequenceStateStoreError.corruptState
+                    },
+                    completeModelInitializationAfterMigration: {
+                        events.append("initialize")
+                        vm.completeStartupInitializationAfterMigration()
+                    },
+                    refreshPendingSyncStatus: { events.append("refresh") },
+                    resumeOutboundAfterRecovery: { events.append("resume-outbound") },
+                    startNetworkingIfNeeded: { events.append("start-networking") },
+                    resumePendingConvergencePresentationIfNeeded: { events.append("convergence") }
+                )
+            }
+        )
+
+        await state.bootstrapAfterRecovery()
+
+        XCTAssertEqual(events, ["rollback", "migration", "initialize"])
+        XCTAssertTrue(state.vm.notes.contains(where: { $0.id == note.id }))
+        XCTAssertEqual(
+            state.bootstrapState,
+            .failed("Note-state preparation failed: \(String(reflecting: NoteSequenceStateStoreError.corruptState))")
+        )
+    }
+
+    func testBothStartupFailuresRemainVisibleWithoutActivatingNetworking() async throws {
+        let container = try makeContainer()
+        var events: [String] = []
+        let state = NotesListState(
+            context: container.mainContext,
+            startsBootstrapAutomatically: false,
+            bootstrapActionsFactory: { vm, _ in
+                NotesListState.BootstrapActions(
+                    rollbackIfNeededOnLaunch: {
+                        events.append("rollback")
+                        throw PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed
+                    },
+                    migrateNoteSequenceStates: {
+                        events.append("migration")
+                        throw NoteSequenceStateStoreError.corruptState
+                    },
+                    completeModelInitializationAfterMigration: {
+                        events.append("initialize")
+                        vm.completeStartupInitializationAfterMigration()
+                    },
+                    refreshPendingSyncStatus: { events.append("refresh") },
+                    resumeOutboundAfterRecovery: { events.append("resume-outbound") },
+                    startNetworkingIfNeeded: { events.append("start-networking") },
+                    resumePendingConvergencePresentationIfNeeded: { events.append("convergence") }
+                )
+            }
+        )
+
+        await state.bootstrapAfterRecovery()
+
+        XCTAssertEqual(events, ["rollback", "migration", "initialize"])
+        guard case .failed(let details) = state.bootstrapState else {
+            return XCTFail("Both startup failures must remain visible")
+        }
+        XCTAssertTrue(details.contains("Pending-sync recovery failed:"))
+        XCTAssertTrue(details.contains("Note-state preparation failed:"))
+        XCTAssertTrue(details.contains("rollbackFailed"))
+        XCTAssertTrue(details.contains("corruptState"))
     }
 
     private func makeContainer() throws -> ModelContainer {
