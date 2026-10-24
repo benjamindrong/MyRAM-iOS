@@ -9,6 +9,56 @@ import AnchoredSequenceCore
 #endif
 
 final class SyncConvergenceIncorporationTests: XCTestCase {
+    func testMYR235MacOriginCreatedTitleAndBodyConvergeOnIPhone() throws {
+        // The iOS receive path uses this shared convergence planner and incorporation executor.
+        // Exercise both timestamp orders without changing title/body or note lifecycle semantics.
+        for (index, bodyModifiedAt, titleModifiedAt) in [
+            (1, date(4), date(3)),
+            (2, date(3), date(4))
+        ] {
+            let noteID = uuid(String(format: "00000000-0000-0000-0000-%012d", 235_100 + index))
+            let batchID = uuid(String(format: "00000000-0000-0000-0000-%012d", 235_200 + index))
+            let batch = SyncBatch(
+                id: batchID,
+                originDeviceID: uuid("00000000-0000-0000-0000-000000235999"),
+                createdAt: date(5),
+                changes: [
+                    .noteCreated(.init(
+                        noteID: noteID, title: "Initial", body: "Base", folderID: nil,
+                        createdAt: date(1), modifiedAt: date(2)
+                    )),
+                    .noteTitleChanged(.init(
+                        noteID: noteID, title: "Renamed", modifiedAt: titleModifiedAt
+                    )),
+                    .noteBodyTextInserted(.init(
+                        noteID: noteID, utf16Offset: 4, text: " updated",
+                        modifiedAt: bodyModifiedAt,
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "Base")
+                    ))
+                ]
+            )
+            let outcome = SyncConvergencePlanner().plan(input: .init(incomingBatch: batch))
+            guard case .planned(let validatedInput) = outcome else {
+                return XCTFail("Expected Mac-origin creation/title/body plan, got \(outcome)")
+            }
+            let transaction = InMemoryConvergenceTransaction(notes: [:])
+            let incorporation = SyncConvergenceIncorporationExecutor().incorporate(
+                input: validatedInput, transaction: transaction, committedAt: date(6)
+            )
+            guard case .incorporated = incorporation else {
+                return XCTFail("Expected Mac-origin incorporation, got \(incorporation)")
+            }
+            let received = try XCTUnwrap(transaction.notes[noteID])
+            XCTAssertEqual(received.noteID, noteID)
+            XCTAssertEqual(received.title, "Renamed")
+            XCTAssertEqual(received.body, "Base updated")
+            XCTAssertEqual(received.createdAt, date(1))
+            XCTAssertEqual(received.modifiedAt, max(bodyModifiedAt, titleModifiedAt))
+            XCTAssertNil(received.deletedAt)
+            XCTAssertNil(received.folderID)
+        }
+    }
+
     func testSameBatchCreationTitleUsesProjectedPreState() throws {
         let (noteID, input) = try creationTitleInput(existing: false)
         let transaction = InMemoryConvergenceTransaction(notes: [:])

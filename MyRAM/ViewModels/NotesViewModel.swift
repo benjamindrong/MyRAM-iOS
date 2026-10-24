@@ -677,6 +677,7 @@ final class NotesViewModel: ObservableObject {
         guard note.deletedAt == nil else { return }
         let oldTitle = note.title
         let trimmedTitle = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedTitle != oldTitle else { return }
         note.title = trimmedTitle
         note.modifiedAt = .now
         note.folder?.modifiedAt = .now
@@ -920,6 +921,10 @@ final class NotesViewModel: ObservableObject {
         let oldContent = note.content
         let oldRichTextContentData = note.richTextContentData
         let oldModifiedAt = note.modifiedAt
+        let hasTitleOrBodyMutation = oldTitle != title
+            || !NoteSequenceStateExactText.matches(oldContent, content)
+        let hasPresentationCacheMutation = oldRichTextContentData != richTextContentData
+        guard hasTitleOrBodyMutation || hasPresentationCacheMutation else { return true }
         let modifiedAt = Date.now
         let preparedEdit: PreparedLocalNoteEdit
         do {
@@ -938,7 +943,7 @@ final class NotesViewModel: ObservableObject {
         note.title = title
         note.content = content
         note.richTextContentData = richTextContentData
-        note.modifiedAt = modifiedAt
+        note.modifiedAt = hasTitleOrBodyMutation ? modifiedAt : oldModifiedAt
         do {
             try saveContext()
         } catch {
@@ -1057,8 +1062,21 @@ final class NotesViewModel: ObservableObject {
                 structuralFormattingProjection: structuralFormattingProjection,
                 operationIDReserver: operationIDReserver
             )
+            let hasTitleOrBodyMutation = !prepared.capturedChanges.isEmpty
+            let hasStructuralFormattingMutation =
+                prepared.structuralSnapshot?.markState != prepared.finalStructuralMarkState
+            let hasPresentationCacheMutation = structuralFormattingProjection != nil
+                && oldRichTextContentData != richTextContentData
+            guard hasTitleOrBodyMutation || hasStructuralFormattingMutation
+                || hasPresentationCacheMutation else {
+                // The editor can flush an identical snapshot after a prior successful
+                // save. With no authoritative mutation there is no sync operation
+                // to carry a new modifiedAt, so keep the committed timestamp.
+                return true
+            }
             note.title = title
-            note.modifiedAt = modifiedAt
+            note.modifiedAt = (hasTitleOrBodyMutation || hasStructuralFormattingMutation)
+                ? modifiedAt : oldModifiedAt
             if let snapshot = prepared.structuralSnapshot,
                let finalState = prepared.finalStructuralState,
                let finalMarkState = prepared.finalStructuralMarkState {
