@@ -60,14 +60,14 @@ final class MyRAMUITests: XCTestCase {
         }
         let app = XCUIApplication(bundleIdentifier: "com.northsignalstudio.myram.verification")
         app.launch()
-        XCTAssertTrue(app.buttons["startup-retry-sync"].waitForExistence(timeout: Timeout.standard))
+        XCTAssertTrue(app.buttons["Retry Sync"].waitForExistence(timeout: Timeout.standard))
         openNewNote(in: app)
         app.buttons["edit-note-title"].tap()
         let titleAlert = app.alerts["Edit Title"]
         XCTAssertTrue(titleAlert.waitForExistence(timeout: Timeout.standard))
         replaceText(in: titleAlert.textFields.firstMatch, with: "MYR238 Synthetic Offline", fallbackExistingText: "Untitled")
         titleAlert.buttons["Save"].tap()
-        let editor = app.textViews["note-editor-body"]
+        let editor = findElement("note-editor-body", in: app)
         XCTAssertTrue(editor.waitForExistence(timeout: Timeout.standard))
         editor.tap()
         editor.typeText("MYR238 synthetic durable offline text")
@@ -76,9 +76,9 @@ final class MyRAMUITests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: Timeout.standard))
         app.terminate()
         app.launch()
-        XCTAssertTrue(app.buttons["startup-retry-sync"].waitForExistence(timeout: Timeout.standard))
+        XCTAssertTrue(app.buttons["Retry Sync"].waitForExistence(timeout: Timeout.standard))
         // Repeated recovery failure must leave the locally saved note available.
-        app.buttons["startup-retry-sync"].tap()
+        app.buttons["Retry Sync"].tap()
         let row = app.staticTexts["MYR238 Synthetic Offline"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: Timeout.standard))
         row.tap()
@@ -95,9 +95,9 @@ final class MyRAMUITests: XCTestCase {
         let row = app.staticTexts["MYR238 Synthetic Offline"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: Timeout.standard))
         row.tap()
-        let editor = app.textViews["note-editor-body"]
+        let editor = findElement("note-editor-body", in: app)
         XCTAssertTrue(editor.waitForExistence(timeout: Timeout.standard))
-        XCTAssertFalse(app.buttons["startup-retry-sync"].exists)
+        XCTAssertFalse(app.buttons["Retry Sync"].exists)
         XCTAssertEqual(editor.value as? String, "MYR238 synthetic durable offline text")
     }
 
