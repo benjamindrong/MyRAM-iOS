@@ -121,6 +121,16 @@ final class NoteEditorLifecyclePersistenceCore {
         }
     }
 
+    func awaitAllDurableCompletion() async -> Bool {
+        let noteIDs = Array(pendingByNoteID.keys)
+        retryAll()
+        var durable = true
+        for noteID in noteIDs {
+            if await !awaitDurableCompletion(noteID: noteID) { durable = false }
+        }
+        return durable && pendingByNoteID.isEmpty
+    }
+
     func awaitDurableCompletion(noteID: UUID) async -> Bool {
         if !drainingNoteIDs.contains(noteID) {
             return pendingByNoteID[noteID] == nil
@@ -263,6 +273,7 @@ final class NotesViewModel: ObservableObject {
     ) {
         let resolvedSaveContext = saveContext ?? { try context.save() }
         self.context = context
+        isStartupSyncRecoveryPending = defersModelInitializationUntilMigration
         self.syncController = syncController
         self.syncConflictStore = syncConflictStore
         self.saveContext = resolvedSaveContext
@@ -387,6 +398,12 @@ final class NotesViewModel: ObservableObject {
                 resumePendingConvergencePresentationIfNeeded()
             }
         }
+    }
+
+    private var isStartupSyncRecoveryPending = false
+
+    func completeStartupSyncRecovery() {
+        isStartupSyncRecoveryPending = false
     }
 
     func completeStartupInitializationAfterMigration() {
@@ -2755,11 +2772,15 @@ final class NotesViewModel: ObservableObject {
         let coordinator = PendingSyncRecoveryCoordinator(
             queueAdmin: syncController,
             localQueueSnapshot: { [weak self] in
-                self?.localConvergenceQueueSnapshot()
-                    ?? FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .fileMissing)
+                self.map { FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: $0.pendingLocalConvergenceBatches.pendingObligations,
+                    health: $0.pendingLocalConvergenceBatches.snapshot().health
+                ) } ?? FileBackedSyncConvergenceLocalObligationQueueSnapshot(obligations: [], health: .fileMissing)
             },
-            replaceLocalBatches: { [weak self] batches in
-                try await self?.replaceLocalConvergenceBatches(batches)
+            replaceLocalObligations: { [weak self] obligations in
+                guard let self else { throw PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed }
+                try self.pendingLocalConvergenceBatches.replacePendingObligations(obligations)
+                await self.refreshPendingSyncStatusForLocalConvergenceMutation?()
             },
             flushReadyLocalBatch: { [weak self] in
                 await self?.capturePendingLocalBatchForRecovery()
@@ -2790,17 +2811,31 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    func rollbackIfNeededOnLaunch(syncController: MyRAMSyncController) async throws {
+    func rollbackIfNeededOnLaunch(
+        syncController: MyRAMSyncController,
+        journalStore: PendingSyncRecoveryJournalStore = PendingSyncRecoveryJournalStore()
+    ) async throws {
+        // Finish captures before queue rollback; the mounted editor is disabled
+        // for this transaction, and incoming presentation remains suspended.
+        guard await editorLifecyclePersistence.awaitAllDurableCompletion() else {
+            throw PendingSyncRecoveryCoordinator.RecoveryError.pendingLocalEditsNotDurable
+        }
+        await prepareLocalOwnershipForBootstrap()
         let coordinator = PendingSyncRecoveryCoordinator(
             queueAdmin: syncController,
             localQueueSnapshot: { [weak self] in
-                self?.localConvergenceQueueSnapshot()
-                    ?? FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .fileMissing)
+                self.map { FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: $0.pendingLocalConvergenceBatches.pendingObligations,
+                    health: $0.pendingLocalConvergenceBatches.snapshot().health
+                ) } ?? FileBackedSyncConvergenceLocalObligationQueueSnapshot(obligations: [], health: .fileMissing)
             },
-            replaceLocalBatches: { [weak self] batches in
-                try await self?.replaceLocalConvergenceBatches(batches)
+            replaceLocalObligations: { [weak self] obligations in
+                guard let self else { throw PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed }
+                try self.pendingLocalConvergenceBatches.replacePendingObligations(obligations)
+                await self.refreshPendingSyncStatusForLocalConvergenceMutation?()
             },
-            flushReadyLocalBatch: { nil }
+            flushReadyLocalBatch: { nil },
+            journalStore: journalStore
         )
         try await coordinator.rollbackIfNeededOnLaunch()
     }
@@ -2850,6 +2885,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func resumePendingConvergencePresentation() async {
+        guard !isStartupSyncRecoveryPending else { return }
         guard syncController?.applicationSyncEnabled != false else { return }
         let outcome = await syncConvergenceRuntime.resumePendingWork()
         await handleConvergenceRuntimeOutcome(outcome)

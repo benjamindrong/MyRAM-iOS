@@ -33,6 +33,8 @@ final class NotesListState: ObservableObject {
     @Published private(set) var isBootstrapping = false
     private static let startupLogger = Logger(subsystem: "com.northsignalstudio.myram", category: "Startup")
     private let noteContext: ModelContext
+    private var didPrepareLocalNotes = false
+    @Published private(set) var syncRecoveryMessage: String?
     private let bootstrapActions: BootstrapActions
     private var cancellables: Set<AnyCancellable> = []
 
@@ -58,7 +60,7 @@ final class NotesListState: ObservableObject {
                 },
                 migrateNoteSequenceStates: {
                     try await NoteSequenceStateBootstrapMigrator(
-                        container: PersistenceManager.shared.container,
+                        container: context.container,
                         legacyFormattingProjection: { data, _ in
                             await MainActor.run {
                                 EditorStructuralFormattingAdapter.strictLegacyProjection(
@@ -118,29 +120,42 @@ final class NotesListState: ObservableObject {
         isBootstrapping = true
         defer { isBootstrapping = false }
 
-        var failedOperation = "Pending sync recovery"
+        var recoveryError: Error?
         do {
             try await bootstrapActions.rollbackIfNeededOnLaunch()
-            failedOperation = "Note-state preparation"
-            try await bootstrapActions.migrateNoteSequenceStates()
-            bootstrapActions.completeModelInitializationAfterMigration()
-            failedOperation = "Pending sync status refresh"
-            await bootstrapActions.refreshPendingSyncStatus()
-            bootstrapActions.resumeOutboundAfterRecovery()
-            bootstrapActions.startNetworkingIfNeeded()
-            bootstrapActions.resumePendingConvergencePresentationIfNeeded()
+        } catch {
+            recoveryError = error
+        }
+
+        do {
+            // Local model preparation is independent of the sync transaction.
+            // Do not rerun migration against an already mounted editor on retry.
+            if !didPrepareLocalNotes {
+                try await bootstrapActions.migrateNoteSequenceStates()
+                bootstrapActions.completeModelInitializationAfterMigration()
+                didPrepareLocalNotes = true
+            }
+            if let recoveryError {
+                let diagnostic = String(describing: recoveryError)
+                Self.startupLogger.error("Pending sync recovery failed: \(diagnostic, privacy: .private)")
+                startupFailureSupportDetails = "Pending sync recovery: \(diagnostic)"
+                syncRecoveryMessage = "Sync recovery is paused. You can keep working with local notes."
+            } else {
+                vm.completeStartupSyncRecovery()
+                await bootstrapActions.refreshPendingSyncStatus()
+                bootstrapActions.resumeOutboundAfterRecovery()
+                bootstrapActions.startNetworkingIfNeeded()
+                bootstrapActions.resumePendingConvergencePresentationIfNeeded()
+                startupFailureSupportDetails = nil
+                syncRecoveryMessage = nil
+            }
             readableNotesDuringStartupFailure = []
             didFailToReadNotesDuringStartupFailure = false
-            startupFailureSupportDetails = nil
             bootstrapState = .ready
         } catch {
-            // A failed journal rollback can make pending sync evidence inconsistent;
-            // an incomplete migration can make structural editing unsafe. Neither
-            // must prevent a non-mutating read of the original local Note records.
-            // Never start networking or resume editing on either failure path.
             let diagnostic = String(describing: error)
-            Self.startupLogger.error("\(failedOperation, privacy: .public) failed: \(diagnostic, privacy: .private)")
-            startupFailureSupportDetails = "\(failedOperation): \(diagnostic)"
+            Self.startupLogger.error("Note-state preparation failed: \(diagnostic, privacy: .private)")
+            startupFailureSupportDetails = "Note-state preparation: \(diagnostic)"
             do {
                 let storedNotes = try noteContext.fetch(FetchDescriptor<Note>())
                 readableNotesDuringStartupFailure = storedNotes
@@ -148,14 +163,14 @@ final class NotesListState: ObservableObject {
                     .sorted { $0.modifiedAt > $1.modifiedAt }
                 didFailToReadNotesDuringStartupFailure = false
                 bootstrapState = .failed(
-                    "\(failedOperation) failed. Saved notes can be read below. Editing and syncing are paused to protect pending work."
+                    "Note-state preparation failed. Saved notes can be read below. Editing and syncing are paused to protect pending work."
                 )
             } catch {
                 readableNotesDuringStartupFailure = []
                 didFailToReadNotesDuringStartupFailure = true
-                startupFailureSupportDetails = "\(failedOperation): \(diagnostic); note read: \(String(describing: error))"
+                startupFailureSupportDetails = "Note-state preparation: \(diagnostic); note read: \(String(describing: error))"
                 bootstrapState = .failed(
-                    "\(failedOperation) failed, and stored notes cannot be read safely. Existing data has not been reset. Editing and syncing remain paused."
+                    "Note-state preparation failed, and stored notes cannot be read safely. Existing data has not been reset. Editing and syncing remain paused."
                 )
             }
         }
@@ -252,7 +267,21 @@ struct NotesListView: View {
             case .failed(let message):
                 startupFailureContent(message: message)
             case .ready:
-                readyContent
+                VStack(spacing: 0) {
+                    if let message = state.syncRecoveryMessage {
+                        HStack {
+                            Text(message).font(.footnote)
+                            Button("Retry Sync") {
+                                Task { @MainActor in await state.bootstrapAfterRecovery() }
+                            }
+                            .accessibilityIdentifier("startup-retry-sync")
+                        }
+                        .padding()
+                        .accessibilityIdentifier("startup-sync-paused")
+                    }
+                    readyContent
+                }
+                .disabled(state.isBootstrapping)
             }
         }
         .fileImporter(

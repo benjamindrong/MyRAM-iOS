@@ -53,6 +53,54 @@ final class MyRAMUITests: XCTestCase {
         app.buttons["Done"].tap()
     }
 
+    /// Runs only against an explicitly prepared, synthetic Verification container.
+    func testMYR238VerificationOfflineEditingAndRelaunch() throws {
+        guard ProcessInfo.processInfo.environment["MYR238_VERIFICATION_ACCEPTANCE"] == "1" else {
+            throw XCTSkip("Requires the isolated MYR-238 synthetic journal fixture")
+        }
+        let app = XCUIApplication(bundleIdentifier: "com.northsignalstudio.myram.verification")
+        app.launch()
+        XCTAssertTrue(app.buttons["startup-retry-sync"].waitForExistence(timeout: Timeout.standard))
+        openNewNote(in: app)
+        app.buttons["edit-note-title"].tap()
+        let titleAlert = app.alerts["Edit Title"]
+        XCTAssertTrue(titleAlert.waitForExistence(timeout: Timeout.standard))
+        replaceText(in: titleAlert.textFields.firstMatch, with: "MYR238 Synthetic Offline", fallbackExistingText: "Untitled")
+        titleAlert.buttons["Save"].tap()
+        let editor = app.textViews["note-editor-body"]
+        XCTAssertTrue(editor.waitForExistence(timeout: Timeout.standard))
+        editor.tap()
+        editor.typeText("MYR238 synthetic durable offline text")
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        XCTAssertTrue(editor.waitForExistence(timeout: Timeout.standard))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.buttons["startup-retry-sync"].waitForExistence(timeout: Timeout.standard))
+        // Repeated recovery failure must leave the locally saved note available.
+        app.buttons["startup-retry-sync"].tap()
+        let row = app.staticTexts["MYR238 Synthetic Offline"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: Timeout.standard))
+        row.tap()
+        XCTAssertTrue(editor.waitForExistence(timeout: Timeout.standard))
+        XCTAssertEqual(editor.value as? String, "MYR238 synthetic durable offline text")
+    }
+
+    func testMYR238VerificationRecoveryPreservesOfflineText() throws {
+        guard ProcessInfo.processInfo.environment["MYR238_VERIFICATION_ACCEPTANCE"] == "1" else {
+            throw XCTSkip("Requires the isolated MYR-238 synthetic recovery fixture")
+        }
+        let app = XCUIApplication(bundleIdentifier: "com.northsignalstudio.myram.verification")
+        app.launch()
+        let row = app.staticTexts["MYR238 Synthetic Offline"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: Timeout.standard))
+        row.tap()
+        let editor = app.textViews["note-editor-body"]
+        XCTAssertTrue(editor.waitForExistence(timeout: Timeout.standard))
+        XCTAssertFalse(app.buttons["startup-retry-sync"].exists)
+        XCTAssertEqual(editor.value as? String, "MYR238 synthetic durable offline text")
+    }
+
     func testNewNoteOpensWithoutAttachments() throws {
         let app = makeApp()
         app.launch()

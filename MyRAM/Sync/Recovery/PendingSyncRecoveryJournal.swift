@@ -18,6 +18,7 @@ struct PendingSyncRecoveryJournal: Codable, Equatable {
     let originalLegacySnapshot: SyncQueueSnapshot
     let originalUnsentBatches: [SyncBatch]
     let originalLocalObligations: [SyncBatch]
+    let originalLocalEvidence: [SyncConvergenceLocalObligation]?
 
     let replacementLegacySnapshot: SyncQueueSnapshot
     let replacementUnsentBatches: [SyncBatch]
@@ -33,7 +34,8 @@ struct PendingSyncRecoveryJournal: Codable, Equatable {
         originalLocalObligations: [SyncBatch],
         replacementLegacySnapshot: SyncQueueSnapshot,
         replacementUnsentBatches: [SyncBatch],
-        replacementLocalObligations: [SyncBatch]
+        replacementLocalObligations: [SyncBatch],
+        originalLocalEvidence: [SyncConvergenceLocalObligation]? = nil
     ) {
         self.version = version
         self.transactionID = transactionID
@@ -42,6 +44,7 @@ struct PendingSyncRecoveryJournal: Codable, Equatable {
         self.originalLegacySnapshot = originalLegacySnapshot
         self.originalUnsentBatches = originalUnsentBatches
         self.originalLocalObligations = originalLocalObligations
+        self.originalLocalEvidence = originalLocalEvidence
         self.replacementLegacySnapshot = replacementLegacySnapshot
         self.replacementUnsentBatches = replacementUnsentBatches
         self.replacementLocalObligations = replacementLocalObligations
