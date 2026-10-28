@@ -813,9 +813,10 @@ final class NotesListStateBootstrapTests: XCTestCase {
     }
 
     func testCorruptSyncJournalDoesNotBlockDiskBackedNotesAcrossRelaunch() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("MYR238Synthetic-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        // SwiftData may retain file handles after this scope. The Verification
+        // evidence producer removes this synthetic directory after the host exits.
         let journalURL = directory.appendingPathComponent("journal.json")
         try Data("invalid synthetic journal".utf8).write(to: journalURL)
         let schema = Schema(MyRAMModelRegistry.models)
@@ -824,7 +825,9 @@ final class NotesListStateBootstrapTests: XCTestCase {
             cloudKitDatabase: .none
         )
         func openContainer() throws -> ModelContainer {
-            try ModelContainer(for: schema, configurations: configuration)
+            let container = try ModelContainer(for: schema, configurations: configuration)
+            container.mainContext.autosaveEnabled = false
+            return container
         }
         func state(for container: ModelContainer) -> NotesListState {
             NotesListState(context: container.mainContext, startsBootstrapAutomatically: false) { vm, sync in
