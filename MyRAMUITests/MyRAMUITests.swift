@@ -94,10 +94,10 @@ final class MyRAMUITests: XCTestCase {
         app.launch()
         let row = app.staticTexts["MYR238 Synthetic Offline"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: Timeout.standard))
+        XCTAssertFalse(app.buttons["Retry Sync"].exists)
         row.tap()
         let editor = findElement("note-editor-body", in: app)
         XCTAssertTrue(editor.waitForExistence(timeout: Timeout.standard))
-        XCTAssertFalse(app.buttons["Retry Sync"].exists)
         XCTAssertEqual(editor.value as? String, "MYR238 synthetic durable offline text")
     }
 
