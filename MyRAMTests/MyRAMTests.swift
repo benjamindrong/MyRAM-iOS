@@ -6947,7 +6947,8 @@ final class MyRAMTests: XCTestCase {
         let bundleIdentifier = Bundle.main.bundleIdentifier ?? ""
         XCTAssertTrue(
             bundleIdentifier == "com.apexcoretechs.MyRAM.dev"
-                || bundleIdentifier == "com.northsignalstudio.myram.dev",
+                || bundleIdentifier == "com.northsignalstudio.myram.dev"
+                || MyRAMSyncRuntimeConfiguration.current().recordsTransportDiagnostics,
             "Debug runs should use a MyRAM app bundle identifier."
         )
 #endif

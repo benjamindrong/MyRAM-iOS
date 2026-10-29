@@ -4,6 +4,7 @@ import SwiftData
 import UIKit
 import Combine
 import UniformTypeIdentifiers
+import OSLog
 
 @MainActor
 final class NotesListState: ObservableObject {
@@ -26,6 +27,14 @@ final class NotesListState: ObservableObject {
     let vm: NotesViewModel
     let syncController: MyRAMSyncController
     @Published private(set) var bootstrapState: BootstrapState = .recovering
+    @Published private(set) var readableNotesDuringStartupFailure: [Note] = []
+    @Published private(set) var didFailToReadNotesDuringStartupFailure = false
+    @Published private(set) var startupFailureSupportDetails: String?
+    @Published private(set) var isBootstrapping = false
+    private static let startupLogger = Logger(subsystem: "com.northsignalstudio.myram", category: "Startup")
+    private let noteContext: ModelContext
+    private var didPrepareLocalNotes = false
+    @Published private(set) var syncRecoveryMessage: String?
     private let bootstrapActions: BootstrapActions
     private var cancellables: Set<AnyCancellable> = []
 
@@ -37,6 +46,7 @@ final class NotesListState: ObservableObject {
         let syncController = MyRAMSyncController(startsNetworking: false)
         syncController.suspendOutboundForRecovery()
         self.syncController = syncController
+        noteContext = context
         vm = NotesViewModel(
             context: context,
             syncController: syncController,
@@ -50,7 +60,7 @@ final class NotesListState: ObservableObject {
                 },
                 migrateNoteSequenceStates: {
                     try await NoteSequenceStateBootstrapMigrator(
-                        container: PersistenceManager.shared.container,
+                        container: context.container,
                         legacyFormattingProjection: { data, _ in
                             await MainActor.run {
                                 EditorStructuralFormattingAdapter.strictLegacyProjection(
@@ -105,19 +115,64 @@ final class NotesListState: ObservableObject {
     }
 
     func bootstrapAfterRecovery() async {
+        // Repeated taps must never interleave sync journal rollback or note migrations.
+        guard !isBootstrapping else { return }
+        isBootstrapping = true
+        defer { isBootstrapping = false }
+
+        var recoveryError: Error?
         do {
             try await bootstrapActions.rollbackIfNeededOnLaunch()
-            try await bootstrapActions.migrateNoteSequenceStates()
-            bootstrapActions.completeModelInitializationAfterMigration()
-            await bootstrapActions.refreshPendingSyncStatus()
-            bootstrapActions.resumeOutboundAfterRecovery()
-            bootstrapActions.startNetworkingIfNeeded()
-            bootstrapActions.resumePendingConvergencePresentationIfNeeded()
+        } catch {
+            recoveryError = error
+        }
+
+        do {
+            // Local model preparation is independent of the sync transaction.
+            // Do not rerun migration against an already mounted editor on retry.
+            if !didPrepareLocalNotes {
+                try await bootstrapActions.migrateNoteSequenceStates()
+                bootstrapActions.completeModelInitializationAfterMigration()
+                didPrepareLocalNotes = true
+            }
+            if let recoveryError {
+                let diagnostic = String(describing: recoveryError)
+                Self.startupLogger.error("Pending sync recovery failed: \(diagnostic, privacy: .private)")
+                startupFailureSupportDetails = "Pending sync recovery: \(diagnostic)"
+                syncRecoveryMessage = "Sync recovery is paused. You can keep working with local notes."
+            } else {
+                vm.completeStartupSyncRecovery()
+                await bootstrapActions.refreshPendingSyncStatus()
+                bootstrapActions.resumeOutboundAfterRecovery()
+                bootstrapActions.startNetworkingIfNeeded()
+                bootstrapActions.resumePendingConvergencePresentationIfNeeded()
+                startupFailureSupportDetails = nil
+                syncRecoveryMessage = nil
+            }
+            readableNotesDuringStartupFailure = []
+            didFailToReadNotesDuringStartupFailure = false
             bootstrapState = .ready
         } catch {
-            bootstrapState = .failed(
-                "Startup recovery or note-state preparation failed. Restart MyRAM before syncing or editing."
-            )
+            let diagnostic = String(describing: error)
+            Self.startupLogger.error("Note-state preparation failed: \(diagnostic, privacy: .private)")
+            startupFailureSupportDetails = "Note-state preparation: \(diagnostic)"
+            do {
+                let storedNotes = try noteContext.fetch(FetchDescriptor<Note>())
+                readableNotesDuringStartupFailure = storedNotes
+                    .filter { $0.deletedAt == nil }
+                    .sorted { $0.modifiedAt > $1.modifiedAt }
+                didFailToReadNotesDuringStartupFailure = false
+                bootstrapState = .failed(
+                    "Note-state preparation failed. Saved notes can be read below. Editing and syncing are paused to protect pending work."
+                )
+            } catch {
+                readableNotesDuringStartupFailure = []
+                didFailToReadNotesDuringStartupFailure = true
+                startupFailureSupportDetails = "Note-state preparation: \(diagnostic); note read: \(String(describing: error))"
+                bootstrapState = .failed(
+                    "Note-state preparation failed, and stored notes cannot be read safely. Existing data has not been reset. Editing and syncing remain paused."
+                )
+            }
         }
     }
 }
@@ -210,25 +265,23 @@ struct NotesListView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(editorChromeStyle.appBackgroundColor.ignoresSafeArea())
             case .failed(let message):
-                VStack(spacing: 12) {
-                    Text(message)
-                        .font(.body)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.red)
-                    Button("Copy Support Details") {
-                        UIPasteboard.general.string = message
-                    }
-                        .buttonStyle(.borderedProminent)
-                    Text("Close and reopen MyRAM before syncing or editing.")
-                        .font(.footnote)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.secondary)
-                }
-                .padding()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(editorChromeStyle.appBackgroundColor.ignoresSafeArea())
+                startupFailureContent(message: message)
             case .ready:
-                readyContent
+                VStack(spacing: 0) {
+                    if let message = state.syncRecoveryMessage {
+                        HStack {
+                            Text(message).font(.footnote)
+                            Button("Retry Sync") {
+                                Task { @MainActor in await state.bootstrapAfterRecovery() }
+                            }
+                            .accessibilityIdentifier("startup-retry-sync")
+                        }
+                        .padding()
+                        .accessibilityIdentifier("startup-sync-paused")
+                    }
+                    readyContent
+                }
+                .disabled(state.isBootstrapping)
             }
         }
         .fileImporter(
@@ -299,6 +352,69 @@ struct NotesListView: View {
         } message: {
             Text(markdownImportErrorMessage ?? "An unknown Markdown import error occurred.")
         }
+    }
+
+    // Read-only fallback intentionally bypasses the editor and every mutation action.
+    // It is usable even when sequence migration or pending sync rollback is unsafe.
+    private func startupFailureContent(message: String) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.red)
+                .padding(.horizontal)
+                .accessibilityIdentifier("startup-failure-message")
+
+            if state.didFailToReadNotesDuringStartupFailure {
+                ContentUnavailableView(
+                    "Notes Unavailable",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text("The original store could not be read. No data was reset.")
+                )
+            } else {
+                List(state.readableNotesDuringStartupFailure, id: \.id) { note in
+                    NavigationLink {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text(note.title.isEmpty ? "Untitled" : note.title)
+                                    .font(.title2.bold())
+                                Text(note.content)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .padding()
+                        }
+                        .navigationTitle("Read-Only Note")
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(note.title.isEmpty ? "Untitled" : note.title)
+                                .font(.headline)
+                            Text(note.content)
+                                .lineLimit(2)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .accessibilityIdentifier("startup-readonly-note-\(note.id.uuidString)")
+                }
+                .listStyle(.plain)
+            }
+
+            HStack {
+                Button("Retry Recovery") {
+                    Task { @MainActor in await state.bootstrapAfterRecovery() }
+                }
+                .disabled(state.isBootstrapping)
+                .buttonStyle(.borderedProminent)
+                Button("Copy Support Details") {
+                    UIPasteboard.general.string = state.startupFailureSupportDetails ?? message
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(.horizontal)
+        }
+        .padding(.vertical)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(editorChromeStyle.appBackgroundColor.ignoresSafeArea())
     }
 
     private var readyContent: some View {
