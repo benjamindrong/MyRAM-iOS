@@ -463,6 +463,107 @@ final class PendingSyncRecoveryTests: XCTestCase {
         XCTAssertNil(try store.load())
     }
 
+    func testRollbackRetainsAdmissionsDuringAwaitedQueueReplacement() async throws {
+        let fileURL = temporaryJournalURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        let store = PendingSyncRecoveryJournalStore(fileURL: fileURL)
+        let journal = makeJournal()
+        try store.save(journal)
+        let admittedWhileLegacyReplaces = makeBatch(idSuffix: 91)
+        let admittedWhileUnsentReplaces = makeBatch(idSuffix: 92)
+        let transferredToUnsent = makeBatch(idSuffix: 93)
+        let originalCaptured = SyncConvergenceLocalObligation(
+            batch: journal.originalLocalObligations[0],
+            capturedChanges: journal.originalLocalObligations[0].changes.map {
+                SyncConvergenceCapturedLocalChange(change: $0, evidence: nil)
+            }
+        )
+        let lateCaptured = SyncConvergenceLocalObligation(
+            batch: admittedWhileUnsentReplaces,
+            capturedChanges: admittedWhileUnsentReplaces.changes.map {
+                SyncConvergenceCapturedLocalChange(change: $0, evidence: nil)
+            }
+        )
+        var local = [originalCaptured]
+        let admin = FakePendingSyncQueueAdmin(
+            legacySnapshot: journal.replacementLegacySnapshot,
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .healthy)
+        )
+        admin.afterLegacyReplacement = {
+            // A local capture finishes while the legacy actor replacement awaits.
+            admin.unsentSnapshot = FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: [admittedWhileLegacyReplaces], health: .healthy
+            )
+            local.append(SyncConvergenceLocalObligation(legacyBatch: transferredToUnsent))
+        }
+        admin.afterUnsentReplacement = {
+            // A second capture arrives before the local-obligation replacement.
+            local.append(lateCaptured)
+            // A transferred batch must have one durable owner, not two.
+            admin.unsentSnapshot = FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: admin.unsentSnapshot.pendingBatches + [transferredToUnsent],
+                health: .healthy
+            )
+        }
+        let coordinator = PendingSyncRecoveryCoordinator(
+            queueAdmin: admin,
+            localQueueSnapshot: {
+                FileBackedSyncConvergenceLocalObligationQueueSnapshot(obligations: local, health: .healthy)
+            },
+            replaceLocalObligations: { local = $0 },
+            flushReadyLocalBatch: { nil },
+            journalStore: store
+        )
+        try await coordinator.rollbackIfNeededOnLaunch()
+        XCTAssertEqual(
+            admin.unsentSnapshot.pendingBatches,
+            journal.originalUnsentBatches + [admittedWhileLegacyReplaces, transferredToUnsent]
+        )
+        XCTAssertEqual(local, [originalCaptured, lateCaptured])
+        XCTAssertNil(try store.load())
+    }
+
+    func testInterruptedRollbackRetainsAdmissionsCapturedAtLaterPhase() async throws {
+        let fileURL = temporaryJournalURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        let store = PendingSyncRecoveryJournalStore(fileURL: fileURL)
+        let journal = makeJournal()
+        try store.save(journal)
+        let afterLegacy = makeBatch(idSuffix: 94)
+        let admin = FakePendingSyncQueueAdmin(
+            legacySnapshot: journal.replacementLegacySnapshot,
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .healthy)
+        )
+        var local = journal.originalLocalObligations.map(SyncConvergenceLocalObligation.init(legacyBatch:))
+        admin.afterLegacyReplacement = {
+            admin.unsentSnapshot = FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: [afterLegacy], health: .healthy
+            )
+        }
+        admin.failNextUnsentReplacement = true
+        func coordinator() -> PendingSyncRecoveryCoordinator {
+            PendingSyncRecoveryCoordinator(
+                queueAdmin: admin,
+                localQueueSnapshot: {
+                    FileBackedSyncConvergenceLocalObligationQueueSnapshot(obligations: local, health: .healthy)
+                },
+                replaceLocalObligations: { local = $0 },
+                flushReadyLocalBatch: { nil },
+                journalStore: store
+            )
+        }
+        do {
+            try await coordinator().rollbackIfNeededOnLaunch()
+            XCTFail("Expected injected interruption")
+        } catch {
+            XCTAssertEqual(error as? PendingSyncRecoveryCoordinator.RecoveryError, .rollbackFailed)
+        }
+        XCTAssertTrue(try XCTUnwrap(store.load()).originalUnsentBatches.contains(afterLegacy))
+        try await coordinator().rollbackIfNeededOnLaunch()
+        XCTAssertEqual(admin.unsentSnapshot.pendingBatches, journal.originalUnsentBatches + [afterLegacy])
+        XCTAssertNil(try store.load())
+    }
+
     func testRollbackRestoresCapturedEvidenceAfterQueueReplacementAndRelaunch() async throws {
         let fileURL = temporaryJournalURL()
         defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
@@ -1159,6 +1260,8 @@ private final class FakePendingSyncQueueAdmin: PendingSyncQueueAdministrating {
     var isSuspended = false
     var didFlushAllOutboundWork = false
     var failNextUnsentReplacement = false
+    var afterLegacyReplacement: (() -> Void)?
+    var afterUnsentReplacement: (() -> Void)?
 
     init(legacySnapshot: SyncQueueSnapshot, unsentSnapshot: FileBackedSyncBatchQueueSnapshot) {
         self.legacySnapshot = legacySnapshot
@@ -1183,6 +1286,7 @@ private final class FakePendingSyncQueueAdmin: PendingSyncQueueAdministrating {
 
     func replaceLegacyQueueSnapshot(_ snapshot: SyncQueueSnapshot) async throws {
         legacySnapshot = snapshot
+        afterLegacyReplacement?()
     }
 
     func unsentBatchQueueSnapshot() -> FileBackedSyncBatchQueueSnapshot {
@@ -1195,6 +1299,7 @@ private final class FakePendingSyncQueueAdmin: PendingSyncQueueAdministrating {
             throw FileBackedSyncBatchQueue.QueueError.persistenceFailed
         }
         unsentSnapshot = FileBackedSyncBatchQueueSnapshot(pendingBatches: batches, health: .healthy)
+        afterUnsentReplacement?()
     }
 
     func refreshPendingSyncStatus() async {}

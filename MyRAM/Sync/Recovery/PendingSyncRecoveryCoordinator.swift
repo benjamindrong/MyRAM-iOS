@@ -220,60 +220,16 @@ final class PendingSyncRecoveryCoordinator {
 
     private func rollback(journal: PendingSyncRecoveryJournal, resumeOutbound: Bool) async throws {
         do {
-            // A failed recovery may have been followed by healthy local edits.
-            // Seal their queue ownership into the journal BEFORE replacing any
-            // queue, so another interrupted rollback cannot forget that work.
-            let current = try await prepareSnapshots()
-            let legacy = SyncQueueSnapshot(
-                pendingChanges: preservingLaterWork(
-                    original: journal.originalLegacySnapshot.pendingChanges,
-                    replacement: journal.replacementLegacySnapshot.pendingChanges,
-                    current: current.legacy.pendingChanges,
-                    id: { $0.id }
-                ),
-                appliedChangeIDs: Array(Set(journal.originalLegacySnapshot.appliedChangeIDs + current.legacy.appliedChangeIDs)),
-                pendingAcknowledgementIDs: Array(Set(journal.originalLegacySnapshot.pendingAcknowledgementIDs + current.legacy.pendingAcknowledgementIDs))
-            )
-            let unsent = preservingLaterWork(
-                original: journal.originalUnsentBatches,
-                replacement: journal.replacementUnsentBatches,
-                current: current.unsent,
-                id: { $0.id }
-            )
-            let local = preservingLaterWork(
-                original: journal.originalLocalObligations,
-                replacement: journal.replacementLocalObligations,
-                current: current.local,
-                id: { $0.id }
-            )
-            let evidenceByID = Dictionary(
-                (journal.originalLocalEvidence ?? []).map { ($0.id, $0) },
-                uniquingKeysWith: { first, _ in first }
-            )
-            let currentEvidenceByID = Dictionary(
-                current.localEvidence.map { ($0.id, $0) },
-                uniquingKeysWith: { first, _ in first }
-            )
-            let localEvidence = local.map { batch in
-                evidenceByID[batch.id] ?? currentEvidenceByID[batch.id]
-                    ?? SyncConvergenceLocalObligation(legacyBatch: batch)
-            }
-            let preserved = PendingSyncRecoveryJournal(
-                version: journal.version,
-                transactionID: journal.transactionID,
-                createdAt: journal.createdAt,
-                phase: journal.phase,
-                originalLegacySnapshot: legacy,
-                originalUnsentBatches: unsent,
-                originalLocalObligations: local,
-                replacementLegacySnapshot: journal.replacementLegacySnapshot,
-                replacementUnsentBatches: journal.replacementUnsentBatches,
-                replacementLocalObligations: journal.replacementLocalObligations,
-                originalLocalEvidence: localEvidence
-            )
-            try journalStore.save(preserved)
-            try await queueAdmin.replaceLegacyQueueSnapshot(legacy)
-            try await queueAdmin.replaceUnsentBatches(unsent)
+            // Queue owners can admit an edit while an earlier queue's asynchronous
+            // replacement is running. Rebase and durably journal later admissions
+            // immediately before each subsequent queue replacement.
+            var preserved = try await preserveCurrentWork(in: journal)
+            try await queueAdmin.replaceLegacyQueueSnapshot(preserved.originalLegacySnapshot)
+            preserved = try await preserveCurrentWork(in: preserved)
+            try await queueAdmin.replaceUnsentBatches(preserved.originalUnsentBatches)
+            preserved = try await preserveCurrentWork(in: preserved)
+            let localEvidence = preserved.originalLocalEvidence
+                ?? preserved.originalLocalObligations.map(SyncConvergenceLocalObligation.init(legacyBatch:))
             try await replaceLocalObligations(localEvidence)
             await queueAdmin.refreshPendingSyncStatus()
             try journalStore.delete()
@@ -284,6 +240,65 @@ final class PendingSyncRecoveryCoordinator {
             throw RecoveryError.rollbackFailed
         }
     }
+
+    private func preserveCurrentWork(
+        in journal: PendingSyncRecoveryJournal
+    ) async throws -> PendingSyncRecoveryJournal {
+        let current = try await prepareSnapshots()
+        let legacy = SyncQueueSnapshot(
+            pendingChanges: preservingLaterWork(
+                original: journal.originalLegacySnapshot.pendingChanges,
+                replacement: journal.replacementLegacySnapshot.pendingChanges,
+                current: current.legacy.pendingChanges,
+                id: { $0.id }
+            ),
+            appliedChangeIDs: Array(Set(journal.originalLegacySnapshot.appliedChangeIDs + current.legacy.appliedChangeIDs)),
+            pendingAcknowledgementIDs: Array(Set(journal.originalLegacySnapshot.pendingAcknowledgementIDs + current.legacy.pendingAcknowledgementIDs))
+        )
+        let unsent = preservingLaterWork(
+            original: journal.originalUnsentBatches,
+            replacement: journal.replacementUnsentBatches,
+            current: current.unsent,
+            id: { $0.id }
+        )
+        let unsentIDs = Set(unsent.map(\.id))
+        let local = preservingLaterWork(
+            original: journal.originalLocalObligations,
+            replacement: journal.replacementLocalObligations,
+            current: current.local,
+            id: { $0.id }
+        ).filter { !unsentIDs.contains($0.id) }
+        let originalEvidence = Dictionary(
+            (journal.originalLocalEvidence ?? []).map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let currentEvidence = Dictionary(
+            current.localEvidence.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let localEvidence = local.map { batch in
+            originalEvidence[batch.id] ?? currentEvidence[batch.id]
+                ?? SyncConvergenceLocalObligation(legacyBatch: batch)
+        }
+        let preserved = PendingSyncRecoveryJournal(
+            version: journal.version,
+            transactionID: journal.transactionID,
+            createdAt: journal.createdAt,
+            phase: journal.phase,
+            originalLegacySnapshot: legacy,
+            originalUnsentBatches: unsent,
+            originalLocalObligations: local,
+            replacementLegacySnapshot: journal.replacementLegacySnapshot,
+            replacementUnsentBatches: journal.replacementUnsentBatches,
+            replacementLocalObligations: journal.replacementLocalObligations,
+            originalLocalEvidence: localEvidence
+        )
+        // An interrupted replacement must be able to restore every admission
+        // already observed, including transfers from local to unsent ownership.
+        try journalStore.save(preserved)
+        return preserved
+    }
+
     private func preservingLaterWork<T>(
         original: [T], replacement: [T], current: [T], id: (T) -> UUID
     ) -> [T] {
