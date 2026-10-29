@@ -1286,7 +1286,10 @@ private final class FakePendingSyncQueueAdmin: PendingSyncQueueAdministrating {
 
     func replaceLegacyQueueSnapshot(_ snapshot: SyncQueueSnapshot) async throws {
         legacySnapshot = snapshot
-        afterLegacyReplacement?()
+        if let afterLegacyReplacement {
+            await Task.yield()
+            afterLegacyReplacement()
+        }
     }
 
     func unsentBatchQueueSnapshot() -> FileBackedSyncBatchQueueSnapshot {
@@ -1299,7 +1302,10 @@ private final class FakePendingSyncQueueAdmin: PendingSyncQueueAdministrating {
             throw FileBackedSyncBatchQueue.QueueError.persistenceFailed
         }
         unsentSnapshot = FileBackedSyncBatchQueueSnapshot(pendingBatches: batches, health: .healthy)
-        afterUnsentReplacement?()
+        if let afterUnsentReplacement {
+            await Task.yield()
+            afterUnsentReplacement()
+        }
     }
 
     func refreshPendingSyncStatus() async {}
