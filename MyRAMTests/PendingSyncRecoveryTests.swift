@@ -829,6 +829,7 @@ final class NotesListStateBootstrapTests: XCTestCase {
             container.mainContext.autosaveEnabled = false
             return container
         }
+        var outboundResumes = 0
         func state(for container: ModelContainer) -> NotesListState {
             NotesListState(context: container.mainContext, startsBootstrapAutomatically: false) { vm, sync in
                 NotesListState.BootstrapActions(
@@ -841,22 +842,67 @@ final class NotesListStateBootstrapTests: XCTestCase {
                         try await NoteSequenceStateBootstrapMigrator(container: container).runToCompletion()
                     },
                     completeModelInitializationAfterMigration: { vm.completeStartupInitializationAfterMigration() },
-                    refreshPendingSyncStatus: {}, resumeOutboundAfterRecovery: {},
+                    refreshPendingSyncStatus: { await sync.refreshPendingSyncStatus() },
+                    resumeOutboundAfterRecovery: {
+                        outboundResumes += 1
+                        sync.resumeOutboundAfterRecovery()
+                    },
                     startNetworkingIfNeeded: {}, resumePendingConvergencePresentationIfNeeded: {}
                 )
             }
         }
+        let original = Note(title: "Existing synthetic note", content: "Existing durable content")
+        let originalID = original.id
+        let queuedBatch = SyncBatch(
+            id: UUID(), originDeviceID: UUID(), createdAt: Date(),
+            changes: [.noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                noteID: originalID, title: original.title, modifiedAt: original.modifiedAt
+            ))]
+        )
+        let queuedLocalBatch = SyncBatch(
+            id: UUID(), originDeviceID: UUID(), createdAt: Date(), changes: queuedBatch.changes
+        )
+        let faultBytes = try Data(contentsOf: journalURL)
         let id: UUID
+        var pendingUnsent: [SyncBatch] = []
+        var pendingLocal: [SyncBatch] = []
         do {
             let container = try openContainer()
+            container.mainContext.insert(original)
+            try container.mainContext.save()
             let first = state(for: container)
+            // Seed through production queue APIs; no private queue-file edits.
+            try await first.syncController.replaceUnsentBatches([queuedBatch])
+            try await first.vm.replaceLocalConvergenceBatches([queuedLocalBatch])
+            XCTAssertEqual(first.vm.localConvergenceQueueSnapshot().pendingBatches, [queuedLocalBatch])
             await first.bootstrapAfterRecovery()
             XCTAssertEqual(first.bootstrapState, .ready)
             XCTAssertNotNil(first.syncRecoveryMessage)
+            XCTAssertEqual(first.vm.notes.first { $0.id == originalID }?.content, "Existing durable content")
             let note = try XCTUnwrap(first.vm.createNewNote())
             id = note.id
             let saved = await first.vm.commitNoteEditForProduction(note, title: "Synthetic offline", content: "Keep this exact text")
             XCTAssertTrue(saved)
+            await first.vm.prepareLocalOwnershipForBootstrapForTesting()
+            pendingUnsent = first.syncController.unsentBatchQueueSnapshot().pendingBatches
+            pendingLocal = first.vm.localConvergenceQueueSnapshot().pendingBatches
+            XCTAssertTrue(pendingUnsent.contains(queuedBatch))
+            // Local obligations may transfer to the durable unsent queue, but
+            // must remain owned until acknowledgement, even while sync pauses.
+            let owned = pendingLocal + pendingUnsent
+            XCTAssertTrue(owned.contains(queuedLocalBatch))
+            XCTAssertTrue(owned.contains { batch in
+                batch.changes.contains { change in
+                    if case .noteCreated(let created) = change { return created.noteID == id }
+                    return false
+                }
+            })
+            await first.bootstrapAfterRecovery()
+            XCTAssertNotNil(first.syncRecoveryMessage)
+            XCTAssertEqual(first.syncController.unsentBatchQueueSnapshot().pendingBatches, pendingUnsent)
+            XCTAssertEqual(first.vm.localConvergenceQueueSnapshot().pendingBatches, pendingLocal)
+            XCTAssertEqual(try Data(contentsOf: journalURL), faultBytes)
+            XCTAssertEqual(outboundResumes, 0)
         }
         let reopened = try openContainer()
         let relaunched = state(for: reopened)
@@ -865,11 +911,78 @@ final class NotesListStateBootstrapTests: XCTestCase {
         let note = try XCTUnwrap(reopened.mainContext.fetch(FetchDescriptor<Note>()).first { $0.id == id })
         XCTAssertEqual(note.title, "Synthetic offline")
         XCTAssertEqual(note.content, "Keep this exact text")
+        XCTAssertEqual(relaunched.vm.notes.first { $0.id == originalID }?.content, "Existing durable content")
+        XCTAssertEqual(relaunched.syncController.unsentBatchQueueSnapshot().pendingBatches, pendingUnsent)
+        XCTAssertEqual(relaunched.vm.localConvergenceQueueSnapshot().pendingBatches, pendingLocal)
+        XCTAssertEqual(try Data(contentsOf: journalURL), faultBytes)
+        await relaunched.bootstrapAfterRecovery()
+        XCTAssertNotNil(relaunched.syncRecoveryMessage)
+        XCTAssertEqual(relaunched.syncController.unsentBatchQueueSnapshot().pendingBatches, pendingUnsent)
+        XCTAssertEqual(relaunched.vm.localConvergenceQueueSnapshot().pendingBatches, pendingLocal)
+        XCTAssertEqual(try reopened.mainContext.fetch(FetchDescriptor<Note>()).filter { $0.id == id }.count, 1)
+        XCTAssertEqual(outboundResumes, 0)
         // Remove only the synthetic fault; retry must preserve the current local version.
         try FileManager.default.removeItem(at: journalURL)
         await relaunched.bootstrapAfterRecovery()
         XCTAssertNil(relaunched.syncRecoveryMessage)
+        XCTAssertEqual(outboundResumes, 1)
+        XCTAssertEqual(relaunched.syncController.unsentBatchQueueSnapshot().pendingBatches, pendingUnsent)
+        XCTAssertEqual(relaunched.vm.localConvergenceQueueSnapshot().pendingBatches, pendingLocal)
         XCTAssertEqual(note.content, "Keep this exact text")
+        let durableContainer = try openContainer()
+        let durable = try durableContainer.mainContext.fetch(FetchDescriptor<Note>()).filter { $0.id == id }
+        XCTAssertEqual(durable.count, 1)
+        XCTAssertEqual(durable.first?.content, "Keep this exact text")
+        withExtendedLifetime(durableContainer) {}
+    }
+
+    func testReadOnlySwiftDataStoreDoesNotBecomeWritableDuringSyncFailure() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("MYR238ReadOnly-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let schema = Schema(MyRAMModelRegistry.models)
+        let storeURL = directory.appendingPathComponent("notes.store")
+        let id: UUID
+        do {
+            let writable = try ModelContainer(for: schema, configurations: ModelConfiguration(
+                "MYR238ReadOnly", schema: schema, url: storeURL, cloudKitDatabase: .none
+            ))
+            let note = Note(title: "Preserve", content: "Read-only durable content")
+            id = note.id
+            writable.mainContext.insert(note)
+            try writable.mainContext.save()
+        }
+        let readOnly = try ModelContainer(for: schema, configurations: ModelConfiguration(
+            "MYR238ReadOnly", schema: schema, url: storeURL, allowsSave: false, cloudKitDatabase: .none
+        ))
+        readOnly.mainContext.autosaveEnabled = false
+        let journalURL = directory.appendingPathComponent("journal.json")
+        let faultBytes = Data("invalid synthetic journal".utf8)
+        try faultBytes.write(to: journalURL)
+        let state = NotesListState(context: readOnly.mainContext, startsBootstrapAutomatically: false) { vm, sync in
+            NotesListState.BootstrapActions(
+                rollbackIfNeededOnLaunch: {
+                    try await vm.rollbackIfNeededOnLaunch(
+                        syncController: sync, journalStore: PendingSyncRecoveryJournalStore(fileURL: journalURL)
+                    )
+                },
+                migrateNoteSequenceStates: {
+                    try await NoteSequenceStateBootstrapMigrator(container: readOnly).runToCompletion()
+                },
+                completeModelInitializationAfterMigration: { vm.completeStartupInitializationAfterMigration() },
+                refreshPendingSyncStatus: { XCTFail("Unwritable store must not resume sync") },
+                resumeOutboundAfterRecovery: { XCTFail("Unwritable store must not resume outbound") },
+                startNetworkingIfNeeded: { XCTFail("Unwritable store must not start networking") },
+                resumePendingConvergencePresentationIfNeeded: { XCTFail("Unwritable store must not resume convergence") }
+            )
+        }
+        await state.bootstrapAfterRecovery()
+        guard case .failed = state.bootstrapState else {
+            return XCTFail("Real read-only SwiftData persistence must not enable the editor")
+        }
+        XCTAssertFalse(state.vm.didCompleteStartupModelInitializationForTesting)
+        XCTAssertEqual(state.readableNotesDuringStartupFailure.map(\.id), [id])
+        XCTAssertEqual(state.readableNotesDuringStartupFailure.first?.content, "Read-only durable content")
+        XCTAssertEqual(try Data(contentsOf: journalURL), faultBytes)
     }
 
     func testSyncRecoveryFailureAllowsLocalCreateEditSaveAndRetry() async throws {
