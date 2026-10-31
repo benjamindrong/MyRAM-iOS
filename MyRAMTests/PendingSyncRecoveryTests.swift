@@ -953,7 +953,13 @@ final class NotesListStateBootstrapTests: XCTestCase {
         let preflightContext = ModelContext(container)
         preflightContext.autosaveEnabled = false
         let persistedRows = try preflightContext.fetch(FetchDescriptor<NoteSequenceStateRecord>())
-        let existingRows = Dictionary(uniqueKeysWithValues: persistedRows.map { ($0.noteID, $0) })
+        var existingRows: [UUID: NoteSequenceStateRecord] = [:]
+        var duplicateSequenceRows = 0
+        for row in persistedRows {
+            if existingRows.updateValue(row, forKey: row.noteID) != nil {
+                duplicateSequenceRows += 1
+            }
+        }
         let inputNotes = try preflightContext.fetch(FetchDescriptor<Note>())
         var missingStateRows = 0
         var invalidStateRows = 0
@@ -992,7 +998,8 @@ final class NotesListStateBootstrapTests: XCTestCase {
             " visible_body_mismatch=\(mismatchedVisibleText)" +
             " missing_sequence=\(missingStateRows)" +
             " valid_sequence=\(validStateRows)" +
-            " other_error=\(otherSequenceErrorRows)"
+            " other_error=\(otherSequenceErrorRows)" +
+            " duplicate_sequence=\(duplicateSequenceRows)"
         print(safeSequenceClassification)
 
         var startedNetworking = false
@@ -1069,7 +1076,8 @@ final class NotesListStateBootstrapTests: XCTestCase {
                 " sequence_body_mismatch=\(mismatchedVisibleText)" +
                 " sequence_missing=\(missingStateRows)" +
                 " sequence_valid=\(validStateRows)" +
-                " sequence_other=\(otherSequenceErrorRows)"
+                " sequence_other=\(otherSequenceErrorRows)" +
+                " sequence_duplicates=\(duplicateSequenceRows)"
             )
             return
         }
