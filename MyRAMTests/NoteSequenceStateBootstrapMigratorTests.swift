@@ -152,6 +152,12 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
             container, allowsExistingStateReplacement: false
         ).runPreservingDivergentStates()
         XCTAssertEqual(rerun, quarantined)
+        // Preservation mode must not inherit the destructive legacy replacement
+        // behavior if an older runtime config ever enables that switch.
+        let legacyConfigured = try await makeMigrator(
+            container, allowsExistingStateReplacement: true
+        ).runPreservingDivergentStates()
+        XCTAssertEqual(legacyConfigured, quarantined)
         XCTAssertEqual(
             try XCTUnwrap(fetchRecords(in: container).first {
                 $0.noteID == divergentNoteID
