@@ -843,6 +843,153 @@ final class PendingSyncRecoveryTests: XCTestCase {
 
 @MainActor
 final class NotesListStateBootstrapTests: XCTestCase {
+    func testMYR238RealStartupPathWithIsolatedCapturedNotes() async throws {
+        // Provisioned only by the sealed-capture runner inside a disposable
+        // iOS Simulator Verification app sandbox; never uses production storage.
+        let documentRoot = FileManager.default.urls(
+            for: .documentDirectory, in: .userDomainMask
+        )[0].resolvingSymlinksInPath()
+        let fixture = documentRoot.appendingPathComponent(
+            "MYR238-Isolated-Restore", isDirectory: true
+        )
+        let marker = fixture.appendingPathComponent("approval-marker.txt")
+        guard FileManager.default.fileExists(atPath: marker.path) else {
+            throw XCTSkip("Dedicated isolated iOS restore fixture not staged")
+        }
+        XCTAssertEqual(
+            try String(contentsOf: marker, encoding: .utf8),
+            "MYR238-ISOLATED-IOS-RESTORE-v1\n"
+        )
+        let restored = fixture.appendingPathComponent("restored", isDirectory: true)
+        let storeURL = restored.appendingPathComponent(
+            "group/Library/Application Support/MyRAM_Main.store"
+        )
+        let journalURL = restored.appendingPathComponent(
+            "app/Library/Application Support/MyRAM/pending-sync-recovery-journal.json"
+        )
+        guard fixture.resolvingSymlinksInPath().path.hasPrefix(documentRoot.path + "/"),
+              storeURL.resolvingSymlinksInPath().path.hasPrefix(fixture.path + "/"),
+              journalURL.resolvingSymlinksInPath().path.hasPrefix(fixture.path + "/"),
+              FileManager.default.fileExists(atPath: storeURL.path),
+              !FileManager.default.fileExists(atPath: journalURL.path) else {
+            XCTFail("Restoration fixture boundary or journal state invalid")
+            return
+        }
+
+        struct PinSignature: Equatable {
+            let id: UUID
+            let text: String
+            let order: Int
+            let collapsed: Bool
+            let createdAt: Date
+            let modifiedAt: Date
+        }
+        struct AttachmentSignature: Equatable {
+            let id: UUID
+            let imageData: Data
+            let createdAt: Date
+        }
+        struct NoteSignature: Equatable {
+            let id: UUID
+            let title: String
+            let content: String
+            let richText: Data?
+            let pinned: Bool?
+            let createdAt: Date
+            let modifiedAt: Date
+            let deletedAt: Date?
+            let folderID: UUID?
+            let pinnedText: [PinSignature]
+            let attachments: [AttachmentSignature]
+        }
+        struct FolderSignature: Equatable {
+            let id: UUID
+            let name: String
+            let createdAt: Date
+            let modifiedAt: Date
+            let parentID: UUID?
+        }
+        func signature(_ container: ModelContainer) throws -> ([NoteSignature], [FolderSignature]) {
+            let context = ModelContext(container)
+            let notes = try context.fetch(FetchDescriptor<Note>())
+                .map { note in
+                    NoteSignature(
+                        id: note.id, title: note.title, content: note.content,
+                        richText: note.richTextContentData, pinned: note.isPinned,
+                        createdAt: note.createdAt, modifiedAt: note.modifiedAt,
+                        deletedAt: note.deletedAt, folderID: note.folder?.id,
+                        pinnedText: note.pinnedThoughts.map {
+                            PinSignature(id: $0.id, text: $0.text, order: $0.order,
+                                         collapsed: $0.isCollapsed,
+                                         createdAt: $0.createdAt, modifiedAt: $0.modifiedAt)
+                        }.sorted { $0.id.uuidString < $1.id.uuidString },
+                        attachments: note.photoAttachments.map {
+                            AttachmentSignature(id: $0.id, imageData: $0.imageData,
+                                                createdAt: $0.createdAt)
+                        }.sorted { $0.id.uuidString < $1.id.uuidString }
+                    )
+                }.sorted { $0.id.uuidString < $1.id.uuidString }
+            let folders = try context.fetch(FetchDescriptor<Folder>())
+                .map {
+                    FolderSignature(id: $0.id, name: $0.name,
+                                    createdAt: $0.createdAt, modifiedAt: $0.modifiedAt,
+                                    parentID: $0.parentFolder?.id)
+                }.sorted { $0.id.uuidString < $1.id.uuidString }
+            return (notes, folders)
+        }
+
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR238-Isolated-Captured-Store", schema: schema, url: storeURL,
+            cloudKitDatabase: .none
+        )
+        let container = try ModelContainer(for: schema, configurations: configuration)
+        container.mainContext.autosaveEnabled = false
+        let before = try signature(container)
+        XCTAssertFalse(before.0.isEmpty, "Captured note store unexpectedly empty")
+
+        var startedNetworking = false
+        let state = NotesListState(
+            context: container.mainContext,
+            startsBootstrapAutomatically: false
+        ) { vm, sync in
+            NotesListState.BootstrapActions(
+                rollbackIfNeededOnLaunch: {
+                    try await vm.rollbackIfNeededOnLaunch(
+                        syncController: sync,
+                        journalStore: PendingSyncRecoveryJournalStore(fileURL: journalURL)
+                    )
+                },
+                migrateNoteSequenceStates: {
+                    try await NoteSequenceStateBootstrapMigrator(container: container)
+                        .runToCompletion()
+                },
+                completeModelInitializationAfterMigration: {
+                    vm.completeStartupInitializationAfterMigration()
+                },
+                refreshPendingSyncStatus: { await sync.refreshPendingSyncStatus() },
+                resumeOutboundAfterRecovery: {},
+                startNetworkingIfNeeded: { startedNetworking = true },
+                resumePendingConvergencePresentationIfNeeded: {}
+            )
+        }
+        await state.bootstrapAfterRecovery()
+        XCTAssertEqual(state.bootstrapState, .ready, "Captured store startup did not become ready")
+        XCTAssertTrue(startedNetworking, "Normal startup did not reach its networking boundary")
+        // Networking is intentionally not started: the injected action is a
+        // marker, never an advertiser or connection request.
+        let after = try signature(container)
+        XCTAssertTrue(before.0 == after.0, "Stored note identities, contents, or metadata changed")
+        XCTAssertTrue(before.1 == after.1, "Stored folder identities or metadata changed")
+        XCTAssertEqual(
+            state.vm.notes.count,
+            before.0.filter { $0.deletedAt == nil }.count,
+            "Startup did not load every active captured note"
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: journalURL.path))
+        print("MYR238_IOS_ISOLATED_REAL_STARTUP_PASS")
+    }
+
     func testBootstrapRunsLaunchRecoveryBeforeNetworkingAndEditing() async throws {
         let container = try makeContainer()
         var events: [String] = []
