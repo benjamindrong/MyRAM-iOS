@@ -930,8 +930,17 @@ final class NotesViewModel: ObservableObject {
         _ note: Note,
         title: String,
         content: String,
-        richTextContentData: Data? = nil
+        richTextContentData: Data? = nil,
+        legacyModeAuthorized: Bool = !SyncBatchAnchoredPayloadCapability.isEnabled
     ) -> Bool {
+        // Activated notes must commit body + anchored sequence in one transaction.
+        // A legacy-only save would persist a valid but stale sequence, blocking
+        // the next startup migration. The explicit override is only used by the
+        // activation-disabled core seam; production callers default to fail-closed.
+        guard legacyModeAuthorized else {
+            syncBatchErrorMessage = "Unable to save the latest edit through the legacy editor path."
+            return false
+        }
         guard note.deletedAt == nil else { return false }
         let oldTitle = note.title
         let oldContent = note.content
@@ -1055,7 +1064,8 @@ final class NotesViewModel: ObservableObject {
                 note,
                 title: title,
                 content: content,
-                richTextContentData: richTextContentData
+                richTextContentData: richTextContentData,
+                legacyModeAuthorized: true
             )
         }
         guard note.deletedAt == nil else { return false }
