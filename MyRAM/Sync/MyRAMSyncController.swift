@@ -360,6 +360,9 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     func startNetworkingIfNeeded() {
+        // A captured-data restore may run only inside an isolated Verification app.
+        // The test-mode identity itself prevents any MPC advertising or browsing.
+        guard !runtimeConfiguration.isOfflineRestoreVerification else { return }
         guard !hasStartedNetworking else { return }
         hasStartedNetworking = true
         transportDiagnostics.record("networking.start", session: session)
