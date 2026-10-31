@@ -73,7 +73,7 @@ final class NoteSequenceStateBootstrapMigrator {
         for noteID in noteIDs {
             try beforeEachNote(noteID)
 
-            if allowsExistingStateReplacement {
+            if allowsExistingStateReplacement && !preservingDivergentStates {
                 do {
                     _ = try await store.loadOrBootstrapForLegacyMarkMigration(
                         noteID: noteID
