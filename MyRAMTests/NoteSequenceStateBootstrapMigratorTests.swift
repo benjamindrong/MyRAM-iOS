@@ -111,6 +111,92 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         XCTAssertEqual(state.visibleText, "Current")
     }
 
+    func testMYR238PreservesValidDivergenceWhilePreparingOtherNotes() async throws {
+        let container = try makeContainer()
+        let divergentNoteID = try insertNote(body: "Prior sequence body", in: container)
+        let healthyNoteID = try insertNote(body: "Healthy body", in: container)
+        try await makeMigrator(
+            container, allowsExistingStateReplacement: false
+        ).runToCompletion()
+        let originalRecords = try fetchRecords(in: container)
+        let divergentRecord = try XCTUnwrap(
+            originalRecords.first { $0.noteID == divergentNoteID }
+        )
+        let originalPayload = divergentRecord.statePayloadData
+        let originalRevision = divergentRecord.revision
+        try updateNote(noteID: divergentNoteID, body: "Saved note body", in: container)
+
+        let quarantined = try await makeMigrator(
+            container, allowsExistingStateReplacement: false
+        ).runPreservingDivergentStates()
+
+        XCTAssertEqual(quarantined, Set([divergentNoteID]))
+        let records = try fetchRecords(in: container)
+        let retained = try XCTUnwrap(records.first { $0.noteID == divergentNoteID })
+        XCTAssertEqual(retained.revision, originalRevision)
+        XCTAssertEqual(retained.statePayloadData, originalPayload)
+        let sequence = try NoteSequenceStatePersistenceCodec
+            .decodeStructurallyValidatedState(record: retained, noteID: divergentNoteID)
+        XCTAssertEqual(sequence.visibleText, "Prior sequence body")
+        let context = ModelContext(container)
+        let notes = try context.fetch(FetchDescriptor<Note>())
+        XCTAssertEqual(
+            notes.first { $0.id == divergentNoteID }?.content,
+            "Saved note body"
+        )
+        XCTAssertEqual(
+            notes.first { $0.id == healthyNoteID }?.content,
+            "Healthy body"
+        )
+        let rerun = try await makeMigrator(
+            container, allowsExistingStateReplacement: false
+        ).runPreservingDivergentStates()
+        XCTAssertEqual(rerun, quarantined)
+        XCTAssertEqual(
+            try XCTUnwrap(fetchRecords(in: container).first {
+                $0.noteID == divergentNoteID
+            }).statePayloadData,
+            originalPayload
+        )
+    }
+
+    func testMYR238MalformedSequenceCannotBeQuarantinedAsTextDivergence() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Authoritative body", in: container)
+        try await makeMigrator(
+            container, allowsExistingStateReplacement: false
+        ).runToCompletion()
+        let context = ModelContext(container)
+        let record = try XCTUnwrap(
+            context.fetch(FetchDescriptor<NoteSequenceStateRecord>()).first
+        )
+        record.statePayloadData = Data("corrupt".utf8)
+        record.payloadByteCount = record.statePayloadData.count
+        try context.save()
+        let malformedPayload = record.statePayloadData
+
+        do {
+            _ = try await makeMigrator(
+                container, allowsExistingStateReplacement: false
+            ).runPreservingDivergentStates()
+            XCTFail("Malformed sequence must not be mistaken for a safe divergence")
+        } catch let error as NoteSequenceStateStoreError {
+            XCTAssertEqual(error, .corruptState)
+        }
+
+        XCTAssertEqual(
+            try XCTUnwrap(fetchRecords(in: container).first).statePayloadData,
+            malformedPayload
+        )
+        let requestedID = noteID
+        XCTAssertEqual(
+            try XCTUnwrap(ModelContext(container).fetch(
+                FetchDescriptor<Note>(predicate: #Predicate { $0.id == requestedID })
+            ).first).content,
+            "Authoritative body"
+        )
+    }
+
     func testMigrationStopsAtCorruptRowWithoutOverwritingIt() async throws {
         try await assertMigrationStopsWithoutOverwriting { record in
             record.statePayloadData = Data("corrupt".utf8)
