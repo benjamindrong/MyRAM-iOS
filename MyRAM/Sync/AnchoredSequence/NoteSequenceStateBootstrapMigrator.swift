@@ -49,6 +49,17 @@ final class NoteSequenceStateBootstrapMigrator {
     }
 
     func runToCompletion() async throws {
+        _ = try await migrate(preservingDivergentStates: false)
+    }
+
+    /// The captured note body and its structurally valid anchored sequence are
+    /// independent retained authorities until an explicit conflict resolution.
+    /// A divergence is not permission to replace either representation.
+    func runPreservingDivergentStates() async throws -> Set<UUID> {
+        try await migrate(preservingDivergentStates: true)
+    }
+
+    private func migrate(preservingDivergentStates: Bool) async throws -> Set<UUID> {
         let enumerationContext = ModelContext(container)
         enumerationContext.autosaveEnabled = false
         let noteIDs = try enumerationContext.fetch(FetchDescriptor<Note>())
@@ -58,6 +69,7 @@ final class NoteSequenceStateBootstrapMigrator {
             }
 
         let store = SwiftDataNoteSequenceStateStore(container: container)
+        var divergentNoteIDs = Set<UUID>()
         for noteID in noteIDs {
             try beforeEachNote(noteID)
 
@@ -73,18 +85,45 @@ final class NoteSequenceStateBootstrapMigrator {
                     )
                 }
             } else {
-                switch try await store.load(noteID: noteID) {
-                case .missing:
-                    _ = try await store.loadOrBootstrapForLegacyMarkMigration(
-                        noteID: noteID
-                    )
-                case .present:
-                    break
+                do {
+                    switch try await store.load(noteID: noteID) {
+                    case .missing:
+                        _ = try await store.loadOrBootstrapForLegacyMarkMigration(
+                            noteID: noteID
+                        )
+                    case .present:
+                        break
+                    }
+                } catch let error as NoteSequenceStateStoreError {
+                    guard preservingDivergentStates,
+                          error == .corruptState,
+                          try hasValidSequenceWithDivergentBody(noteID: noteID) else {
+                        throw error
+                    }
+                    divergentNoteIDs.insert(noteID)
+                    continue
                 }
             }
 
             try await migrateStructuralMarksIfNeeded(noteID: noteID)
         }
+        return divergentNoteIDs
+    }
+
+    private func hasValidSequenceWithDivergentBody(noteID: UUID) throws -> Bool {
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        guard let note = try fetchNote(noteID: noteID, in: context),
+              let record = try fetchRecord(noteID: noteID, in: context) else {
+            return false
+        }
+        // Do not classify malformed, unsupported, or truncated sequence
+        // payloads as a recoverable text divergence.
+        let sequence = try NoteSequenceStatePersistenceCodec
+            .decodeStructurallyValidatedState(record: record, noteID: noteID)
+        return !NoteSequenceStateExactText.matches(
+            sequence.visibleText, note.content
+        )
     }
 
     private func migrateStructuralMarksIfNeeded(
