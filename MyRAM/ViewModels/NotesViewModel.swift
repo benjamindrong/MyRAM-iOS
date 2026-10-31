@@ -402,6 +402,22 @@ final class NotesViewModel: ObservableObject {
 
     private var isStartupSyncRecoveryPending = false
 
+    // An unresolved local body/CRDT divergence must not be modified by editor,
+    // list, attachment, folder, or undo actions. Both versions stay in place.
+    private var startupQuarantinedNoteIDs: Set<UUID> = []
+
+    func isolateDivergentNoteIDs(_ noteIDs: Set<UUID>) {
+        startupQuarantinedNoteIDs = noteIDs
+    }
+
+    private func mayMutateNote(_ note: Note?) -> Bool {
+        guard let note, startupQuarantinedNoteIDs.contains(note.id) else {
+            return true
+        }
+        syncBatchErrorMessage = "This note is protected because its saved text and sync history disagree."
+        return false
+    }
+
     func completeStartupSyncRecovery() {
         isStartupSyncRecoveryPending = false
     }
@@ -691,7 +707,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func renameNote(_ note: Note, to newTitle: String) {
-        guard note.deletedAt == nil else { return }
+        guard note.deletedAt == nil, mayMutateNote(note) else { return }
         let oldTitle = note.title
         let trimmedTitle = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         note.title = trimmedTitle
@@ -713,7 +729,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func setNotePinned(_ note: Note, isPinned: Bool) {
-        guard note.deletedAt == nil else { return }
+        guard note.deletedAt == nil, mayMutateNote(note) else { return }
         let currentPinned = note.isPinned ?? false
         guard currentPinned != isPinned else { return }
         note.isPinned = isPinned
@@ -768,6 +784,8 @@ final class NotesViewModel: ObservableObject {
     }
 
     func deleteFolder(_ folder: Folder, preserveNotes: Bool = false) {
+        let affected = allFoldersInSubtree(of: folder).flatMap(\.notes)
+        guard affected.allSatisfy({ mayMutateNote($0) }) else { return }
         let activeFolder = currentFolder
         let shouldNavigateToParent = activeFolder.map { isDescendantOrSame($0, of: folder) } ?? false
         let targetFolder = shouldNavigateToParent ? folder.parentFolder : currentFolder
@@ -932,6 +950,7 @@ final class NotesViewModel: ObservableObject {
         content: String,
         richTextContentData: Data? = nil
     ) -> Bool {
+        guard mayMutateNote(note) else { return false }
         // Activated notes must commit body + anchored sequence in one transaction.
         // No caller is authorized to bypass this mode gate for legacy persistence.
         guard !SyncBatchAnchoredPayloadCapability.isEnabled else {
@@ -1008,6 +1027,7 @@ final class NotesViewModel: ObservableObject {
         structuralFormattingProjection: NoteStructuralFormattingProjection? = nil,
         generation: UUID
     ) -> Bool {
+        guard mayMutateNote(note) else { return false }
         let snapshot = NoteEditorLifecycleSnapshot(
             noteID: note.id,
             title: title,
@@ -1056,6 +1076,7 @@ final class NotesViewModel: ObservableObject {
         activationEnabled: Bool,
         operationIDReserver: any SyncOperationIDReserving
     ) async -> Bool {
+        guard mayMutateNote(note) else { return false }
         guard activationEnabled else {
             return commitNoteEdit(
                 note,
@@ -1139,7 +1160,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func addPinnedThought(to note: Note, text: String = "") -> PinnedThought? {
-        guard note.deletedAt == nil else { return nil }
+        guard note.deletedAt == nil, mayMutateNote(note) else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextOrder = ((note.pinnedThoughts.map(\.order).max()) ?? -1) + 1
         let thought = PinnedThought(text: trimmed, order: nextOrder, note: note)
@@ -1158,6 +1179,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func updatePinnedThought(_ thought: PinnedThought, text: String) {
+        guard mayMutateNote(thought.note) else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard thought.text != trimmed else { return }
         thought.text = trimmed
@@ -1176,6 +1198,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func setPinnedThoughtCollapsed(_ thought: PinnedThought, isCollapsed: Bool) {
+        guard mayMutateNote(thought.note) else { return }
         guard thought.isCollapsed != isCollapsed else { return }
         thought.isCollapsed = isCollapsed
         thought.modifiedAt = .now
@@ -1197,7 +1220,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func movePinnedThought(_ thought: PinnedThought, direction: PinnedThoughtMoveDirection) {
-        guard let note = thought.note else { return }
+        guard let note = thought.note, mayMutateNote(note) else { return }
         var orderedThoughts = sortedPinnedThoughts(for: note)
         guard let currentIndex = orderedThoughts.firstIndex(where: { $0.id == thought.id }) else { return }
         let targetIndex: Int
@@ -1228,6 +1251,7 @@ final class NotesViewModel: ObservableObject {
 
     func movePinnedThought(_ thought: PinnedThought, before targetThought: PinnedThought) {
         guard let note = thought.note,
+              mayMutateNote(note),
               targetThought.note?.id == note.id,
               thought.id != targetThought.id else { return }
         var orderedThoughts = sortedPinnedThoughts(for: note)
@@ -1254,7 +1278,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func movePinnedThought(_ thought: PinnedThought, toIndex targetIndex: Int) {
-        guard let note = thought.note else { return }
+        guard let note = thought.note, mayMutateNote(note) else { return }
         var orderedThoughts = sortedPinnedThoughts(for: note)
         guard let currentIndex = orderedThoughts.firstIndex(where: { $0.id == thought.id }) else { return }
         let clampedTargetIndex = min(max(targetIndex, 0), orderedThoughts.count)
@@ -1290,6 +1314,7 @@ final class NotesViewModel: ObservableObject {
 
     func deletePinnedParagraph(_ thought: PinnedThought) {
         let note = thought.note
+        guard mayMutateNote(note) else { return }
         let originalModifiedAt = thought.modifiedAt
         var snapshot: SyncConflictStoreSnapshot?
         let deletionPayload: MyRAMPinnedThoughtSyncPayload
@@ -1437,7 +1462,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func addPhotoAttachment(to note: Note, imageData: Data) {
-        guard note.deletedAt == nil else { return }
+        guard note.deletedAt == nil, mayMutateNote(note) else { return }
         let attachment = NotePhotoAttachment(imageData: imageData, note: note)
         context.insert(attachment)
         note.photoAttachments.append(attachment)
@@ -1461,7 +1486,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func removePhotoAttachment(_ attachment: NotePhotoAttachment, from note: Note) {
-        guard note.deletedAt == nil else { return }
+        guard note.deletedAt == nil, mayMutateNote(note) else { return }
         let deletionPayload = MyRAMPhotoAttachmentSyncPayload(attachment: attachment, isDeleted: true)
         note.photoAttachments.removeAll { $0.id == attachment.id }
         context.delete(attachment)
@@ -1477,6 +1502,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func deleteNote(_ note: Note) {
+        guard mayMutateNote(note) else { return }
         let snapshot = NoteDeletionUndoSnapshot(
             noteID: note.id,
             previousDeletedAt: note.deletedAt,
@@ -1502,7 +1528,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func moveNote(_ note: Note, to destinationFolder: Folder?) {
-        guard note.deletedAt == nil else { return }
+        guard note.deletedAt == nil, mayMutateNote(note) else { return }
         if note.folder?.id == destinationFolder?.id { return }
         let previousFolderID = note.folder?.id
         let destinationFolderID = destinationFolder?.id
@@ -1528,6 +1554,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func restoreNote(_ note: Note) {
+        guard mayMutateNote(note) else { return }
         do {
             _ = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
                 for: note,
@@ -1581,6 +1608,7 @@ final class NotesViewModel: ObservableObject {
 #endif
 
     func permanentlyDeleteNote(_ note: Note) {
+        guard mayMutateNote(note) else { return }
         removeUndoHistoryReferencingDeletedNote(noteID: note.id)
         context.delete(note)
         try? context.save()
@@ -1609,7 +1637,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func undoNoteCreation(using snapshot: NoteCreationUndoSnapshot) {
-        guard let note = fetchNote(withID: snapshot.noteID) else {
+        guard let note = fetchNote(withID: snapshot.noteID), mayMutateNote(note) else {
             refreshCurrentFolderContent()
             return
         }
@@ -1710,7 +1738,8 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func applyNoteMove(noteID: UUID, destinationFolderID: UUID?) {
-        guard let note = fetchNote(withID: noteID), note.deletedAt == nil else {
+        guard let note = fetchNote(withID: noteID),
+              note.deletedAt == nil, mayMutateNote(note) else {
             refreshCurrentFolderContent()
             return
         }
@@ -1750,7 +1779,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func redoNoteDeletion(using snapshot: NoteDeletionUndoSnapshot) {
-        guard let note = fetchNote(withID: snapshot.noteID) else {
+        guard let note = fetchNote(withID: snapshot.noteID), mayMutateNote(note) else {
             refreshCurrentFolderContent()
             return
         }
@@ -1770,6 +1799,7 @@ final class NotesViewModel: ObservableObject {
         let notesToRestore = snapshot.noteMoves.compactMap {
             fetchNote(withID: $0.noteID)
         }
+        guard notesToRestore.allSatisfy({ mayMutateNote($0) }) else { return false }
         do {
             for note in notesToRestore {
                 _ = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
@@ -1817,6 +1847,12 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func redoFolderDeletion(using snapshot: FolderDeletionUndoSnapshot) {
+        guard !snapshot.noteMoves.contains(where: {
+            startupQuarantinedNoteIDs.contains($0.noteID)
+        }) else {
+            syncBatchErrorMessage = "A protected note prevents this folder action."
+            return
+        }
         let deletedAt = Date()
         let folderIDs = Set(snapshot.folders.map(\.id))
         let rootFolderRecord = snapshot.folders.min { $0.depth < $1.depth }
