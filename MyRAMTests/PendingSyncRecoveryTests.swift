@@ -948,6 +948,53 @@ final class NotesListStateBootstrapTests: XCTestCase {
         let before = try signature(container)
         XCTAssertFalse(before.0.isEmpty, "Captured note store unexpectedly empty")
 
+        // Classify the persisted sequence authority BEFORE startup may write a
+        // migration. Never print IDs, bodies, payloads, filenames, or error descriptions.
+        let preflightContext = ModelContext(container)
+        preflightContext.autosaveEnabled = false
+        let persistedRows = try preflightContext.fetch(FetchDescriptor<NoteSequenceStateRecord>())
+        let existingRows = Dictionary(uniqueKeysWithValues: persistedRows.map { ($0.noteID, $0) })
+        let inputNotes = try preflightContext.fetch(FetchDescriptor<Note>())
+        var missingStateRows = 0
+        var invalidStateRows = 0
+        var mismatchedVisibleText = 0
+        var validStateRows = 0
+        var otherSequenceErrorRows = 0
+        for note in inputNotes {
+            guard let record = existingRows[note.id] else {
+                missingStateRows += 1
+                continue
+            }
+            do {
+                let state = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+                    record: record, noteID: note.id
+                )
+                if NoteSequenceStateExactText.matches(state.visibleText, note.content) {
+                    validStateRows += 1
+                } else {
+                    mismatchedVisibleText += 1
+                }
+            } catch let error as NoteSequenceStateStoreError {
+                if case .corruptState = error {
+                    invalidStateRows += 1
+                } else {
+                    otherSequenceErrorRows += 1
+                }
+            } catch {
+                otherSequenceErrorRows += 1
+            }
+        }
+        let safeSequenceClassification =
+            "MYR238_ISOLATED_SEQUENCE_PREFLIGHT" +
+            " note_rows=\(inputNotes.count)" +
+            " sequence_rows=\(persistedRows.count)" +
+            " structurally_invalid=\(invalidStateRows)" +
+            " visible_body_mismatch=\(mismatchedVisibleText)" +
+            " missing_sequence=\(missingStateRows)" +
+            " valid_sequence=\(validStateRows)" +
+            " other_error=\(otherSequenceErrorRows)"
+        print(safeSequenceClassification)
+
         var startedNetworking = false
         var startupFailureStage = "unknown"
         var startupFailureType = "unknown"
@@ -1017,7 +1064,12 @@ final class NotesListStateBootstrapTests: XCTestCase {
                 " error_domain=\(sanitized(startupFailureDomain))" +
                 " error_code=\(startupFailureCode)" +
                 " underlying_domain=\(sanitized(startupUnderlyingDomain))" +
-                " underlying_code=\(startupUnderlyingCode)"
+                " underlying_code=\(startupUnderlyingCode)" +
+                " sequence_invalid=\(invalidStateRows)" +
+                " sequence_body_mismatch=\(mismatchedVisibleText)" +
+                " sequence_missing=\(missingStateRows)" +
+                " sequence_valid=\(validStateRows)" +
+                " sequence_other=\(otherSequenceErrorRows)"
             )
             return
         }
