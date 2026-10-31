@@ -16,7 +16,7 @@ final class NotesListState: ObservableObject {
 
     struct BootstrapActions {
         var rollbackIfNeededOnLaunch: @MainActor () async throws -> Void
-        var migrateNoteSequenceStates: @MainActor () async throws -> Void
+        var migrateNoteSequenceStates: @MainActor () async throws -> Set<UUID>
         var completeModelInitializationAfterMigration: @MainActor () -> Void = {}
         var refreshPendingSyncStatus: @MainActor () async -> Void
         var resumeOutboundAfterRecovery: @MainActor () -> Void
@@ -27,6 +27,7 @@ final class NotesListState: ObservableObject {
     let vm: NotesViewModel
     let syncController: MyRAMSyncController
     @Published private(set) var bootstrapState: BootstrapState = .recovering
+    @Published private(set) var divergentNoteIDs: Set<UUID> = []
     @Published private(set) var readableNotesDuringStartupFailure: [Note] = []
     @Published private(set) var didFailToReadNotesDuringStartupFailure = false
     @Published private(set) var startupFailureSupportDetails: String?
@@ -81,7 +82,7 @@ final class NotesListState: ObservableObject {
                                 return RTFCoding.encode(attributed)
                             }
                         }
-                    ).runToCompletion()
+                    ).runPreservingDivergentStates()
                 },
                 completeModelInitializationAfterMigration: { [vm] in
                     vm.completeStartupInitializationAfterMigration()
@@ -131,11 +132,22 @@ final class NotesListState: ObservableObject {
             // Local model preparation is independent of the sync transaction.
             // Do not rerun migration against an already mounted editor on retry.
             if !didPrepareLocalNotes {
-                try await bootstrapActions.migrateNoteSequenceStates()
+                divergentNoteIDs = try await bootstrapActions.migrateNoteSequenceStates()
                 bootstrapActions.completeModelInitializationAfterMigration()
                 didPrepareLocalNotes = true
             }
-            if let recoveryError {
+            if !divergentNoteIDs.isEmpty {
+                // The original note text and anchored history remain intact.
+                // A differing note must never trigger bulk replacement, and no
+                // pending sync work can be sent until the conflict is resolved.
+                syncRecoveryMessage = "One or more notes have conflicting saved text and sync history. Those notes are read-only; other notes remain editable. Sync is paused."
+                startupFailureSupportDetails = "Local note-state divergence requires explicit resolution."
+                if let recoveryError {
+                    Self.startupLogger.error(
+                        "Pending sync recovery also failed: \(String(describing: recoveryError), privacy: .private)"
+                    )
+                }
+            } else if let recoveryError {
                 let diagnostic = String(describing: recoveryError)
                 Self.startupLogger.error("Pending sync recovery failed: \(diagnostic, privacy: .private)")
                 startupFailureSupportDetails = "Pending sync recovery: \(diagnostic)"
@@ -455,6 +467,7 @@ struct NotesListView: View {
         .modifier(MobileNoteEditorSheet(
             selectedNote: $selectedNote,
             vm: vm,
+            divergentNoteIDs: state.divergentNoteIDs,
             syncController: syncController,
             fileOperationBridge: editorFileOperationBridge,
             onOpenSyncConflicts: {
@@ -971,6 +984,9 @@ struct NotesListView: View {
     @ViewBuilder
     private var desktopEditorDetail: some View {
         if let selectedNote {
+            if state.divergentNoteIDs.contains(selectedNote.id) {
+                DivergentNoteReadOnlyView(note: selectedNote)
+            } else {
             NoteEditorView(
                 vm: vm,
                 note: selectedNote,
@@ -988,6 +1004,7 @@ struct NotesListView: View {
                 }
             )
             .id(selectedNote.id)
+            }
         } else {
             ContentUnavailableView(
                 "Select a Note",
@@ -2005,6 +2022,7 @@ private struct SharePayload: Identifiable {
 private struct MobileNoteEditorSheet: ViewModifier {
     @Binding var selectedNote: Note?
     @ObservedObject var vm: NotesViewModel
+    let divergentNoteIDs: Set<UUID>
     @ObservedObject var syncController: MyRAMSyncController
     @ObservedObject var fileOperationBridge: NoteEditorFileOperationBridge
     let onOpenSyncConflicts: () -> Void
@@ -2016,6 +2034,9 @@ private struct MobileNoteEditorSheet: ViewModifier {
         } else {
             content
                 .sheet(item: $selectedNote) { note in
+                    if divergentNoteIDs.contains(note.id) {
+                        DivergentNoteReadOnlyView(note: note)
+                    } else {
                     NoteEditorView(
                         vm: vm,
                         note: note,
@@ -2027,8 +2048,32 @@ private struct MobileNoteEditorSheet: ViewModifier {
                         syncConflicts: vm.activeSyncConflicts(for: note),
                         onOpenSyncConflicts: onOpenSyncConflicts
                     )
+                    }
                 }
         }
+    }
+}
+
+private struct DivergentNoteReadOnlyView: View {
+    let note: Note
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Label("Editing paused for this note", systemImage: "exclamationmark.triangle")
+                    .font(.headline)
+                Text("The saved note text and its synchronization history disagree. Both remain preserved. Other notes can still be edited; sync is paused.")
+                    .font(.subheadline)
+                Text(note.title.isEmpty ? "Untitled" : note.title)
+                    .font(.title2.bold())
+                Text(note.content)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding()
+        }
+        .navigationTitle("Protected Note")
+        .accessibilityIdentifier("divergent-note-readonly")
     }
 }
 
