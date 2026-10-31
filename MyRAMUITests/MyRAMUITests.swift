@@ -101,6 +101,50 @@ final class MyRAMUITests: XCTestCase {
         XCTAssertEqual(editor.value as? String, "MYR238 synthetic durable offline text")
     }
 
+    /// The full Verification app opens a copied, nonempty, captured database.
+    /// The caller stages the fixture into a new disposable Simulator first;
+    /// this test must never run against production or an empty test store.
+    func testMYR238CapturedFullAppReadEditSaveAndRelaunch() throws {
+        guard ProcessInfo.processInfo.environment["MYR238_CAPTURED_APP_RESTORE"] == "1" else {
+            throw XCTSkip("Requires the sealed captured restore in a disposable Verification simulator")
+        }
+        let app = XCUIApplication(bundleIdentifier: "com.northsignalstudio.myram.verification")
+        app.launch()
+
+        // A protected note from the 23-note capture must be present. A fresh,
+        // empty Verification store cannot satisfy this gate.
+        let warning = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS %@", "sync history")
+        ).firstMatch
+        XCTAssertTrue(warning.waitForExistence(timeout: 15),
+                      "Captured divergence was not loaded into the full app")
+        let newTitle = "MYR238 Full App Restored Edit"
+        let newBody = "MYR238 verified disposable durable edit"
+        openNewNote(in: app)
+        app.buttons["edit-note-title"].tap()
+        let alert = app.alerts["Edit Title"]
+        XCTAssertTrue(alert.waitForExistence(timeout: Timeout.standard))
+        replaceText(in: alert.textFields.firstMatch, with: newTitle, fallbackExistingText: "Untitled")
+        alert.buttons["Save"].tap()
+        let body = findElement("note-editor-body", in: app)
+        XCTAssertTrue(body.waitForExistence(timeout: Timeout.standard))
+        body.tap()
+        body.typeText(newBody)
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        XCTAssertTrue(body.waitForExistence(timeout: Timeout.standard))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(warning.waitForExistence(timeout: 15))
+        let row = app.staticTexts[newTitle].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 15),
+                      "The new note was not present after relaunch")
+        row.tap()
+        let restoredBody = findElement("note-editor-body", in: app)
+        XCTAssertTrue(restoredBody.waitForExistence(timeout: Timeout.standard))
+        XCTAssertEqual(restoredBody.value as? String, newBody)
+    }
+
     func testNewNoteOpensWithoutAttachments() throws {
         let app = makeApp()
         app.launch()
