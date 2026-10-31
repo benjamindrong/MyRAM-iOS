@@ -5,6 +5,69 @@ import XCTest
 
 @MainActor
 final class MacNotePersistenceAdapterTests: XCTestCase {
+    func testMYR238IsolatedProductionCaptureReadableByMacModelsWithoutNetworking() throws {
+        guard let scratchRoot = ProcessInfo.processInfo.environment["MYR238_ISOLATED_RESTORE_ROOT"],
+              !scratchRoot.isEmpty else {
+            throw XCTSkip("Only the dedicated sealed-capture rehearsal supplies the isolated fixture")
+        }
+        let root = URL(fileURLWithPath: scratchRoot, isDirectory: true)
+            .resolvingSymlinksInPath().standardizedFileURL
+        let storeURL = root.appendingPathComponent(
+            "restored/group/Library/Application Support/MyRAM_Main.store"
+        )
+        // This test must never open the original iPhone capture, an installed
+        // application container, or the Mac production SwiftData database.
+        guard root.lastPathComponent.hasPrefix("MYR238-"),
+              root.path.contains("/MYR-238/"),
+              storeURL.path.hasPrefix(root.path + "/"),
+              FileManager.default.fileExists(atPath: storeURL.path),
+              !storeURL.resolvingSymlinksInPath().path.hasPrefix("/var/mobile/") else {
+            XCTFail("Isolated restore input is not the approved disposable fixture")
+            return
+        }
+
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR238-Isolated-Read-Only-Model-Check",
+            schema: schema,
+            url: storeURL,
+            cloudKitDatabase: .none
+        )
+        let container = try ModelContainer(for: schema, configurations: configuration)
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let allNotes = try context.fetch(FetchDescriptor<Note>())
+        XCTAssertFalse(allNotes.isEmpty, "Restored note store must not be empty")
+        let adapter = MacNotePersistenceAdapter(context: context)
+        let visibleNotes = try adapter.loadNotes()
+        let expectedVisible = allNotes.filter { $0.deletedAt == nil }
+        XCTAssertTrue(
+            Set(visibleNotes.map(\.id)) == Set(expectedVisible.map(\.id)),
+            "Production note list omitted or added restored notes"
+        )
+        for original in expectedVisible {
+            let readBack = try adapter.loadNote(id: original.id)
+            XCTAssertTrue(readBack?.id == original.id)
+            XCTAssertTrue(readBack?.title == original.title)
+            XCTAssertTrue(readBack?.content == original.content)
+            XCTAssertTrue(readBack?.createdAt == original.createdAt)
+            XCTAssertTrue(readBack?.modifiedAt == original.modifiedAt)
+            XCTAssertTrue(readBack?.richTextContentData == original.richTextContentData)
+            XCTAssertTrue(readBack?.isPinned == original.isPinned)
+            XCTAssertTrue(readBack?.folder?.id == original.folder?.id)
+            XCTAssertTrue(
+                Set(readBack?.pinnedThoughts.map(\.id) ?? []) ==
+                    Set(original.pinnedThoughts.map(\.id))
+            )
+            XCTAssertTrue(
+                Set(readBack?.photoAttachments.map(\.id) ?? []) ==
+                    Set(original.photoAttachments.map(\.id))
+            )
+        }
+        XCTAssertFalse(context.hasChanges, "Reading must not produce unsaved changes")
+        print("MYR238_ISOLATED_NATIVE_MODEL_READ_PASS")
+    }
+
     func testMacCreateNoteCommitsNoteAndRevisionZeroStateTogether() throws {
         let container = try makeInMemoryContainer()
         let context = container.mainContext
