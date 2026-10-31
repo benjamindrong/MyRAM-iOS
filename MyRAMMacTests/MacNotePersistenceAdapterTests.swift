@@ -5,6 +5,43 @@ import XCTest
 
 @MainActor
 final class MacNotePersistenceAdapterTests: XCTestCase {
+    func testActivatedMacPersistenceRejectsLegacyPreparedEditWithoutChangingSequence() async throws {
+        XCTAssertTrue(SyncBatchAnchoredPayloadCapability.isEnabled)
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let note = Note(title: "Original", content: "Original body")
+        context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
+        let record = try XCTUnwrap(
+            context.fetch(FetchDescriptor<NoteSequenceStateRecord>()).first
+        )
+        let originalPayload = record.statePayloadData
+        let originalRevision = record.revision
+        let adapter = MacNotePersistenceAdapter(context: context)
+        let legacyPrepared = try await adapter.prepareLocalNoteEditCore(
+            noteID: note.id,
+            proposedAttributedContent: NSAttributedString(string: "Unpaired body"),
+            activationEnabled: false,
+            operationIDReserver: MyRAMSyncOperationIDAllocator.shared
+        )
+
+        XCTAssertThrowsError(try adapter.persistPreparedLocalNoteEdit(legacyPrepared)) { error in
+            XCTAssertEqual(
+                error as? MacPendingSaveFailure,
+                .missingAnchoredAuthority(noteID: note.id)
+            )
+        }
+        XCTAssertEqual(note.content, "Original body")
+        XCTAssertEqual(record.revision, originalRevision)
+        XCTAssertEqual(record.statePayloadData, originalPayload)
+        XCTAssertEqual(
+            try ModelContext(container).fetch(FetchDescriptor<Note>()).first?.content,
+            "Original body"
+        )
+        XCTAssertFalse(context.hasChanges)
+    }
+
     func testMYR238IsolatedProductionCaptureReadableByMacModelsWithoutNetworking() throws {
         guard let scratchRoot = ProcessInfo.processInfo.environment["MYR238_ISOLATED_RESTORE_ROOT"],
               !scratchRoot.isEmpty else {
