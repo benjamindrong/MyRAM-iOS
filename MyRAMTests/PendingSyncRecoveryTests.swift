@@ -1101,6 +1101,89 @@ final class NotesListStateBootstrapTests: XCTestCase {
         print("MYR238_IOS_ISOLATED_REAL_STARTUP_PASS")
     }
 
+    func testMYR238DivergentNoteReadOnlyHealthyNotesRemainEditableWithSyncPaused() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let protectedNote = Note(title: "Protected", content: "Prior sequence text")
+        let healthyNote = Note(title: "Healthy", content: "Durable text")
+        context.insert(protectedNote)
+        context.insert(healthyNote)
+        try context.save()
+
+        try await NoteSequenceStateBootstrapMigrator(
+            container: container, allowsExistingStateReplacement: false
+        ).runToCompletion()
+        let protectedID = protectedNote.id
+        let existingRecord = try XCTUnwrap(
+            context.fetch(FetchDescriptor<NoteSequenceStateRecord>())
+                .first { $0.noteID == protectedID }
+        )
+        let retainedPayload = existingRecord.statePayloadData
+        let retainedRevision = existingRecord.revision
+
+        protectedNote.content = "Newer saved text"
+        try context.save()
+        var startedNetworking = false
+        var resumedOutbound = false
+        let state = NotesListState(
+            context: context,
+            startsBootstrapAutomatically: false
+        ) { vm, _ in
+            NotesListState.BootstrapActions(
+                rollbackIfNeededOnLaunch: {},
+                migrateNoteSequenceStates: {
+                    try await NoteSequenceStateBootstrapMigrator(
+                        container: container, allowsExistingStateReplacement: false
+                    ).runPreservingDivergentStates()
+                },
+                completeModelInitializationAfterMigration: {
+                    vm.completeStartupInitializationAfterMigration()
+                },
+                refreshPendingSyncStatus: {},
+                resumeOutboundAfterRecovery: { resumedOutbound = true },
+                startNetworkingIfNeeded: { startedNetworking = true },
+                resumePendingConvergencePresentationIfNeeded: {}
+            )
+        }
+
+        await state.bootstrapAfterRecovery()
+
+        XCTAssertEqual(state.bootstrapState, .ready)
+        XCTAssertEqual(state.divergentNoteIDs, Set([protectedID]))
+        XCTAssertFalse(startedNetworking)
+        XCTAssertFalse(resumedOutbound)
+        XCTAssertNotNil(state.syncRecoveryMessage)
+        XCTAssertTrue(state.vm.notes.contains { $0.id == healthyNote.id })
+        XCTAssertTrue(state.vm.notes.contains { $0.id == protectedID })
+
+        state.vm.renameNote(healthyNote, to: "Edited safely")
+        XCTAssertEqual(healthyNote.title, "Edited safely")
+        state.vm.renameNote(protectedNote, to: "Must not save")
+        state.vm.deleteNote(protectedNote)
+        state.vm.permanentlyDeleteNote(protectedNote)
+        XCTAssertNil(state.vm.addPinnedThought(to: protectedNote, text: "Must not save"))
+        XCTAssertEqual(protectedNote.title, "Protected")
+        XCTAssertEqual(protectedNote.content, "Newer saved text")
+        XCTAssertNil(protectedNote.deletedAt)
+        let retained = try XCTUnwrap(
+            ModelContext(container).fetch(FetchDescriptor<NoteSequenceStateRecord>())
+                .first { $0.noteID == protectedID }
+        )
+        XCTAssertEqual(retained.statePayloadData, retainedPayload)
+        XCTAssertEqual(retained.revision, retainedRevision)
+        XCTAssertEqual(
+            try NoteSequenceStatePersistenceCodec
+                .decodeStructurallyValidatedState(record: retained, noteID: protectedID)
+                .visibleText,
+            "Prior sequence text"
+        )
+        XCTAssertEqual(
+            try ModelContext(container).fetch(FetchDescriptor<Note>())
+                .first { $0.id == healthyNote.id }?.title,
+            "Edited safely"
+        )
+    }
+
     func testBootstrapRunsLaunchRecoveryBeforeNetworkingAndEditing() async throws {
         let container = try makeContainer()
         var events: [String] = []
