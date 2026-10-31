@@ -333,6 +333,115 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         XCTAssertEqual(note.richTextContentData, legacyData)
     }
 
+    func testMYR238DiskBackedMigrationResumesAfterInterruptionWithoutLosingNotes() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-238-Migration-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storeURL = directory.appendingPathComponent("MyRAM.store")
+        let firstID = UUID(uuidString: "00000000-0000-0000-0000-000000238001")!
+        let secondID = UUID(uuidString: "00000000-0000-0000-0000-000000238002")!
+
+        do {
+            let container = try makeDiskContainer(url: storeURL)
+            try insertNote(noteID: firstID, body: "First preserved note", in: container)
+            try insertNote(noteID: secondID, body: "Second preserved note", in: container)
+
+            do {
+                try await makeMigrator(container) { noteID in
+                    if noteID == secondID { throw MigratorTestFailure.interrupted }
+                }.runToCompletion()
+                XCTFail("Expected migration interruption")
+            } catch MigratorTestFailure.interrupted {
+                // First note was durably migrated; the second remains pending.
+            }
+            XCTAssertEqual(Set(try fetchRecords(in: container).map(\.noteID)), [firstID])
+        }
+
+        do {
+            let reopened = try makeDiskContainer(url: storeURL)
+            let originalNotes = try ModelContext(reopened).fetch(FetchDescriptor<Note>())
+            XCTAssertEqual(
+                Dictionary(uniqueKeysWithValues: originalNotes.map { ($0.id, $0.content) }),
+                [firstID: "First preserved note", secondID: "Second preserved note"]
+            )
+            XCTAssertEqual(Set(try fetchRecords(in: reopened).map(\.noteID)), [firstID])
+
+            try await makeMigrator(reopened).runToCompletion()
+            XCTAssertEqual(Set(try fetchRecords(in: reopened).map(\.noteID)), [firstID, secondID])
+        }
+
+        let afterSecondRestart = try makeDiskContainer(url: storeURL)
+        try await makeMigrator(afterSecondRestart).runToCompletion()
+        XCTAssertEqual(Set(try fetchRecords(in: afterSecondRestart).map(\.noteID)), [firstID, secondID])
+        let preservedNotes = try ModelContext(afterSecondRestart).fetch(FetchDescriptor<Note>())
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: preservedNotes.map { ($0.id, $0.content) }),
+            [firstID: "First preserved note", secondID: "Second preserved note"]
+        )
+    }
+
+    func testMYR238DiskBackedCorruptMarkStateFailsClosedAcrossRestarts() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-238-Migration-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storeURL = directory.appendingPathComponent("MyRAM.store")
+        let firstID = UUID(uuidString: "00000000-0000-0000-0000-000000238011")!
+        let secondID = UUID(uuidString: "00000000-0000-0000-0000-000000238012")!
+        let malformedMarks = Data([0xff, 0x00, 0x80])
+        let preservedFirstPayload: Data
+
+        do {
+            let container = try makeDiskContainer(url: storeURL)
+            try insertNote(noteID: firstID, body: "Untouched note", in: container)
+            try insertNote(noteID: secondID, body: "Keep this note", in: container)
+            try await makeMigrator(container).runToCompletion()
+
+            let context = ModelContext(container)
+            let records = try context.fetch(FetchDescriptor<NoteSequenceStateRecord>())
+            let firstRecord = try XCTUnwrap(records.first { $0.noteID == firstID })
+            let secondRecord = try XCTUnwrap(records.first { $0.noteID == secondID })
+            preservedFirstPayload = firstRecord.statePayloadData
+            secondRecord.markFormatVersion = NoteStructuralFormattingPersistence.schemaVersion
+            secondRecord.markStatePayloadData = malformedMarks
+            try context.save()
+        }
+
+        for _ in 0..<2 {
+            let reopened = try makeDiskContainer(url: storeURL)
+            do {
+                try await makeMigrator(reopened).runToCompletion()
+                XCTFail("A malformed formatting record must not be silently rewritten")
+            } catch {
+                XCTAssertEqual(error as? NoteSequenceStateStoreError, .corruptMarkState)
+            }
+
+            let notes = try ModelContext(reopened).fetch(FetchDescriptor<Note>())
+            XCTAssertEqual(
+                Dictionary(uniqueKeysWithValues: notes.map { ($0.id, $0.content) }),
+                [firstID: "Untouched note", secondID: "Keep this note"]
+            )
+            let records = try fetchRecords(in: reopened)
+            XCTAssertEqual(Set(records.map(\.noteID)), [firstID, secondID])
+            XCTAssertEqual(records.first { $0.noteID == firstID }?.statePayloadData,
+                           preservedFirstPayload)
+            XCTAssertEqual(records.first { $0.noteID == secondID }?.markStatePayloadData,
+                           malformedMarks)
+        }
+    }
+
+    private func makeDiskContainer(url: URL) throws -> ModelContainer {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR-238-Migration-Restart",
+            schema: schema,
+            url: url,
+            cloudKitDatabase: .none
+        )
+        return try ModelContainer(for: schema, configurations: configuration)
+    }
+
     private func makeContainer() throws -> ModelContainer {
         let schema = Schema(MyRAMModelRegistry.models)
         let configuration = ModelConfiguration(
