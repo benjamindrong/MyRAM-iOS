@@ -29,7 +29,7 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         XCTAssertThrowsError(try adapter.persistPreparedLocalNoteEdit(legacyPrepared)) { error in
             XCTAssertEqual(
                 error as? MacPendingSaveFailure,
-                .missingAnchoredAuthority(noteID: note.id)
+                .captureFailed(noteID: note.id)
             )
         }
         XCTAssertEqual(note.content, "Original body")
