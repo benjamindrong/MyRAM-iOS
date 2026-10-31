@@ -1038,8 +1038,8 @@ final class NotesListStateBootstrapTests: XCTestCase {
                 },
                 migrateNoteSequenceStates: {
                     do {
-                        try await NoteSequenceStateBootstrapMigrator(container: container)
-                            .runToCompletion()
+                        return try await NoteSequenceStateBootstrapMigrator(container: container)
+                            .runPreservingDivergentStates()
                     } catch {
                         recordSafeFailure(stage: "note_state_migration", error: error)
                         throw error
@@ -1109,6 +1109,7 @@ final class NotesListStateBootstrapTests: XCTestCase {
                     },
                     migrateNoteSequenceStates: {
                         events.append("migrate-note-sequence-states")
+                        return []
                     },
                     refreshPendingSyncStatus: {
                         events.append("refresh-status")
@@ -1193,7 +1194,7 @@ final class NotesListStateBootstrapTests: XCTestCase {
                         )
                     },
                     migrateNoteSequenceStates: {
-                        try await NoteSequenceStateBootstrapMigrator(container: container).runToCompletion()
+                        try await NoteSequenceStateBootstrapMigrator(container: container).runPreservingDivergentStates()
                     },
                     completeModelInitializationAfterMigration: { vm.completeStartupInitializationAfterMigration() },
                     refreshPendingSyncStatus: { await sync.refreshPendingSyncStatus() },
@@ -1320,7 +1321,7 @@ final class NotesListStateBootstrapTests: XCTestCase {
                     )
                 },
                 migrateNoteSequenceStates: {
-                    try await NoteSequenceStateBootstrapMigrator(container: readOnly).runToCompletion()
+                    try await NoteSequenceStateBootstrapMigrator(container: readOnly).runPreservingDivergentStates()
                 },
                 completeModelInitializationAfterMigration: { vm.completeStartupInitializationAfterMigration() },
                 refreshPendingSyncStatus: { XCTFail("Unwritable store must not resume sync") },
@@ -1351,7 +1352,7 @@ final class NotesListStateBootstrapTests: XCTestCase {
                     rollbackIfNeededOnLaunch: {
                         if fails { throw PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed }
                     },
-                    migrateNoteSequenceStates: {},
+                    migrateNoteSequenceStates: { [] },
                     completeModelInitializationAfterMigration: { vm.completeStartupInitializationAfterMigration() },
                     refreshPendingSyncStatus: {},
                     resumeOutboundAfterRecovery: {},
@@ -1393,6 +1394,7 @@ final class NotesListStateBootstrapTests: XCTestCase {
                     },
                     migrateNoteSequenceStates: {
                         events.append("migrate-note-sequence-states")
+                        return []
                     },
                     refreshPendingSyncStatus: {
                         events.append("refresh-status")
@@ -1472,7 +1474,7 @@ final class NotesListStateBootstrapTests: XCTestCase {
                             throw PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed
                         }
                     },
-                    migrateNoteSequenceStates: {},
+                    migrateNoteSequenceStates: { [] },
                     refreshPendingSyncStatus: {},
                     resumeOutboundAfterRecovery: {},
                     startNetworkingIfNeeded: { starts += 1 },
