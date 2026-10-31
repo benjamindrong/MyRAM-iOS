@@ -133,6 +133,7 @@ final class NotesListState: ObservableObject {
             // Do not rerun migration against an already mounted editor on retry.
             if !didPrepareLocalNotes {
                 divergentNoteIDs = try await bootstrapActions.migrateNoteSequenceStates()
+                vm.isolateDivergentNoteIDs(divergentNoteIDs)
                 bootstrapActions.completeModelInitializationAfterMigration()
                 didPrepareLocalNotes = true
             }
