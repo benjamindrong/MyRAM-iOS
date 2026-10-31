@@ -1081,16 +1081,21 @@ final class NotesListStateBootstrapTests: XCTestCase {
             )
             return
         }
-        XCTAssertTrue(startedNetworking, "Normal startup did not reach its networking boundary")
-        // Networking is intentionally not started: the injected action is a
-        // marker, never an advertiser or connection request.
+        XCTAssertEqual(state.divergentNoteIDs.count, mismatchedVisibleText)
+        XCTAssertEqual(state.divergentNoteIDs.count, 1, "Exactly one captured note must be isolated")
+        XCTAssertFalse(startedNetworking, "Startup must keep transport stopped while divergence remains")
+        XCTAssertNotNil(state.syncRecoveryMessage)
+        XCTAssertFalse(state.vm.notes.isEmpty, "Healthy local notes must remain available")
         let after = try signature(container)
         XCTAssertTrue(before.0 == after.0, "Stored note identities, contents, or metadata changed")
         XCTAssertTrue(before.1 == after.1, "Stored folder identities or metadata changed")
+        let expectedVisible = before.0.filter {
+            $0.deletedAt == nil && ($0.folderID == nil || $0.pinned == true)
+        }
         XCTAssertEqual(
-            state.vm.notes.count,
-            before.0.filter { $0.deletedAt == nil }.count,
-            "Startup did not load every active captured note"
+            Set(state.vm.notes.map(\.id)),
+            Set(expectedVisible.map(\.id)),
+            "Healthy startup must load the same root/pinned notes as the native list"
         )
         XCTAssertFalse(FileManager.default.fileExists(atPath: journalURL.path))
         print("MYR238_IOS_ISOLATED_REAL_STARTUP_PASS")
