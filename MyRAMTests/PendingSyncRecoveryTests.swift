@@ -949,20 +949,47 @@ final class NotesListStateBootstrapTests: XCTestCase {
         XCTAssertFalse(before.0.isEmpty, "Captured note store unexpectedly empty")
 
         var startedNetworking = false
+        var startupFailureStage = "unknown"
+        var startupFailureType = "unknown"
+        var startupFailureDomain = "unknown"
+        var startupFailureCode = 0
+        var startupUnderlyingDomain = "none"
+        var startupUnderlyingCode = 0
+        func recordSafeFailure(stage: String, error: Error) {
+            let cocoaError = error as NSError
+            startupFailureStage = stage
+            startupFailureType = String(reflecting: type(of: error))
+            startupFailureDomain = cocoaError.domain
+            startupFailureCode = cocoaError.code
+            if let underlying = cocoaError.userInfo[NSUnderlyingErrorKey] as? NSError {
+                startupUnderlyingDomain = underlying.domain
+                startupUnderlyingCode = underlying.code
+            }
+        }
         let state = NotesListState(
             context: container.mainContext,
             startsBootstrapAutomatically: false
         ) { vm, sync in
             NotesListState.BootstrapActions(
                 rollbackIfNeededOnLaunch: {
-                    try await vm.rollbackIfNeededOnLaunch(
-                        syncController: sync,
-                        journalStore: PendingSyncRecoveryJournalStore(fileURL: journalURL)
-                    )
+                    do {
+                        try await vm.rollbackIfNeededOnLaunch(
+                            syncController: sync,
+                            journalStore: PendingSyncRecoveryJournalStore(fileURL: journalURL)
+                        )
+                    } catch {
+                        recordSafeFailure(stage: "pending_sync_recovery", error: error)
+                        throw error
+                    }
                 },
                 migrateNoteSequenceStates: {
-                    try await NoteSequenceStateBootstrapMigrator(container: container)
-                        .runToCompletion()
+                    do {
+                        try await NoteSequenceStateBootstrapMigrator(container: container)
+                            .runToCompletion()
+                    } catch {
+                        recordSafeFailure(stage: "note_state_migration", error: error)
+                        throw error
+                    }
                 },
                 completeModelInitializationAfterMigration: {
                     vm.completeStartupInitializationAfterMigration()
@@ -974,7 +1001,26 @@ final class NotesListStateBootstrapTests: XCTestCase {
             )
         }
         await state.bootstrapAfterRecovery()
-        XCTAssertEqual(state.bootstrapState, .ready, "Captured store startup did not become ready")
+        guard state.bootstrapState == .ready else {
+            // Report only fixed diagnostic fields. Never expose private error
+            // descriptions, note identifiers, titles, bodies, or filesystem paths.
+            let safe = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+            func sanitized(_ value: String) -> String {
+                let result = String(value.unicodeScalars.prefix(120).map {
+                    safe.contains($0) ? Character($0) : "_"
+                })
+                return result.isEmpty ? "unknown" : result
+            }
+            XCTFail(
+                "MYR238_ISOLATED_STARTUP_FAILURE stage=\(sanitized(startupFailureStage))" +
+                " error_type=\(sanitized(startupFailureType))" +
+                " error_domain=\(sanitized(startupFailureDomain))" +
+                " error_code=\(startupFailureCode)" +
+                " underlying_domain=\(sanitized(startupUnderlyingDomain))" +
+                " underlying_code=\(startupUnderlyingCode)"
+            )
+            return
+        }
         XCTAssertTrue(startedNetworking, "Normal startup did not reach its networking boundary")
         // Networking is intentionally not started: the injected action is a
         // marker, never an advertiser or connection request.
