@@ -166,6 +166,43 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         )
     }
 
+    func testMYR238DivergenceSnapshotPreservesBothAuthoritiesAndRejectsStaleState() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Old anchored body", in: container)
+        let migrator = await makeMigrator(container, allowsExistingStateReplacement: false)
+        try await migrator.runToCompletion()
+        let originalRecord = try XCTUnwrap(fetchRecords(in: container).first)
+        try updateNote(noteID: noteID, body: "Current saved body", in: container)
+
+        let captured = try await migrator.validatedDivergenceSnapshot(noteID: noteID)
+        let snapshot = try XCTUnwrap(captured)
+        XCTAssertEqual(snapshot.savedBody, "Current saved body")
+        XCTAssertEqual(snapshot.sequenceVisibleText, "Old anchored body")
+        XCTAssertEqual(snapshot.sequencePayloadData, originalRecord.statePayloadData)
+        XCTAssertEqual(snapshot.markStatePayloadData, originalRecord.markStatePayloadData)
+        XCTAssertEqual(snapshot.sequenceRevision, originalRecord.revision)
+        XCTAssertEqual(snapshot.markRevision, originalRecord.markRevision)
+        let encoded = try JSONEncoder().encode(snapshot)
+        XCTAssertEqual(try JSONDecoder().decode(NoteLocalDivergenceSnapshot.self, from: encoded), snapshot)
+        let current = try await migrator.revalidateDivergenceSnapshot(snapshot)
+        XCTAssertTrue(current)
+
+        try updateNote(noteID: noteID, body: "Another saved body", in: container)
+        let currentAfterChange = try await migrator.revalidateDivergenceSnapshot(snapshot)
+        XCTAssertFalse(currentAfterChange)
+        XCTAssertEqual(try XCTUnwrap(fetchRecords(in: container).first).statePayloadData,
+                       originalRecord.statePayloadData)
+    }
+
+    func testMYR238DivergenceSnapshotRejectsNondivergentRow() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Matching body", in: container)
+        let migrator = await makeMigrator(container, allowsExistingStateReplacement: false)
+        try await migrator.runToCompletion()
+        let snapshot = try await migrator.validatedDivergenceSnapshot(noteID: noteID)
+        XCTAssertNil(snapshot)
+    }
+
     func testMYR238MalformedSequenceCannotBeQuarantinedAsTextDivergence() async throws {
         let container = try makeContainer()
         let noteID = try insertNote(body: "Authoritative body", in: container)

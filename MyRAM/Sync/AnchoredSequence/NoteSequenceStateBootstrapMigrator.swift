@@ -8,6 +8,32 @@ typealias NoteLegacyFormattingProjectionOperation =
 typealias NoteStructuralFormattingCacheRenderOperation =
     @Sendable (SyncTextSequenceState, SyncTextMarkState) async throws -> Data?
 
+/// Immutable, lossless evidence for a structurally valid local body/history mismatch.
+/// Capturing this value performs no persistence, authority change or networking.
+/// A future resolution must durably retain this exact snapshot, including raw mark
+/// and sequence bytes, and prove queue ownership before changing either authority.
+struct NoteLocalDivergenceSnapshot: Codable, Equatable {
+    let noteID: UUID
+    let savedTitle: String
+    let savedBody: String
+    let savedRichTextContentData: Data?
+    let savedIsPinned: Bool?
+    let savedCreatedAt: Date
+    let savedModifiedAt: Date
+    let savedDeletedAt: Date?
+    let savedFolderID: UUID?
+    let sequenceVisibleText: String
+    let sequenceFormatVersion: Int
+    let sequenceRevision: UInt64
+    let sequenceVisibleUTF16Count: Int
+    let sequenceTombstonedUTF16Count: Int
+    let sequencePayloadByteCount: Int
+    let sequencePayloadData: Data
+    let markFormatVersion: Int
+    let markRevision: UInt64
+    let markStatePayloadData: Data
+}
+
 @NoteSequenceStatePersistenceActor
 final class NoteSequenceStateBootstrapMigrator {
     private struct LegacyMarkMigrationSnapshot: Sendable {
@@ -110,20 +136,51 @@ final class NoteSequenceStateBootstrapMigrator {
         return divergentNoteIDs
     }
 
-    private func hasValidSequenceWithDivergentBody(noteID: UUID) throws -> Bool {
+    /// Read-only capture for an explicitly identified divergent note. Never
+    /// converts an unsupported/malformed sequence into a recoverable conflict.
+    func validatedDivergenceSnapshot(noteID: UUID) throws -> NoteLocalDivergenceSnapshot? {
         let context = ModelContext(container)
         context.autosaveEnabled = false
         guard let note = try fetchNote(noteID: noteID, in: context),
               let record = try fetchRecord(noteID: noteID, in: context) else {
-            return false
+            return nil
         }
-        // Do not classify malformed, unsupported, or truncated sequence
-        // payloads as a recoverable text divergence.
         let sequence = try NoteSequenceStatePersistenceCodec
             .decodeStructurallyValidatedState(record: record, noteID: noteID)
-        return !NoteSequenceStateExactText.matches(
-            sequence.visibleText, note.content
+        guard !NoteSequenceStateExactText.matches(sequence.visibleText, note.content) else {
+            return nil
+        }
+        return NoteLocalDivergenceSnapshot(
+            noteID: note.id,
+            savedTitle: note.title,
+            savedBody: note.content,
+            savedRichTextContentData: note.richTextContentData,
+            savedIsPinned: note.isPinned,
+            savedCreatedAt: note.createdAt,
+            savedModifiedAt: note.modifiedAt,
+            savedDeletedAt: note.deletedAt,
+            savedFolderID: note.folder?.id,
+            sequenceVisibleText: sequence.visibleText,
+            sequenceFormatVersion: record.formatVersion,
+            sequenceRevision: record.revision,
+            sequenceVisibleUTF16Count: record.visibleUTF16Count,
+            sequenceTombstonedUTF16Count: record.tombstonedUTF16Count,
+            sequencePayloadByteCount: record.payloadByteCount,
+            sequencePayloadData: record.statePayloadData,
+            markFormatVersion: record.markFormatVersion,
+            markRevision: record.markRevision,
+            markStatePayloadData: record.markStatePayloadData
         )
+    }
+
+    /// Detects stale evidence before any future explicit resolution attempt.
+    /// In particular, matching visible text alone cannot authorize mutation.
+    func revalidateDivergenceSnapshot(_ expected: NoteLocalDivergenceSnapshot) throws -> Bool {
+        try validatedDivergenceSnapshot(noteID: expected.noteID) == expected
+    }
+
+    private func hasValidSequenceWithDivergentBody(noteID: UUID) throws -> Bool {
+        try validatedDivergenceSnapshot(noteID: noteID) != nil
     }
 
     private func migrateStructuralMarksIfNeeded(
