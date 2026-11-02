@@ -734,6 +734,76 @@ final class PendingSyncRecoveryTests: XCTestCase {
         XCTAssertFalse(admin.didFlushAllOutboundWork)
     }
 
+    func testMYR238PendingAnchoredDeletionRequiresTerminalTombstones() async throws {
+        let noteID = UUID()
+        let deviceID = UUID()
+        let date = Date(timeIntervalSince1970: 1_820)
+        let original = try NoteSequenceStateBootstrapAdapter.makeInitialState(
+            noteID: noteID, body: "AB"
+        )
+        let deletion = try SyncBatchAnchoredPayloadAdapter.makeDeletedChange(
+            noteID: noteID, utf16Offset: 1, utf16Length: 1,
+            expectedText: "B", modifiedAt: date,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "AB"),
+            operationID: SyncOperationID(deviceID: deviceID, localCounter: 903),
+            state: original
+        )
+        guard case .noteBodyTextDeletedAnchored(let deleted) = deletion else {
+            return XCTFail("Expected anchored deletion")
+        }
+        let terminal = try SyncBatchAnchoredDeleteReplay.applying(
+            deleted, to: original
+        ).sequenceState
+        XCTAssertEqual(terminal.visibleText, "A")
+        let pending = SyncBatch(
+            id: UUID(), originDeviceID: deviceID, createdAt: date,
+            batchSequence: 1, changes: [deletion]
+        )
+        let obligation = SyncConvergenceLocalObligation(legacyBatch: pending)
+        let admin = FakePendingSyncQueueAdmin(
+            legacySnapshot: SyncQueueSnapshot(),
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: [], health: .healthy
+            )
+        )
+        let coordinator = PendingSyncRecoveryCoordinator(
+            queueAdmin: admin,
+            localQueueSnapshot: {
+                FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: [obligation], health: .healthy
+                )
+            },
+            replaceLocalObligations: { _ in
+                XCTFail("A pending local obligation must not be replaced")
+            },
+            flushReadyLocalBatch: { nil }
+        )
+        let incoming = FileBackedSyncBatchQueueSnapshot(
+            pendingBatches: [], health: .healthy
+        )
+        let captured = try await coordinator.captureLocalResolutionQueueOwnership(
+            incomingSnapshot: incoming
+        )
+        try await coordinator.requireRepresentedLocalWorkForResolvedNote(
+            noteID, expected: captured,
+            selectedState: terminal, savedTitle: "Title",
+            savedModifiedAt: date, incomingSnapshot: incoming
+        )
+        do {
+            try await coordinator.requireRepresentedLocalWorkForResolvedNote(
+                noteID, expected: captured,
+                selectedState: original, savedTitle: "Title",
+                savedModifiedAt: date, incomingSnapshot: incoming
+            )
+            XCTFail("A still-visible deletion target must retain the barrier")
+        } catch let error as PendingSyncRecoveryCoordinator.RecoveryError {
+            XCTAssertEqual(error, .unresolvedLocalResolutionQueueWork)
+        }
+        XCTAssertEqual(captured.localObligations, [obligation])
+        XCTAssertTrue(admin.isSuspended)
+        XCTAssertFalse(admin.didFlushAllOutboundWork)
+    }
+
     func testMYR238ExplicitOwnerChoiceArchivesPreimageWithoutWritingNoteOrSyncQueues() async throws {
         let container = try makeContainer()
         let originalContext = ModelContext(container)
