@@ -527,11 +527,11 @@ final class NoteLocalDivergenceEvidenceStore {
         }?.phase
     }
 
-    /// Only a zero-operation owner choice with no note-specific pending queue
-    /// work can complete without rewriting queue ownership. Other cases keep
-    /// their original queues, prepared operations, and global sync barrier.
-    /// The caller supplies the suspended coordinator's fresh health-checked
-    /// note-specific ownership preflight; this actor never clears queues.
+    /// Only a zero-new-operation owner choice can complete without writing to
+    /// queues. Already-incorporated local obligations may remain pending when
+    /// the suspended coordinator proves their exact effects in the selected
+    /// anchored history. All other work keeps the global sync barrier.
+    /// This actor never clears, reassigns or acknowledges queue entries.
     func finalizePreparedQueuePreservingResolution(
         for snapshot: NoteLocalDivergenceSnapshot,
         checkedBy migrator: NoteSequenceStateBootstrapMigrator,
