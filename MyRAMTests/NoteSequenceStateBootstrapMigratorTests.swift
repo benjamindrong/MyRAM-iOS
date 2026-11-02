@@ -761,6 +761,119 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         }
     }
 
+    func testMYR238CleanQueueResolutionCompletionSurvivesRestartWithoutDiscardingEvidence() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Anchored history", in: container)
+        let migrator = await makeMigrator(container, allowsExistingStateReplacement: false)
+        try await migrator.runToCompletion()
+        try updateNote(noteID: noteID, body: "Saved divergent text", in: container)
+        let snapshot = try XCTUnwrap(
+            try await migrator.validatedDivergenceSnapshot(noteID: noteID)
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR238-clean-queue-complete-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("ledger.json")
+        let store = await NoteLocalDivergenceEvidenceStore(fileURL: url)
+        let queues = NoteLocalDivergenceQueueOwnershipEvidence(
+            legacy: SyncQueueSnapshot(), unsent: [], incoming: [], localObligations: []
+        )
+        _ = try await store.preserve(snapshot, checkedBy: migrator)
+        _ = try await store.prepareOwnerSelectedResolution(
+            snapshot: snapshot, choice: .keepAnchoredHistory, checkedBy: migrator
+        )
+        _ = try await store.prepareQueueOwnership(
+            for: snapshot, ownership: queues, checkedBy: migrator
+        )
+        _ = try await store.prepareCommit(for: snapshot, checkedBy: migrator)
+        _ = try await store.commitPreparedNote(
+            for: snapshot, checkedBy: migrator,
+            recaptureQueueOwnership: { queues }
+        )
+        let before = try await store.hasUnfinishedResolutionIntents()
+        XCTAssertTrue(before, "Note saved is not a completion receipt")
+        do {
+            _ = try await store.finalizePreparedCleanQueueResolution(
+                for: snapshot, checkedBy: migrator,
+                verifyQueueOwnership: {
+                    throw PendingSyncRecoveryCoordinator.RecoveryError.staleLocalResolutionQueueOwnership
+                }
+            )
+            XCTFail("A failed queue recapture cannot complete resolution")
+        } catch let error as PendingSyncRecoveryCoordinator.RecoveryError {
+            XCTAssertEqual(error, .staleLocalResolutionQueueOwnership)
+        }
+        let blocked = try await store.hasUnfinishedResolutionIntents()
+        XCTAssertTrue(blocked)
+        let finalized = try await store.finalizePreparedCleanQueueResolution(
+            for: snapshot, checkedBy: migrator,
+            verifyQueueOwnership: {}
+        )
+        XCTAssertTrue(finalized)
+        let restarted = await NoteLocalDivergenceEvidenceStore(fileURL: url)
+        let unfinished = try await restarted.hasUnfinishedResolutionIntents()
+        XCTAssertFalse(unfinished)
+        let repeated = try await restarted.finalizePreparedCleanQueueResolution(
+            for: snapshot, checkedBy: migrator,
+            verifyQueueOwnership: {}
+        )
+        XCTAssertFalse(repeated)
+        let archived = try await restarted.snapshots(for: noteID)
+        XCTAssertEqual(archived, [snapshot], "Both original representations remain archived")
+        let note = try XCTUnwrap(ModelContext(container).fetch(
+            FetchDescriptor<Note>(predicate: #Predicate { $0.id == noteID })
+        ).first)
+        XCTAssertEqual(note.content, "Anchored history")
+    }
+
+    func testMYR238SavedTextResolutionCannotCompleteWithoutPublishingCapturedWork() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Anchored history", in: container)
+        let migrator = await makeMigrator(container, allowsExistingStateReplacement: false)
+        try await migrator.runToCompletion()
+        try updateNote(noteID: noteID, body: "Owner saved text", in: container)
+        let snapshot = try XCTUnwrap(
+            try await migrator.validatedDivergenceSnapshot(noteID: noteID)
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR238-captured-block-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = await NoteLocalDivergenceEvidenceStore(
+            fileURL: directory.appendingPathComponent("ledger.json")
+        )
+        let queues = NoteLocalDivergenceQueueOwnershipEvidence(
+            legacy: SyncQueueSnapshot(), unsent: [], incoming: [], localObligations: []
+        )
+        _ = try await store.preserve(snapshot, checkedBy: migrator)
+        _ = try await store.prepareOwnerSelectedResolution(
+            snapshot: snapshot, choice: .keepSavedBody, checkedBy: migrator
+        )
+        _ = try await store.prepareQueueOwnership(
+            for: snapshot, ownership: queues, checkedBy: migrator
+        )
+        let prepared = try await store.prepareCommit(
+            for: snapshot, checkedBy: migrator
+        )
+        XCTAssertFalse(prepared.capturedChanges.isEmpty)
+        _ = try await store.commitPreparedNote(
+            for: snapshot, checkedBy: migrator,
+            recaptureQueueOwnership: { queues }
+        )
+        do {
+            _ = try await store.finalizePreparedCleanQueueResolution(
+                for: snapshot, checkedBy: migrator,
+                verifyQueueOwnership: {}
+            )
+            XCTFail("An unpublished edit cannot be treated as converged")
+        } catch let error as NoteLocalDivergenceEvidenceStoreError {
+            XCTAssertEqual(error, .unresolvedCapturedResolutionChanges)
+        }
+        let pending = try await store.hasUnfinishedResolutionIntents()
+        XCTAssertTrue(pending)
+        let retained = try await store.preparedCommit(for: noteID)
+        XCTAssertEqual(retained, prepared)
+    }
+
     func testMYR238OwnerNoteCommitRejectsStaleQueuesBeforeWritingJournal() async throws {
         let container = try makeContainer()
         let noteID = try insertNote(body: "Anchored", in: container)

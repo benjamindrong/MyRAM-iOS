@@ -450,6 +450,33 @@ final class NotesViewModel: ObservableObject {
         return (snapshot, chosen?.choice)
     }
 
+    private func localResolutionCoordinator(
+        queueAdmin: PendingSyncQueueAdministrating
+    ) -> PendingSyncRecoveryCoordinator {
+        PendingSyncRecoveryCoordinator(
+            queueAdmin: queueAdmin,
+            localQueueSnapshot: { [weak self] in
+                guard let self else {
+                    return FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                        obligations: [],
+                        health: .readFailed("Local queue owner unavailable")
+                    )
+                }
+                return FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: self.pendingLocalConvergenceBatches.pendingObligations,
+                    health: self.pendingLocalConvergenceBatches.snapshot().health
+                )
+            },
+            replaceLocalObligations: { [weak self] obligations in
+                guard let self else {
+                    throw PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed
+                }
+                try self.pendingLocalConvergenceBatches.replacePendingObligations(obligations)
+            },
+            flushReadyLocalBatch: { nil }
+        )
+    }
+
     /// Owner approval is durable, but it is not a note/queue commit. Even after
     /// successful preparation both versions remain untouched and sync stays
     /// suspended until a separate complete recovery protocol is verified.
@@ -476,28 +503,7 @@ final class NotesViewModel: ObservableObject {
         // subsequent step leaves it retained, never replaced or discarded.
         _ = try await evidenceStore.preserve(snapshot, checkedBy: migrator)
 
-        let coordinator = PendingSyncRecoveryCoordinator(
-            queueAdmin: queueAdmin,
-            localQueueSnapshot: { [weak self] in
-                guard let self else {
-                    return FileBackedSyncConvergenceLocalObligationQueueSnapshot(
-                        obligations: [],
-                        health: .readFailed("Local queue owner unavailable")
-                    )
-                }
-                return FileBackedSyncConvergenceLocalObligationQueueSnapshot(
-                    obligations: self.pendingLocalConvergenceBatches.pendingObligations,
-                    health: self.pendingLocalConvergenceBatches.snapshot().health
-                )
-            },
-            replaceLocalObligations: { [weak self] obligations in
-                guard let self else {
-                    throw PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed
-                }
-                try self.pendingLocalConvergenceBatches.replacePendingObligations(obligations)
-            },
-            flushReadyLocalBatch: { nil }
-        )
+        let coordinator = localResolutionCoordinator(queueAdmin: queueAdmin)
         let incoming = pendingIncomingBatches.snapshot()
         let ownership = try await coordinator.captureLocalResolutionQueueOwnership(
             incomingSnapshot: incoming
@@ -516,6 +522,78 @@ final class NotesViewModel: ObservableObject {
         )
         // No applyPreparedNoteCommit, queue replacement, journal cleanup or
         // resumeOutboundAfterRecovery: preparation never implies completion.
+    }
+
+    /// Resume a prepared owner choice only when all note-specific queues can
+    /// be proven free of unresolved work. This intentionally does not publish
+    /// the saved-body edit script: it remains protected for lossless queue
+    /// reconciliation, including after a partial SwiftData commit.
+    func completeProtectedLocalDivergence(
+        noteID: UUID,
+        queueAdmin: PendingSyncQueueAdministrating,
+        evidenceStore: NoteLocalDivergenceEvidenceStore
+    ) async throws {
+        guard startupQuarantinedNoteIDs.contains(noteID) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+        queueAdmin.suspendOutboundForRecovery()
+        guard await editorLifecyclePersistence.awaitAllDurableCompletion() else {
+            throw PendingSyncRecoveryCoordinator.RecoveryError.pendingLocalEditsNotDurable
+        }
+        await prepareLocalOwnershipForBootstrap()
+
+        guard let intent = try await evidenceStore.preparedResolution(for: noteID) else {
+            throw NoteLocalDivergenceEvidenceStoreError.unresolvedResolutionIntent
+        }
+        let snapshots = try await evidenceStore.snapshots(for: noteID)
+        // The index refers to the complete archive, not the note-filtered
+        // sequence. Retrieve the exact chosen generation from its preimage.
+        guard let queue = try await evidenceStore.preparedQueueOwnership(for: noteID),
+              queue.intent == intent,
+              let snapshot = snapshots.first(where: { candidate in
+                  candidate == snapshots.first(where: {
+                      $0.noteID == noteID && $0 == candidate
+                  }) && candidate.noteID == noteID
+              }) else {
+            throw NoteLocalDivergenceEvidenceStoreError.unresolvedResolutionIntent
+        }
+        let migrator = await NoteSequenceStateBootstrapMigrator(
+            container: context.container
+        )
+        let coordinator = localResolutionCoordinator(queueAdmin: queueAdmin)
+        try await coordinator.requireNoConflictingWorkForResolvedNote(
+            noteID,
+            expected: queue.ownership,
+            incomingSnapshot: pendingIncomingBatches.snapshot()
+        )
+        _ = try await evidenceStore.commitPreparedNote(
+            for: snapshot,
+            checkedBy: migrator,
+            recaptureQueueOwnership: { [weak self] in
+                guard let self else {
+                    throw PendingSyncRecoveryCoordinator.RecoveryError.staleLocalResolutionQueueOwnership
+                }
+                return try await coordinator.captureLocalResolutionQueueOwnership(
+                    incomingSnapshot: self.pendingIncomingBatches.snapshot()
+                )
+            }
+        )
+        _ = try await evidenceStore.finalizePreparedCleanQueueResolution(
+            for: snapshot,
+            checkedBy: migrator,
+            verifyQueueOwnership: { [weak self] in
+                guard let self else {
+                    throw PendingSyncRecoveryCoordinator.RecoveryError.staleLocalResolutionQueueOwnership
+                }
+                try await coordinator.requireNoConflictingWorkForResolvedNote(
+                    noteID,
+                    expected: queue.ownership,
+                    incomingSnapshot: self.pendingIncomingBatches.snapshot()
+                )
+            }
+        )
+        startupQuarantinedNoteIDs.remove(noteID)
+        refreshCurrentFolderContent()
     }
 
     func completeStartupSyncRecovery() {

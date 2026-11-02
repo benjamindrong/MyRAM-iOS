@@ -93,6 +93,13 @@ struct NoteLocalDivergenceNoteCommitProgress: Codable, Equatable {
     let phase: NoteLocalDivergenceNoteCommitPhase
 }
 
+/// Final evidence that a no-write queue reconciliation was completed after the
+/// owner-approved note pair was durably verified. The original snapshot and
+/// queue preimage are retained, not consumed.
+struct NoteLocalDivergenceCompletionReceipt: Codable, Equatable {
+    let intent: NoteLocalDivergenceResolutionIntent
+}
+
 /// An immutable, append-only ledger of local note/body versus anchored-history evidence.
 /// Neither a captured snapshot nor this ledger authorizes choosing a winner or resuming sync.
 struct NoteLocalDivergenceEvidenceEnvelope: Codable, Equatable {
@@ -110,6 +117,9 @@ struct NoteLocalDivergenceEvidenceEnvelope: Codable, Equatable {
     var commitPreparations: [NoteLocalDivergenceCommitPreparation]? = nil
     // A noteSaved receipt is never a completed cross-store transaction.
     var noteCommitProgress: [NoteLocalDivergenceNoteCommitProgress]? = nil
+    // Optional for all previously written v1 ledgers. Never infer completion
+    // from a noteSaved phase, an empty queue, or an owner choice alone.
+    var completionReceipts: [NoteLocalDivergenceCompletionReceipt]? = nil
 
     static let empty = Self(formatVersion: supportedVersion, snapshots: [])
 
@@ -173,6 +183,20 @@ struct NoteLocalDivergenceEvidenceEnvelope: Codable, Equatable {
                 throw NoteLocalDivergenceEvidenceStoreError.corruptArchive
             }
         }
+        var completedNoteIDs = Set<UUID>()
+        for receipt in completionReceipts ?? [] {
+            guard let prepared = (commitPreparations ?? []).first(where: {
+                $0.intent == receipt.intent
+            }),
+                  (noteCommitProgress ?? []).contains(where: {
+                      $0.intent == receipt.intent && $0.phase == .noteSaved
+                  }),
+                  receipt.intent.choice == .keepAnchoredHistory,
+                  prepared.capturedChanges.isEmpty,
+                  completedNoteIDs.insert(receipt.intent.noteID).inserted else {
+                throw NoteLocalDivergenceEvidenceStoreError.corruptArchive
+            }
+        }
     }
 }
 
@@ -184,6 +208,7 @@ enum NoteLocalDivergenceEvidenceStoreError: Error, Equatable {
     case conflictingResolution
     case unresolvedResolutionIntent
     case conflictingQueueOwnership
+    case unresolvedCapturedResolutionChanges
     case persistenceFailed
 }
 
@@ -484,6 +509,56 @@ final class NoteLocalDivergenceEvidenceStore {
         }?.phase
     }
 
+    /// Only a zero-operation owner choice with no note-specific pending queue
+    /// work can complete without rewriting queue ownership. Other cases keep
+    /// their original queues, prepared operations, and global sync barrier.
+    /// The caller supplies the suspended coordinator's fresh health-checked
+    /// note-specific ownership preflight; this actor never clears queues.
+    func finalizePreparedCleanQueueResolution(
+        for snapshot: NoteLocalDivergenceSnapshot,
+        checkedBy migrator: NoteSequenceStateBootstrapMigrator,
+        verifyQueueOwnership: @MainActor () async throws -> Void
+    ) async throws -> Bool {
+        let preflight = try loadEnvelope()
+        guard let index = preflight.snapshots.firstIndex(of: snapshot),
+              let queue = (preflight.queuePreparations ?? []).first(where: {
+                  $0.intent.noteID == snapshot.noteID && $0.intent.evidenceIndex == index
+              }),
+              let prepared = (preflight.commitPreparations ?? []).first(where: {
+                  $0.intent == queue.intent
+              }),
+              (preflight.noteCommitProgress ?? []).contains(where: {
+                  $0.intent == prepared.intent && $0.phase == .noteSaved
+              }) else {
+            throw NoteLocalDivergenceEvidenceStoreError.unresolvedResolutionIntent
+        }
+        guard prepared.intent.choice == .keepAnchoredHistory,
+              prepared.capturedChanges.isEmpty else {
+            throw NoteLocalDivergenceEvidenceStoreError.unresolvedCapturedResolutionChanges
+        }
+        if (preflight.completionReceipts ?? []).contains(where: {
+            $0.intent == prepared.intent
+        }) {
+            return false
+        }
+
+        try await verifyQueueOwnership()
+        // The commit must be physically present in SwiftData, including raw
+        // CRDT bytes and marks. No replay or implicit replacement is allowed.
+        _ = try migrator.applyPreparedNoteCommit(
+            prepared, expected: snapshot, allowMutation: false
+        )
+        var current = try loadEnvelope()
+        guard current == preflight else {
+            throw NoteLocalDivergenceEvidenceStoreError.conflictingQueueOwnership
+        }
+        current.completionReceipts = (current.completionReceipts ?? []) + [
+            NoteLocalDivergenceCompletionReceipt(intent: prepared.intent)
+        ]
+        try saveEnvelope(current)
+        return true
+    }
+
     /// Any unfinished intent requires queue/authority recovery before sync is
     /// admitted, even if the note body happens to match its anchored history.
     /// Errors remain distinct from an empty ledger and must fail closed.
@@ -495,7 +570,9 @@ final class NoteLocalDivergenceEvidenceStore {
     /// protected even when a partial SwiftData commit made its body match
     /// anchored history; only queue reconciliation may release it.
     func unfinishedResolutionNoteIDs() throws -> Set<UUID> {
-        try Set((loadEnvelope().resolutionIntents ?? []).map(\.noteID))
+        let envelope = try loadEnvelope()
+        let completed = Set((envelope.completionReceipts ?? []).map { $0.intent.noteID })
+        return Set((envelope.resolutionIntents ?? []).map(\.noteID)).subtracting(completed)
     }
 
 

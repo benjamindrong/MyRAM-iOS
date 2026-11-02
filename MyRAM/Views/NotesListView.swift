@@ -127,6 +127,12 @@ final class NotesListState: ObservableObject {
         }
     }
 
+    func didCompleteProtectedNoteResolution(_ noteID: UUID) async {
+        divergentNoteIDs.remove(noteID)
+        vm.isolateDivergentNoteIDs(divergentNoteIDs)
+        await bootstrapAfterRecovery()
+    }
+
     func bootstrapAfterRecovery() async {
         // Repeated taps must never interleave sync journal rollback or note migrations.
         guard !isBootstrapping else { return }
@@ -505,6 +511,9 @@ struct NotesListView: View {
             fileOperationBridge: editorFileOperationBridge,
             onOpenSyncConflicts: {
                 showingNearbySync = true
+            },
+            onResolutionCompleted: { noteID in
+                await state.didCompleteProtectedNoteResolution(noteID)
             }
         ))
             .sheet(isPresented: $showingRecentlyDeleted) {
@@ -1019,7 +1028,10 @@ struct NotesListView: View {
         if let selectedNote {
             if state.divergentNoteIDs.contains(selectedNote.id) {
                 DivergentNoteReadOnlyView(
-                    note: selectedNote, vm: vm, syncController: syncController
+                    note: selectedNote, vm: vm, syncController: syncController,
+                    onCompleted: { noteID in
+                        await state.didCompleteProtectedNoteResolution(noteID)
+                    }
                 )
             } else {
             NoteEditorView(
@@ -2061,6 +2073,7 @@ private struct MobileNoteEditorSheet: ViewModifier {
     @ObservedObject var syncController: MyRAMSyncController
     @ObservedObject var fileOperationBridge: NoteEditorFileOperationBridge
     let onOpenSyncConflicts: () -> Void
+    let onResolutionCompleted: @MainActor (UUID) async -> Void
 
     func body(content: Content) -> some View {
         if MyRAMPlatform.isMacCatalyst {
@@ -2071,7 +2084,11 @@ private struct MobileNoteEditorSheet: ViewModifier {
                 .sheet(item: $selectedNote) { note in
                     if divergentNoteIDs.contains(note.id) {
                         DivergentNoteReadOnlyView(
-                            note: note, vm: vm, syncController: syncController
+                            note: note, vm: vm, syncController: syncController,
+                            onCompleted: { noteID in
+                                selectedNote = nil
+                                await onResolutionCompleted(noteID)
+                            }
                         )
                     } else {
                     NoteEditorView(
@@ -2095,12 +2112,14 @@ private struct DivergentNoteReadOnlyView: View {
     let note: Note
     @ObservedObject var vm: NotesViewModel
     @ObservedObject var syncController: MyRAMSyncController
+    let onCompleted: @MainActor (UUID) async -> Void
 
     @State private var snapshot: NoteLocalDivergenceSnapshot?
     @State private var selectedChoice: NoteLocalDivergenceResolutionChoice?
     @State private var pendingChoice: NoteLocalDivergenceResolutionChoice?
     @State private var showingConfirmation = false
     @State private var isPreparing = false
+    @State private var isCompleting = false
     @State private var errorMessage: String?
 
     var body: some View {
@@ -2132,9 +2151,14 @@ private struct DivergentNoteReadOnlyView: View {
                              ? "Saved-text choice recorded."
                              : "Synchronization-history choice recorded.")
                             .font(.headline)
-                        Text("The choice is preserved, but the resolution is not complete. Editing and syncing remain paused until pending work is reconciled.")
+                        Text("The choice is preserved. Completion verifies the note commit and pending queue ownership without discarding work.")
                             .font(.subheadline)
                             .accessibilityIdentifier("divergence-choice-pending-reconciliation")
+                        Button("Complete recovery") {
+                            Task { await complete() }
+                        }
+                        .disabled(isPreparing || isCompleting)
+                        .accessibilityIdentifier("divergence-complete-recovery")
                     } else {
                         Text("Choose which version to keep. This records an irreversible choice for this recovery attempt; it does not immediately modify the note or resume syncing.")
                             .font(.subheadline)
@@ -2161,6 +2185,9 @@ private struct DivergentNoteReadOnlyView: View {
                 }
                 if isPreparing {
                     ProgressView("Preserving choice and queue evidence")
+                }
+                if isCompleting {
+                    ProgressView("Verifying note and pending sync work")
                 }
                 if let errorMessage {
                     Text(errorMessage)
@@ -2206,6 +2233,27 @@ private struct DivergentNoteReadOnlyView: View {
             errorMessage = nil
         } catch {
             errorMessage = "Unable to inspect preserved versions: \(error)"
+        }
+    }
+
+    @MainActor
+    private func complete() async {
+        guard !isPreparing, !isCompleting, selectedChoice != nil else { return }
+        isCompleting = true
+        defer { isCompleting = false }
+        do {
+            let store = await NoteLocalDivergenceEvidenceStore()
+            try await vm.completeProtectedLocalDivergence(
+                noteID: note.id,
+                queueAdmin: syncController,
+                evidenceStore: store
+            )
+            errorMessage = nil
+            await onCompleted(note.id)
+        } catch NoteLocalDivergenceEvidenceStoreError.unresolvedCapturedResolutionChanges {
+            errorMessage = "This saved-text choice has captured edits that still require durable queue reconciliation. Nothing was discarded; the note remains protected."
+        } catch {
+            errorMessage = "Recovery remains incomplete; no pending work was discarded: \(error)"
         }
     }
 
