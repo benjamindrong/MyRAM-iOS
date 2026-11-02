@@ -1,12 +1,24 @@
 import Foundation
 import NearbySyncCore
 
+/// Read-only, byte-preserving queue ownership preimage for a local divergence.
+/// A future resolution must compare this exact preimage again before mutation.
+/// Queue evidence alone never permits changing note authority or resuming sync.
+struct NoteLocalDivergenceQueueOwnershipEvidence: Codable, Equatable {
+    let legacy: SyncQueueSnapshot
+    let unsent: [SyncBatch]
+    let incoming: [SyncBatch]
+    let localObligations: [SyncConvergenceLocalObligation]
+}
+
 @MainActor
 final class PendingSyncRecoveryCoordinator {
     enum RecoveryError: Error, Equatable {
         case unhealthyLegacyQueue
         case unhealthyUnsentBatchQueue
         case unhealthyLocalObligationQueue
+        case unhealthyIncomingBatchQueue
+        case staleLocalResolutionQueueOwnership
         case journalWriteFailed
         case replacementFailed
         case rollbackFailed
@@ -75,6 +87,53 @@ final class PendingSyncRecoveryCoordinator {
             local: localSnapshot.obligations.map(\.batch),
             localEvidence: localSnapshot.obligations
         )
+    }
+
+    /// This inspection is meaningful only while all outbound/incoming sync
+    /// admission is suspended. It flushes the in-memory local accumulator via
+    /// the existing recovery owner before inspecting durable queue state.
+    func captureLocalResolutionQueueOwnership(
+        incomingSnapshot: FileBackedSyncBatchQueueSnapshot
+    ) async throws -> NoteLocalDivergenceQueueOwnershipEvidence {
+        guard incomingSnapshot.health.isRecoveryWritable else {
+            throw RecoveryError.unhealthyIncomingBatchQueue
+        }
+        let current = try await prepareSnapshots()
+        // Reuse the established inter-queue ownership validator: identical
+        // duplicated IDs are tolerated, conflicting payload IDs are rejected.
+        _ = try SyncPeerBootstrapOwnershipCandidate(
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: current.unsent,
+                health: .healthy
+            ),
+            localObligationSnapshot: FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: current.local,
+                health: .healthy
+            )
+        )
+        try incomingSnapshot.pendingBatches.forEach(
+            SyncBatchAnchoredPayloadPolicy.validateInbound
+        )
+        return NoteLocalDivergenceQueueOwnershipEvidence(
+            legacy: current.legacy,
+            unsent: current.unsent,
+            incoming: incomingSnapshot.pendingBatches,
+            localObligations: current.localEvidence
+        )
+    }
+
+    /// Rejects admissions, acknowledgements or ownership transfers that
+    /// happened since the prepared resolution preimage was durably archived.
+    func requireUnchangedLocalResolutionQueueOwnership(
+        _ expected: NoteLocalDivergenceQueueOwnershipEvidence,
+        incomingSnapshot: FileBackedSyncBatchQueueSnapshot
+    ) async throws {
+        let observed = try await captureLocalResolutionQueueOwnership(
+            incomingSnapshot: incomingSnapshot
+        )
+        guard observed == expected else {
+            throw RecoveryError.staleLocalResolutionQueueOwnership
+        }
     }
 
     func commitReplacement(_ replacement: SyncRecoveryReplacementState) async throws {
