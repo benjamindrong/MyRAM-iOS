@@ -2366,6 +2366,7 @@ final class MyRAMTests: XCTestCase {
         let recorder = RecordingSyncController()
         let note = Note(title: "Shared", content: "Hello")
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
         let vm = NotesViewModel(
             context: context,
@@ -2374,7 +2375,7 @@ final class MyRAMTests: XCTestCase {
             syncBatchQuietWindow: 0
         )
 
-        vm.commitNoteEdit(note, title: "Shared", content: "Hello world")
+        XCTAssertTrue(await vm.commitNoteEditForProduction(note, title: "Shared", content: "Hello world")
         for _ in 0..<20 where recorder.recordedBatches.isEmpty {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
@@ -2384,13 +2385,17 @@ final class MyRAMTests: XCTestCase {
         })
         let batch = try XCTUnwrap(recorder.recordedBatches.first)
         XCTAssertEqual(batch.changes.count, 1)
-        guard case .noteBodyTextInserted(let change) = try XCTUnwrap(batch.changes.first) else {
-            return XCTFail("Expected body insert batch change")
+        guard case .noteBodyTextInsertedAnchored(let change) = try XCTUnwrap(batch.changes.first) else {
+            return XCTFail("Expected anchored body insertion")
         }
         XCTAssertEqual(change.noteID, note.id)
         XCTAssertEqual(change.utf16Offset, "Hello".utf16.count)
         XCTAssertEqual(change.text, " world")
         XCTAssertEqual(change.baseContentHash, SyncBatchContentHash.sha256Hex(for: "Hello"))
+        XCTAssertEqual(note.content, "Hello world")
+        let record = try XCTUnwrap(context.fetch(FetchDescriptor<NoteSequenceStateRecord>()).first { $0.noteID == note.id })
+        let sequence = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(record: record, noteID: note.id)
+        XCTAssertEqual(sequence.visibleText, "Hello world")
     }
 
     func testReadyLocalBatchRegistersConvergenceEvidenceBeforeTransport() async throws {
@@ -2402,6 +2407,7 @@ final class MyRAMTests: XCTestCase {
         let note = Note(title: "Shared", content: "Hello")
         note.id = UUID(uuidString: "00000000-0000-0000-0000-000000127501")!
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
         let vm = NotesViewModel(
             context: context,
@@ -2410,7 +2416,7 @@ final class MyRAMTests: XCTestCase {
             syncBatchQuietWindow: 0
         )
 
-        vm.commitNoteEdit(note, title: "Renamed", content: "Hello world")
+        XCTAssertTrue(await vm.commitNoteEditForProduction(note, title: "Renamed", content: "Hello world")
         for _ in 0..<20 where recorder.recordedBatches.isEmpty {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
@@ -2624,6 +2630,7 @@ final class MyRAMTests: XCTestCase {
         let note = Note(title: "Draft", content: "abc")
         note.id = UUID(uuidString: "00000000-0000-0000-0000-0000001275B0")!
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
         let syncController = RecordingSyncController()
         let viewModel = NotesViewModel(
@@ -2635,7 +2642,7 @@ final class MyRAMTests: XCTestCase {
             resumesPendingConvergenceOnInit: false
         )
 
-        viewModel.commitNoteEdit(note, title: "Draft", content: "axc")
+        XCTAssertTrue(await viewModel.commitNoteEditForProduction(note, title: "Draft", content: "axc")
 
         XCTAssertEqual(note.content, "axc")
         XCTAssertEqual(note.title, "Draft")
@@ -2648,9 +2655,9 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(syncController.recordedBatches.count, 1)
         XCTAssertEqual(syncController.recordedBatches.first?.id, obligationID)
         XCTAssertEqual(syncController.recordedBatches.first?.changes.count, 2)
-        guard case .noteBodyTextDeleted(let deletion) = syncController.recordedBatches.first?.changes.first,
-              case .noteBodyTextInserted(let insertion) = syncController.recordedBatches.first?.changes.dropFirst().first else {
-            return XCTFail("Expected replacement to record delete then insert")
+        guard case .noteBodyTextDeletedAnchored(let deletion) = syncController.recordedBatches.first?.changes.first,
+              case .noteBodyTextInsertedAnchored(let insertion) = syncController.recordedBatches.first?.changes.dropFirst().first else {
+            return XCTFail("Expected anchored replacement to record delete then insert")
         }
         XCTAssertEqual(deletion.expectedText, "b")
         XCTAssertEqual(insertion.text, "x")
@@ -2670,6 +2677,7 @@ final class MyRAMTests: XCTestCase {
         let note = Note(title: "Shared", content: "")
         note.id = UUID(uuidString: "22900000-0000-0000-0000-000000000087")!
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
         let syncController = RecordingSyncController()
         let viewModel = NotesViewModel(
@@ -2681,21 +2689,17 @@ final class MyRAMTests: XCTestCase {
             resumesPendingConvergenceOnInit: false
         )
 
-        viewModel.commitNoteEdit(note, title: "Shared", content: "operation 87")
+        XCTAssertTrue(await viewModel.commitNoteEditForProduction(note, title: "Shared", content: "operation 87")
         XCTAssertEqual(note.content, "operation 87")
 
         await viewModel.prepareLocalOwnershipForBootstrapForTesting()
 
         XCTAssertEqual(syncController.recordedBatches.count, 1)
         XCTAssertEqual(syncController.recordedBatches.first?.changes.count, 1)
-        switch syncController.recordedBatches.first?.changes.first {
-        case .noteBodyTextInsertedAnchored(let insertion):
-            XCTAssertEqual(insertion.text, "operation 87")
-        case .noteBodyTextInserted(let insertion):
-            XCTAssertEqual(insertion.text, "operation 87")
-        default:
-            return XCTFail("Bootstrap preflight must durably own the committed insertion")
+        guard case .noteBodyTextInsertedAnchored(let insertion) = syncController.recordedBatches.first?.changes.first else {
+            return XCTFail("Bootstrap preflight must durably own the anchored insertion")
         }
+        XCTAssertEqual(insertion.text, "operation 87")
         let residualBatchID = await viewModel.capturePendingLocalBatchForRecovery()
         XCTAssertNil(residualBatchID)
     }
@@ -2707,6 +2711,7 @@ final class MyRAMTests: XCTestCase {
         let replacementBody = String(repeating: "b", count: 600)
         let note = Note(title: "Draft", content: originalBody)
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
         let syncController = RecordingSyncController()
         let viewModel = NotesViewModel(
@@ -2718,7 +2723,7 @@ final class MyRAMTests: XCTestCase {
             resumesPendingConvergenceOnInit: false
         )
 
-        viewModel.commitNoteEdit(note, title: "Draft", content: replacementBody)
+        XCTAssertTrue(await viewModel.commitNoteEditForProduction(note, title: "Draft", content: replacementBody)
 
         XCTAssertEqual(note.content, replacementBody)
         XCTAssertEqual(note.title, "Draft")
