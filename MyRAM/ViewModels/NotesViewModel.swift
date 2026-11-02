@@ -597,7 +597,7 @@ final class NotesViewModel: ObservableObject {
                 )
             }
         )
-        _ = try await evidenceStore.finalizePreparedCleanQueueResolution(
+        _ = try await evidenceStore.finalizePreparedQueuePreservingResolution(
             for: snapshot,
             checkedBy: migrator,
             verifyQueueOwnership: { [weak self] in
