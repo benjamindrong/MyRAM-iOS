@@ -438,6 +438,75 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         }
     }
 
+    func testMYR238PreparedQueueOwnershipSurvivesRestartAndRejectsChangedPreimage() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Anchored", in: container)
+        let migrator = await makeMigrator(container, allowsExistingStateReplacement: false)
+        try await migrator.runToCompletion()
+        try updateNote(noteID: noteID, body: "Saved", in: container)
+        let captured = try await migrator.validatedDivergenceSnapshot(noteID: noteID)
+        let snapshot = try XCTUnwrap(captured)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR238-queue-preimage-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("archive.json")
+        let store = await NoteLocalDivergenceEvidenceStore(fileURL: url)
+        let ownership = NoteLocalDivergenceQueueOwnershipEvidence(
+            legacy: SyncQueueSnapshot(pendingChanges: []),
+            unsent: [],
+            incoming: [],
+            localObligations: []
+        )
+        do {
+            _ = try await store.prepareQueueOwnership(
+                for: snapshot, ownership: ownership, checkedBy: migrator
+            )
+            XCTFail("Queue preimage requires explicit preserved user intent")
+        } catch let error as NoteLocalDivergenceEvidenceStoreError {
+            XCTAssertEqual(error, .unresolvedResolutionIntent)
+        }
+        _ = try await store.preserve(snapshot, checkedBy: migrator)
+        _ = try await store.prepareOwnerSelectedResolution(
+            snapshot: snapshot, choice: .keepSavedBody, checkedBy: migrator
+        )
+        let prepared = try await store.prepareQueueOwnership(
+            for: snapshot, ownership: ownership, checkedBy: migrator
+        )
+        XCTAssertTrue(prepared)
+        let repeated = try await store.prepareQueueOwnership(
+            for: snapshot, ownership: ownership, checkedBy: migrator
+        )
+        XCTAssertFalse(repeated)
+        let restarted = await NoteLocalDivergenceEvidenceStore(fileURL: url)
+        let restored = try await restarted.preparedQueueOwnership(for: noteID)
+        XCTAssertEqual(restored?.ownership, ownership)
+        XCTAssertEqual(restored?.intent.choice, .keepSavedBody)
+
+        let changed = NoteLocalDivergenceQueueOwnershipEvidence(
+            legacy: ownership.legacy,
+            unsent: [],
+            incoming: [SyncBatch(
+                id: UUID(), originDeviceID: UUID(), createdAt: .now,
+                changes: []
+            )],
+            localObligations: []
+        )
+        do {
+            _ = try await restarted.prepareQueueOwnership(
+                for: snapshot, ownership: changed, checkedBy: migrator
+            )
+            XCTFail("Cannot silently replace captured pending queue work")
+        } catch let error as NoteLocalDivergenceEvidenceStoreError {
+            XCTAssertEqual(error, .conflictingQueueOwnership)
+        }
+        let unchanged = try await restarted.preparedQueueOwnership(for: noteID)
+        XCTAssertEqual(unchanged?.ownership, ownership)
+        let authoritative = try XCTUnwrap(fetchRecords(in: container).first)
+        XCTAssertEqual(authoritative.statePayloadData, snapshot.sequencePayloadData)
+        let notes = try ModelContext(container).fetch(FetchDescriptor<Note>())
+        XCTAssertEqual(notes.first { $0.id == noteID }?.content, "Saved")
+    }
+
     func testMYR238InvalidMarkCannotBeQuarantinedAsTextDivergence() async throws {
         for invalidMark in ["malformed", "unsupported", "inconsistentLegacy"] {
             let container = try makeContainer()
