@@ -2766,6 +2766,7 @@ final class MyRAMTests: XCTestCase {
         let folder = Folder(name: "Unrelated")
         context.insert(note)
         context.insert(folder)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
         folder.name = "Unrelated dirty change"
         var failNextSave = true
@@ -2787,7 +2788,8 @@ final class MyRAMTests: XCTestCase {
             }
         )
 
-        viewModel.commitNoteEdit(note, title: "Saved later?", content: "axc", richTextContentData: failedRichText)
+        let committed = await viewModel.commitNoteEditForProduction(note, title: "Saved later?", content: "axc", richTextContentData: failedRichText)
+        XCTAssertFalse(committed)
 
         XCTAssertEqual(note.title, "Draft")
         XCTAssertEqual(note.content, "abc")
@@ -2821,6 +2823,7 @@ final class MyRAMTests: XCTestCase {
         let note = Note(title: "Shared", content: "Hello")
         note.id = noteID
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
         let syncController = RecordingSyncController()
         let viewModel = NotesViewModel(
@@ -2832,7 +2835,8 @@ final class MyRAMTests: XCTestCase {
             resumesPendingConvergenceOnInit: false
         )
 
-        viewModel.commitNoteEdit(note, title: "Shared", content: "Hello local")
+        let committed = await viewModel.commitNoteEditForProduction(note, title: "Shared", content: "Hello local")
+        XCTAssertTrue(committed)
         await Task.yield()
         await Task.yield()
         let remoteBatch = SyncBatch(
@@ -2854,7 +2858,7 @@ final class MyRAMTests: XCTestCase {
 
         XCTAssertEqual(syncController.recordedBatches.count, 1)
         XCTAssertEqual(syncController.recordedBatches.first?.changes.count, 1)
-        guard case .noteBodyTextInserted(let localChange) = syncController.recordedBatches.first?.changes.first else {
+        guard case .noteBodyTextInsertedAnchored(let localChange) = syncController.recordedBatches.first?.changes.first else {
             return XCTFail("Expected pending local body insertion to be finalized before incoming mutation")
         }
         XCTAssertEqual(localChange.noteID, noteID)
@@ -3920,6 +3924,7 @@ final class MyRAMTests: XCTestCase {
         let note = Note(title: "Shared", content: "Hello")
         note.id = noteID
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
         let viewModel = NotesViewModel(
             context: context,
@@ -3930,7 +3935,8 @@ final class MyRAMTests: XCTestCase {
             resumesPendingConvergenceOnInit: false
         )
 
-        viewModel.commitNoteEdit(note, title: "Shared", content: "Hello local")
+        let committed = await viewModel.commitNoteEditForProduction(note, title: "Shared", content: "Hello local")
+        XCTAssertTrue(committed)
         await Task.yield()
         await Task.yield()
 
@@ -3971,6 +3977,7 @@ final class MyRAMTests: XCTestCase {
         let note = Note(title: "Shared", content: "Hello")
         note.id = noteID
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
         let viewModel = NotesViewModel(
             context: context,
@@ -3982,7 +3989,8 @@ final class MyRAMTests: XCTestCase {
             resumesPendingConvergenceOnInit: false
         )
 
-        viewModel.commitNoteEdit(note, title: "Shared", content: "Hello local")
+        let committed = await viewModel.commitNoteEditForProduction(note, title: "Shared", content: "Hello local")
+        XCTAssertTrue(committed)
         await Task.yield()
         await Task.yield()
 
