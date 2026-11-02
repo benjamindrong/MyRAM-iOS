@@ -428,6 +428,79 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), corrupted)
     }
 
+    func testMYR238InvalidMarkCannotBeQuarantinedAsTextDivergence() async throws {
+        for invalidMark in ["malformed", "unsupported", "inconsistentLegacy"] {
+            let container = try makeContainer()
+            let noteID = try insertNote(body: "Sequence body", in: container)
+            let migrator = await makeMigrator(
+                container, allowsExistingStateReplacement: false
+            )
+            try await migrator.runToCompletion()
+            try updateNote(noteID: noteID, body: "Saved divergent body", in: container)
+            let context = ModelContext(container)
+            let record = try XCTUnwrap(
+                context.fetch(FetchDescriptor<NoteSequenceStateRecord>()).first
+            )
+            let sequenceBytes = record.statePayloadData
+            let errorExpected: NoteSequenceStateStoreError
+            switch invalidMark {
+            case "malformed":
+                record.markStatePayloadData = Data("invalid".utf8)
+                errorExpected = .corruptMarkState
+            case "unsupported":
+                record.markFormatVersion = 99
+                errorExpected = .unsupportedMarkVersion(99)
+            default:
+                record.markFormatVersion = 0
+                record.markRevision = 1
+                record.markStatePayloadData = Data()
+                errorExpected = .corruptMarkState
+            }
+            try context.save()
+            let markBytes = record.markStatePayloadData
+            do {
+                _ = try await migrator.runPreservingDivergentStates()
+                XCTFail("Malformed structural marks must not enter text divergence quarantine")
+            } catch let error as NoteSequenceStateStoreError {
+                XCTAssertEqual(error, errorExpected)
+            }
+            let retained = try XCTUnwrap(fetchRecords(in: container).first)
+            XCTAssertEqual(retained.statePayloadData, sequenceBytes)
+            XCTAssertEqual(retained.markStatePayloadData, markBytes)
+            let notes = try ModelContext(container).fetch(FetchDescriptor<Note>())
+            XCTAssertEqual(
+                notes.first { $0.id == noteID }?.content,
+                "Saved divergent body"
+            )
+        }
+    }
+
+    func testMYR238ValidLegacyEmptyMarksCanBePreservedAsDivergence() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Sequence body", in: container)
+        let migrator = await makeMigrator(
+            container, allowsExistingStateReplacement: false
+        )
+        try await migrator.runToCompletion()
+        try updateNote(noteID: noteID, body: "Saved divergent body", in: container)
+        let context = ModelContext(container)
+        let record = try XCTUnwrap(
+            context.fetch(FetchDescriptor<NoteSequenceStateRecord>()).first
+        )
+        record.markFormatVersion = 0
+        record.markRevision = 0
+        record.markStatePayloadData = Data()
+        try context.save()
+
+        let divergentIDs = try await migrator.runPreservingDivergentStates()
+        XCTAssertEqual(divergentIDs, Set([noteID]))
+        let evidence = try await migrator.validatedDivergenceSnapshot(noteID: noteID)
+        XCTAssertEqual(evidence?.markFormatVersion, 0)
+        XCTAssertEqual(evidence?.markRevision, 0)
+        XCTAssertEqual(evidence?.markStatePayloadData, Data())
+        XCTAssertEqual(evidence?.savedBody, "Saved divergent body")
+    }
+
     func testMYR238MalformedSequenceCannotBeQuarantinedAsTextDivergence() async throws {
         let container = try makeContainer()
         let noteID = try insertNote(body: "Authoritative body", in: container)
