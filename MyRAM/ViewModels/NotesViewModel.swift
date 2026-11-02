@@ -475,9 +475,6 @@ final class NotesViewModel: ObservableObject {
         // Persist the immutable note/formatting/CRDT preimage first. A failed
         // subsequent step leaves it retained, never replaced or discarded.
         _ = try await evidenceStore.preserve(snapshot, checkedBy: migrator)
-        _ = try await evidenceStore.prepareOwnerSelectedResolution(
-            snapshot: snapshot, choice: choice, checkedBy: migrator
-        )
 
         let coordinator = PendingSyncRecoveryCoordinator(
             queueAdmin: queueAdmin,
@@ -504,6 +501,11 @@ final class NotesViewModel: ObservableObject {
         let incoming = pendingIncomingBatches.snapshot()
         let ownership = try await coordinator.captureLocalResolutionQueueOwnership(
             incomingSnapshot: incoming
+        )
+        // Only make an immutable owner choice after every queue has passed
+        // its health, admission and duplicate-identity checks.
+        _ = try await evidenceStore.prepareOwnerSelectedResolution(
+            snapshot: snapshot, choice: choice, checkedBy: migrator
         )
         _ = try await evidenceStore.prepareQueueOwnership(
             for: snapshot, ownership: ownership, checkedBy: migrator
