@@ -767,9 +767,8 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         let migrator = await makeMigrator(container, allowsExistingStateReplacement: false)
         try await migrator.runToCompletion()
         try updateNote(noteID: noteID, body: "Saved divergent text", in: container)
-        let snapshot = try XCTUnwrap(
-            try await migrator.validatedDivergenceSnapshot(noteID: noteID)
-        )
+        let captured = try await migrator.validatedDivergenceSnapshot(noteID: noteID)
+        let snapshot = try XCTUnwrap(captured)
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MYR238-clean-queue-complete-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -832,9 +831,8 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         let migrator = await makeMigrator(container, allowsExistingStateReplacement: false)
         try await migrator.runToCompletion()
         try updateNote(noteID: noteID, body: "Owner saved text", in: container)
-        let snapshot = try XCTUnwrap(
-            try await migrator.validatedDivergenceSnapshot(noteID: noteID)
-        )
+        let captured = try await migrator.validatedDivergenceSnapshot(noteID: noteID)
+        let snapshot = try XCTUnwrap(captured)
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MYR238-captured-block-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }

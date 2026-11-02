@@ -545,16 +545,11 @@ final class NotesViewModel: ObservableObject {
         guard let intent = try await evidenceStore.preparedResolution(for: noteID) else {
             throw NoteLocalDivergenceEvidenceStoreError.unresolvedResolutionIntent
         }
-        let snapshots = try await evidenceStore.snapshots(for: noteID)
-        // The index refers to the complete archive, not the note-filtered
-        // sequence. Retrieve the exact chosen generation from its preimage.
         guard let queue = try await evidenceStore.preparedQueueOwnership(for: noteID),
               queue.intent == intent,
-              let snapshot = snapshots.first(where: { candidate in
-                  candidate == snapshots.first(where: {
-                      $0.noteID == noteID && $0 == candidate
-                  }) && candidate.noteID == noteID
-              }) else {
+              let snapshot = try await evidenceStore.snapshotForPreparedResolution(
+                  noteID: noteID
+              ) else {
             throw NoteLocalDivergenceEvidenceStoreError.unresolvedResolutionIntent
         }
         let migrator = await NoteSequenceStateBootstrapMigrator(

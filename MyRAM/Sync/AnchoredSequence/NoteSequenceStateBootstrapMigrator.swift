@@ -312,6 +312,24 @@ final class NoteLocalDivergenceEvidenceStore {
         try loadEnvelope().resolutionIntents?.first { $0.noteID == noteID }
     }
 
+    /// Resolve the selected generation against the full append-only archive.
+    /// Filtering by note before indexing could choose the wrong authority
+    /// when snapshots for multiple notes or generations are interleaved.
+    func snapshotForPreparedResolution(
+        noteID: UUID
+    ) throws -> NoteLocalDivergenceSnapshot? {
+        let envelope = try loadEnvelope()
+        guard let intent = (envelope.resolutionIntents ?? []).first(where: {
+            $0.noteID == noteID
+        }) else {
+            return nil
+        }
+        guard envelope.snapshots.indices.contains(intent.evidenceIndex) else {
+            throw NoteLocalDivergenceEvidenceStoreError.corruptArchive
+        }
+        return envelope.snapshots[intent.evidenceIndex]
+    }
+
     /// Queue ownership must come from the health-checked recovery owner while
     /// sync is suspended. Once archived, re-capture and compare before any
     /// future SwiftData or queue mutation; changed pending work is a blocker.
