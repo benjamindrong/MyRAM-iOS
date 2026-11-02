@@ -488,6 +488,116 @@ final class PendingSyncRecoveryTests: XCTestCase {
         XCTAssertEqual(admin.unsentSnapshot.pendingBatches, [outbound])
     }
 
+    func testMYR238ResolutionCompletionRejectsPendingNoteWorkWithoutQueueMutation() async throws {
+        let resolvedNoteID = UUID()
+        let unrelatedNoteID = UUID()
+        let resolved = makeBatch(idSuffix: 260, noteID: resolvedNoteID)
+        let unrelated = makeBatch(idSuffix: 261, noteID: unrelatedNoteID)
+        let admin = FakePendingSyncQueueAdmin(
+            legacySnapshot: SyncQueueSnapshot(),
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: [unrelated], health: .healthy
+            )
+        )
+        var local = [SyncConvergenceLocalObligation(legacyBatch: resolved)]
+        let incoming = FileBackedSyncBatchQueueSnapshot(
+            pendingBatches: [], health: .healthy
+        )
+        let coordinator = PendingSyncRecoveryCoordinator(
+            queueAdmin: admin,
+            localQueueSnapshot: {
+                FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: local, health: .healthy
+                )
+            },
+            replaceLocalObligations: { local = $0 },
+            flushReadyLocalBatch: { nil }
+        )
+        let preimage = try await coordinator.captureLocalResolutionQueueOwnership(
+            incomingSnapshot: incoming
+        )
+        do {
+            try await coordinator.requireNoConflictingWorkForResolvedNote(
+                resolvedNoteID, expected: preimage, incomingSnapshot: incoming
+            )
+            XCTFail("Pending work for the resolved note must retain the sync barrier")
+        } catch let error as PendingSyncRecoveryCoordinator.RecoveryError {
+            XCTAssertEqual(error, .unresolvedLocalResolutionQueueWork)
+        }
+        XCTAssertEqual(local, preimage.localObligations)
+        XCTAssertEqual(admin.unsentSnapshot.pendingBatches, [unrelated])
+        XCTAssertFalse(admin.didFlushAllOutboundWork)
+
+        local = [SyncConvergenceLocalObligation(legacyBatch: unrelated)]
+        do {
+            try await coordinator.requireNoConflictingWorkForResolvedNote(
+                resolvedNoteID, expected: preimage, incomingSnapshot: incoming
+            )
+            XCTFail("Changed queue ownership must fail before completion")
+        } catch let error as PendingSyncRecoveryCoordinator.RecoveryError {
+            XCTAssertEqual(error, .staleLocalResolutionQueueOwnership)
+        }
+        let updated = try await coordinator.captureLocalResolutionQueueOwnership(
+            incomingSnapshot: incoming
+        )
+        try await coordinator.requireNoConflictingWorkForResolvedNote(
+            resolvedNoteID, expected: updated, incomingSnapshot: incoming
+        )
+    }
+
+    func testMYR238ResolutionCompletionRejectsUnattributedAcknowledgementsAndLegacyNoteEdits() async throws {
+        let resolvedNoteID = UUID()
+        let legacyWork = makeLegacyChange(entityID: resolvedNoteID.uuidString)
+        var legacy = SyncQueueSnapshot(pendingChanges: [legacyWork])
+        let admin = FakePendingSyncQueueAdmin(
+            legacySnapshot: legacy,
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: [], health: .healthy
+            )
+        )
+        let coordinator = PendingSyncRecoveryCoordinator(
+            queueAdmin: admin,
+            localQueueSnapshot: {
+                FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: [], health: .healthy
+                )
+            },
+            replaceLocalObligations: { _ in },
+            flushReadyLocalBatch: { nil }
+        )
+        let incoming = FileBackedSyncBatchQueueSnapshot(
+            pendingBatches: [], health: .healthy
+        )
+        let legacyPreimage = try await coordinator.captureLocalResolutionQueueOwnership(
+            incomingSnapshot: incoming
+        )
+        do {
+            try await coordinator.requireNoConflictingWorkForResolvedNote(
+                resolvedNoteID, expected: legacyPreimage, incomingSnapshot: incoming
+            )
+            XCTFail("Legacy note edits must remain pending")
+        } catch let error as PendingSyncRecoveryCoordinator.RecoveryError {
+            XCTAssertEqual(error, .unresolvedLocalResolutionQueueWork)
+        }
+        legacy = SyncQueueSnapshot(
+            pendingChanges: [], pendingAcknowledgementIDs: [UUID()]
+        )
+        admin.legacySnapshot = legacy
+        let acknowledgementPreimage = try await coordinator.captureLocalResolutionQueueOwnership(
+            incomingSnapshot: incoming
+        )
+        do {
+            try await coordinator.requireNoConflictingWorkForResolvedNote(
+                resolvedNoteID, expected: acknowledgementPreimage, incomingSnapshot: incoming
+            )
+            XCTFail("Unknown legacy acknowledgement ownership must block completion")
+        } catch let error as PendingSyncRecoveryCoordinator.RecoveryError {
+            XCTAssertEqual(error, .unresolvedLocalResolutionQueueWork)
+        }
+        XCTAssertEqual(admin.legacySnapshot, legacy)
+        XCTAssertFalse(admin.didFlushAllOutboundWork)
+    }
+
     func testCoordinatorBuilderFailureLeavesQueuesAndJournalUntouched() async throws {
         let fileURL = temporaryJournalURL()
         defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
