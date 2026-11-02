@@ -318,6 +318,8 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("archive.json")
         let store = await NoteLocalDivergenceEvidenceStore(fileURL: url)
+        let initiallyUnfinished = try await store.hasUnfinishedResolutionIntents()
+        XCTAssertFalse(initiallyUnfinished)
         let preserved = try await store.preserve(snapshot, checkedBy: migrator)
         XCTAssertTrue(preserved)
         let prepared = try await store.prepareOwnerSelectedResolution(
@@ -333,6 +335,8 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         )
         XCTAssertFalse(repeated)
         let restarted = await NoteLocalDivergenceEvidenceStore(fileURL: url)
+        let stillUnfinished = try await restarted.hasUnfinishedResolutionIntents()
+        XCTAssertTrue(stillUnfinished)
         let intent = try await restarted.preparedResolution(for: noteID)
         XCTAssertEqual(intent?.noteID, noteID)
         XCTAssertEqual(intent?.evidenceIndex, 0)
@@ -426,6 +430,12 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
             XCTAssertEqual(error, .corruptArchive)
         }
         XCTAssertEqual(try Data(contentsOf: url), corrupted)
+        do {
+            _ = try await store.hasUnfinishedResolutionIntents()
+            XCTFail("Corrupt intent ledger cannot be treated as empty")
+        } catch let error as NoteLocalDivergenceEvidenceStoreError {
+            XCTAssertEqual(error, .corruptArchive)
+        }
     }
 
     func testMYR238InvalidMarkCannotBeQuarantinedAsTextDivergence() async throws {
