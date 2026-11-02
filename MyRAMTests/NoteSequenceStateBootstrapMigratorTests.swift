@@ -210,7 +210,8 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         try await migrator.runToCompletion()
         let originalRecord = try XCTUnwrap(fetchRecords(in: container).first)
         try updateNote(noteID: noteID, body: "Saved first", in: container)
-        let first = try XCTUnwrap(await migrator.validatedDivergenceSnapshot(noteID: noteID))
+        let firstCapture = try await migrator.validatedDivergenceSnapshot(noteID: noteID)
+        let first = try XCTUnwrap(firstCapture)
 
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MYR238-evidence-\(UUID().uuidString)", isDirectory: true)
@@ -223,7 +224,8 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         XCTAssertFalse(duplicate)
 
         try updateNote(noteID: noteID, body: "Saved second", in: container)
-        let second = try XCTUnwrap(await migrator.validatedDivergenceSnapshot(noteID: noteID))
+        let secondCapture = try await migrator.validatedDivergenceSnapshot(noteID: noteID)
+        let second = try XCTUnwrap(secondCapture)
         let secondCreated = try await store.preserve(second, checkedBy: migrator)
         XCTAssertTrue(secondCreated)
 
@@ -243,7 +245,8 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         let migrator = await makeMigrator(container, allowsExistingStateReplacement: false)
         try await migrator.runToCompletion()
         try updateNote(noteID: noteID, body: "Saved first", in: container)
-        let snapshot = try XCTUnwrap(await migrator.validatedDivergenceSnapshot(noteID: noteID))
+        let snapshotCapture = try await migrator.validatedDivergenceSnapshot(noteID: noteID)
+        let snapshot = try XCTUnwrap(snapshotCapture)
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MYR238-evidence-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -277,7 +280,8 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         let migrator = await makeMigrator(container, allowsExistingStateReplacement: false)
         try await migrator.runToCompletion()
         try updateNote(noteID: noteID, body: "Saved text", in: container)
-        let snapshot = try XCTUnwrap(await migrator.validatedDivergenceSnapshot(noteID: noteID))
+        let snapshotCapture = try await migrator.validatedDivergenceSnapshot(noteID: noteID)
+        let snapshot = try XCTUnwrap(snapshotCapture)
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MYR238-evidence-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
