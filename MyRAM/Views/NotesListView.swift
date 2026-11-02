@@ -22,6 +22,7 @@ final class NotesListState: ObservableObject {
         var resumeOutboundAfterRecovery: @MainActor () -> Void
         var startNetworkingIfNeeded: @MainActor () -> Void
         var resumePendingConvergencePresentationIfNeeded: @MainActor () -> Void
+        var hasUnfinishedLocalResolution: @MainActor () async throws -> Bool = { false }
     }
 
     let vm: NotesViewModel
@@ -98,6 +99,10 @@ final class NotesListState: ObservableObject {
                 },
                 resumePendingConvergencePresentationIfNeeded: { [vm] in
                     vm.resumePendingConvergencePresentationIfNeeded()
+                },
+                hasUnfinishedLocalResolution: {
+                    try await NoteLocalDivergenceEvidenceStore()
+                        .hasUnfinishedResolutionIntents()
                 }
             )
 
@@ -137,6 +142,17 @@ final class NotesListState: ObservableObject {
                 bootstrapActions.completeModelInitializationAfterMigration()
                 didPrepareLocalNotes = true
             }
+            // A durable owner-choice intent is not a completed resolution.
+            // Do not admit outbound while its queue/SwiftData transaction may
+            // be interrupted, even if the text mismatch is no longer visible.
+            var unfinishedResolution = false
+            var resolutionLedgerError: Error?
+            do {
+                unfinishedResolution = try await bootstrapActions.hasUnfinishedLocalResolution()
+            } catch {
+                resolutionLedgerError = error
+            }
+
             if !divergentNoteIDs.isEmpty {
                 // The original note text and anchored history remain intact.
                 // A differing note must never trigger bulk replacement, and no
@@ -148,6 +164,15 @@ final class NotesListState: ObservableObject {
                         "Pending sync recovery also failed: \(String(describing: recoveryError), privacy: .private)"
                     )
                 }
+            } else if let resolutionLedgerError {
+                Self.startupLogger.error(
+                    "Local resolution ledger unavailable: \(String(describing: resolutionLedgerError), privacy: .private)"
+                )
+                startupFailureSupportDetails = "Local resolution ledger needs recovery."
+                syncRecoveryMessage = "Local resolution records cannot be verified. Sync remains paused; healthy notes remain editable."
+            } else if unfinishedResolution {
+                startupFailureSupportDetails = "An explicit local note resolution has not completed."
+                syncRecoveryMessage = "A local note resolution is unfinished. Sync remains paused; healthy notes remain editable."
             } else if let recoveryError {
                 let diagnostic = String(describing: recoveryError)
                 Self.startupLogger.error("Pending sync recovery failed: \(diagnostic, privacy: .private)")
