@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import Foundation
 import NearbySyncCore
 
@@ -147,37 +148,102 @@ final class PendingSyncRecoveryCoordinator {
         }
     }
 
-    /// Completion is intentionally more restrictive than capture. A frozen
-    /// queue snapshot may contain untransmitted user edits, so a matching
-    /// preimage alone can never justify releasing this note to sync.
-    /// This check never changes or discards any queue entry.
+    /// A clean-queue choice remains valid. Pending local operations may also
+    /// remain untouched only if the chosen anchored generation already proves
+    /// their exact effects. Never remove, acknowledge or rewrite those batches.
     func requireNoConflictingWorkForResolvedNote(
         _ noteID: UUID,
         expected: NoteLocalDivergenceQueueOwnershipEvidence,
         incomingSnapshot: FileBackedSyncBatchQueueSnapshot
     ) async throws {
-        // Never report readiness while outbound transport may still transmit
-        // an authority that predates the proposed local resolution.
+        try await requireProtectedLocalResolutionQueueBoundary(
+            noteID, expected: expected, incomingSnapshot: incomingSnapshot
+        )
+        for batch in expected.unsent + expected.localObligations.map(\\.batch) {
+            guard !batch.changes.contains(where: { $0.noteID == noteID }) else {
+                throw RecoveryError.unresolvedLocalResolutionQueueWork
+            }
+        }
+    }
+
+    /// Certifies only already-incorporated local obligations. The exact batch
+    /// identities and payload bytes stay in their existing durable queues;
+    /// normal convergence retains acknowledgement/retry ownership after sync
+    /// admission. A missing or merely plausible effect is never sufficient.
+    func requireRepresentedLocalWorkForResolvedNote(
+        _ noteID: UUID,
+        expected: NoteLocalDivergenceQueueOwnershipEvidence,
+        selectedState: SyncTextSequenceState,
+        savedTitle: String,
+        savedModifiedAt: Date,
+        incomingSnapshot: FileBackedSyncBatchQueueSnapshot
+    ) async throws {
+        try await requireProtectedLocalResolutionQueueBoundary(
+            noteID, expected: expected, incomingSnapshot: incomingSnapshot
+        )
+        for obligation in expected.localObligations {
+            _ = try SyncConvergenceLocalEvidenceCapture.validate(obligation: obligation)
+        }
+        for batch in expected.unsent + expected.localObligations.map(\\.batch) {
+            for change in batch.changes where change.noteID == noteID {
+                switch change {
+                case .noteBodyTextInsertedAnchored(let inserted):
+                    guard let run = selectedState.runs.first(where: {
+                        $0.operationID == inserted.payload.operationID
+                    }), run.text == inserted.text,
+                          run.origin.leftElementID == inserted.payload.anchor.leftElementID,
+                          run.origin.rightElementID == inserted.payload.anchor.rightElementID else {
+                        throw RecoveryError.unresolvedLocalResolutionQueueWork
+                    }
+                case .noteBodyTextDeletedAnchored(let deleted):
+                    // Identity-targeted deletion is terminal/idempotent. Replay
+                    // must leave every fragment and tombstone byte unchanged.
+                    guard let replayed = try? selectedState.incorporating(
+                        delete: deleted.payload
+                    ), replayed == selectedState else {
+                        throw RecoveryError.unresolvedLocalResolutionQueueWork
+                    }
+                case .noteTitleChanged(let title):
+                    // Metadata can travel unchanged only if its effect is
+                    // already reflected in the owner-approved note snapshot.
+                    guard title.title == savedTitle,
+                          title.modifiedAt <= savedModifiedAt else {
+                        throw RecoveryError.unresolvedLocalResolutionQueueWork
+                    }
+                case .noteCreated, .noteBodyTextInserted,
+                     .noteBodyTextDeleted, .noteBodyReconciled,
+                     .noteLifecycleChanged:
+                    // These may install an obsolete body or change lifecycle
+                    // ownership; they need their own durable reconciliation.
+                    throw RecoveryError.unresolvedLocalResolutionQueueWork
+                }
+            }
+        }
+    }
+
+    private func requireProtectedLocalResolutionQueueBoundary(
+        _ noteID: UUID,
+        expected: NoteLocalDivergenceQueueOwnershipEvidence,
+        incomingSnapshot: FileBackedSyncBatchQueueSnapshot
+    ) async throws {
         queueAdmin.suspendOutboundForRecovery()
         try await requireUnchangedLocalResolutionQueueOwnership(
             expected, incomingSnapshot: incomingSnapshot
         )
-
-        // Legacy acknowledgements are not associated with an entity ID.
-        // Losing or bypassing one may make an earlier body operation appear
-        // settled; require an independently clean acknowledgement boundary.
+        // Legacy acknowledgements cannot be attributed to a note. No replay
+        // proof can safely infer their ownership from an empty batch queue.
         guard expected.legacy.pendingAcknowledgementIDs.isEmpty else {
             throw RecoveryError.unresolvedLocalResolutionQueueWork
         }
         for change in expected.legacy.pendingChanges where change.entityType == .item {
-            guard let changedNoteID = UUID(uuidString: change.entityID) else {
-                throw RecoveryError.unresolvedLocalResolutionQueueWork
-            }
-            guard changedNoteID != noteID else {
+            guard let changedNoteID = UUID(uuidString: change.entityID),
+                  changedNoteID != noteID else {
                 throw RecoveryError.unresolvedLocalResolutionQueueWork
             }
         }
-        for batch in expected.unsent + expected.incoming + expected.localObligations.map(\.batch) {
+        // Incoming work has not yet been committed to local history. It must
+        // remain pending until convergence can establish independent authority.
+        for batch in expected.incoming {
             guard !batch.changes.contains(where: { $0.noteID == noteID }) else {
                 throw RecoveryError.unresolvedLocalResolutionQueueWork
             }
