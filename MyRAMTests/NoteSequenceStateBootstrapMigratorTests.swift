@@ -204,9 +204,8 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         let originalPayload = recordBefore.statePayloadData
         let originalRevision = recordBefore.revision
         try updateNote(noteID: noteID, body: "Saved local text", in: container)
-        let snapshot = try XCTUnwrap(
-            await migrator.validatedDivergenceSnapshot(noteID: noteID)
-        )
+        let captured = try await migrator.validatedDivergenceSnapshot(noteID: noteID)
+        let snapshot = try XCTUnwrap(captured)
 
         let keepHistory = try await migrator.makeOwnerResolutionPlan(
             for: snapshot, choice: .keepAnchoredHistory
@@ -227,10 +226,8 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         let unchanged = try XCTUnwrap(fetchRecords(in: container).first)
         XCTAssertEqual(unchanged.statePayloadData, originalPayload)
         XCTAssertEqual(unchanged.revision, originalRevision)
-        XCTAssertEqual(
-            try XCTUnwrap(await migrator.validatedDivergenceSnapshot(noteID: noteID)),
-            snapshot
-        )
+        let unchangedSnapshot = try await migrator.validatedDivergenceSnapshot(noteID: noteID)
+        XCTAssertEqual(try XCTUnwrap(unchangedSnapshot), snapshot)
 
         try updateNote(noteID: noteID, body: "Edited after review", in: container)
         do {
