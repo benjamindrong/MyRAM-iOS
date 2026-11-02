@@ -195,6 +195,54 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
                        originalRecord.statePayloadData)
     }
 
+    func testMYR238OwnerResolutionPlansPreserveHistoryAndDoNotMutateAuthorities() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Anchored original", in: container)
+        let migrator = await makeMigrator(container, allowsExistingStateReplacement: false)
+        try await migrator.runToCompletion()
+        let recordBefore = try XCTUnwrap(fetchRecords(in: container).first)
+        let originalPayload = recordBefore.statePayloadData
+        let originalRevision = recordBefore.revision
+        try updateNote(noteID: noteID, body: "Saved local text", in: container)
+        let snapshot = try XCTUnwrap(
+            await migrator.validatedDivergenceSnapshot(noteID: noteID)
+        )
+
+        let keepHistory = try await migrator.makeOwnerResolutionPlan(
+            for: snapshot, choice: .keepAnchoredHistory
+        )
+        XCTAssertEqual(keepHistory.finalBody, "Anchored original")
+        XCTAssertEqual(keepHistory.finalState.visibleText, "Anchored original")
+        XCTAssertTrue(keepHistory.capturedChanges.isEmpty)
+
+        let keepSaved = try await migrator.makeOwnerResolutionPlan(
+            for: snapshot, choice: .keepSavedBody
+        )
+        XCTAssertEqual(keepSaved.finalBody, "Saved local text")
+        XCTAssertEqual(keepSaved.finalState.visibleText, "Saved local text")
+        XCTAssertFalse(keepSaved.capturedChanges.isEmpty)
+        XCTAssertNotEqual(keepSaved.finalState, keepHistory.finalState)
+
+        // Proposals alone must not stage a new note, sequence, or queue owner.
+        let unchanged = try XCTUnwrap(fetchRecords(in: container).first)
+        XCTAssertEqual(unchanged.statePayloadData, originalPayload)
+        XCTAssertEqual(unchanged.revision, originalRevision)
+        XCTAssertEqual(
+            try XCTUnwrap(await migrator.validatedDivergenceSnapshot(noteID: noteID)),
+            snapshot
+        )
+
+        try updateNote(noteID: noteID, body: "Edited after review", in: container)
+        do {
+            _ = try await migrator.makeOwnerResolutionPlan(
+                for: snapshot, choice: .keepSavedBody
+            )
+            XCTFail("Stale authority must invalidate an earlier owner decision")
+        } catch let error as NoteLocalDivergenceEvidenceStoreError {
+            XCTAssertEqual(error, .staleSnapshot)
+        }
+    }
+
     func testMYR238DivergenceSnapshotRejectsNondivergentRow() async throws {
         let container = try makeContainer()
         let noteID = try insertNote(body: "Matching body", in: container)
