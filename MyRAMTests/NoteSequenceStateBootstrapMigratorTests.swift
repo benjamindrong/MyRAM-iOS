@@ -203,6 +203,104 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         XCTAssertNil(snapshot)
     }
 
+    func testMYR238DurableLocalEvidencePreservesBothGenerationsAndRestarts() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Anchored original", in: container)
+        let migrator = await makeMigrator(container, allowsExistingStateReplacement: false)
+        try await migrator.runToCompletion()
+        let originalRecord = try XCTUnwrap(fetchRecords(in: container).first)
+        try updateNote(noteID: noteID, body: "Saved first", in: container)
+        let first = try XCTUnwrap(await migrator.validatedDivergenceSnapshot(noteID: noteID))
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR238-evidence-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let archiveURL = directory.appendingPathComponent("local-divergence-evidence-v1.json")
+        let store = await NoteLocalDivergenceEvidenceStore(fileURL: archiveURL)
+        let created = try await store.preserve(first, checkedBy: migrator)
+        XCTAssertTrue(created)
+        let duplicate = try await store.preserve(first, checkedBy: migrator)
+        XCTAssertFalse(duplicate)
+
+        try updateNote(noteID: noteID, body: "Saved second", in: container)
+        let second = try XCTUnwrap(await migrator.validatedDivergenceSnapshot(noteID: noteID))
+        let secondCreated = try await store.preserve(second, checkedBy: migrator)
+        XCTAssertTrue(secondCreated)
+
+        let reopened = await NoteLocalDivergenceEvidenceStore(fileURL: archiveURL)
+        let restored = try await reopened.snapshots(for: noteID)
+        XCTAssertEqual(restored, [first, second])
+        XCTAssertEqual(restored.first?.sequencePayloadData, originalRecord.statePayloadData)
+        XCTAssertEqual(restored.first?.markStatePayloadData, originalRecord.markStatePayloadData)
+        XCTAssertEqual(restored.map(\.savedBody), ["Saved first", "Saved second"])
+        XCTAssertEqual(try XCTUnwrap(fetchRecords(in: container).first).statePayloadData,
+                       originalRecord.statePayloadData)
+    }
+
+    func testMYR238DurableLocalEvidenceRejectsStaleAndCorruptArchive() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Anchored original", in: container)
+        let migrator = await makeMigrator(container, allowsExistingStateReplacement: false)
+        try await migrator.runToCompletion()
+        try updateNote(noteID: noteID, body: "Saved first", in: container)
+        let snapshot = try XCTUnwrap(await migrator.validatedDivergenceSnapshot(noteID: noteID))
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR238-evidence-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let archiveURL = directory.appendingPathComponent("archive.json")
+        let store = await NoteLocalDivergenceEvidenceStore(fileURL: archiveURL)
+
+        try updateNote(noteID: noteID, body: "Saved later", in: container)
+        do {
+            _ = try await store.preserve(snapshot, checkedBy: migrator)
+            XCTFail("Stale local note authority must not be certified")
+        } catch let error as NoteLocalDivergenceEvidenceStoreError {
+            XCTAssertEqual(error, .staleSnapshot)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: archiveURL.path))
+
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let corrupt = Data("not JSON".utf8)
+        try corrupt.write(to: archiveURL)
+        do {
+            _ = try await store.snapshots(for: noteID)
+            XCTFail("Corrupt evidence must be retained and reported, never replaced")
+        } catch let error as NoteLocalDivergenceEvidenceStoreError {
+            XCTAssertEqual(error, .corruptArchive)
+        }
+        XCTAssertEqual(try Data(contentsOf: archiveURL), corrupt)
+    }
+
+    func testMYR238DurableLocalEvidenceFailedWriteCannotReportPreserved() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Anchored original", in: container)
+        let migrator = await makeMigrator(container, allowsExistingStateReplacement: false)
+        try await migrator.runToCompletion()
+        try updateNote(noteID: noteID, body: "Saved text", in: container)
+        let snapshot = try XCTUnwrap(await migrator.validatedDivergenceSnapshot(noteID: noteID))
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR238-evidence-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let archiveURL = directory.appendingPathComponent("archive.json")
+        var failingIO = NoteLocalDivergenceEvidenceFileIO.live
+        failingIO.writeData = { _, _ in
+            throw NSError(domain: "MYR238.simulatedWriteFailure", code: 1)
+        }
+        let store = await NoteLocalDivergenceEvidenceStore(
+            fileURL: archiveURL,
+            fileIO: failingIO
+        )
+        do {
+            _ = try await store.preserve(snapshot, checkedBy: migrator)
+            XCTFail("A failed evidence write must never permit authority change")
+        } catch let error as NoteLocalDivergenceEvidenceStoreError {
+            XCTAssertEqual(error, .persistenceFailed)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: archiveURL.path))
+        let retained = try XCTUnwrap(fetchRecords(in: container).first)
+        XCTAssertEqual(retained.statePayloadData, snapshot.sequencePayloadData)
+    }
+
     func testMYR238MalformedSequenceCannotBeQuarantinedAsTextDivergence() async throws {
         let container = try makeContainer()
         let noteID = try insertNote(body: "Authoritative body", in: container)
