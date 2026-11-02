@@ -680,6 +680,130 @@ final class NoteSequenceStateBootstrapMigrator {
         )
     }
 
+    /// The SwiftData portion of a journaled resolution. This must be invoked
+    /// only after the owning ledger has recorded an explicit owner decision,
+    /// frozen the pending queue preimage and durably marked note commit started.
+    /// It never changes queues or resumes sync. The same prepared bytes are
+    /// idempotent across a crash between SwiftData save and journal update.
+    func applyPreparedNoteCommit(
+        _ prepared: NoteLocalDivergenceCommitPreparation,
+        expected snapshot: NoteLocalDivergenceSnapshot
+    ) throws -> Bool {
+        guard prepared.intent.noteID == snapshot.noteID,
+              prepared.finalMarkStatePayloadData == snapshot.markStatePayloadData,
+              prepared.finalBody == (
+                prepared.intent.choice == .keepSavedBody
+                    ? snapshot.savedBody : snapshot.sequenceVisibleText
+              ) else {
+            throw NoteLocalDivergenceEvidenceStoreError.conflictingResolution
+        }
+        let targetRevision: UInt64
+        switch prepared.intent.choice {
+        case .keepAnchoredHistory:
+            targetRevision = snapshot.sequenceRevision
+        case .keepSavedBody:
+            guard snapshot.sequenceRevision < UInt64.max else {
+                throw NoteSequenceStateStoreError.persistenceFailure
+            }
+            targetRevision = snapshot.sequenceRevision + 1
+        }
+        let targetRichText: Data? = prepared.intent.choice == .keepSavedBody
+            ? snapshot.savedRichTextContentData : nil
+
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        guard let note = try fetchNote(noteID: snapshot.noteID, in: context),
+              let record = try fetchRecord(noteID: snapshot.noteID, in: context),
+              note.title == snapshot.savedTitle,
+              note.isPinned == snapshot.savedIsPinned,
+              note.createdAt == snapshot.savedCreatedAt,
+              note.modifiedAt == snapshot.savedModifiedAt,
+              note.deletedAt == snapshot.savedDeletedAt,
+              note.folder?.id == snapshot.savedFolderID,
+              record.markFormatVersion == snapshot.markFormatVersion,
+              record.markRevision == snapshot.markRevision,
+              record.markStatePayloadData == snapshot.markStatePayloadData else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+
+        func matchesTarget(_ note: Note, _ record: NoteSequenceStateRecord) -> Bool {
+            note.content == prepared.finalBody &&
+                note.richTextContentData == targetRichText &&
+                record.formatVersion == snapshot.sequenceFormatVersion &&
+                record.revision == targetRevision &&
+                record.visibleUTF16Count == prepared.finalSequenceVisibleUTF16Count &&
+                record.tombstonedUTF16Count == prepared.finalSequenceTombstonedUTF16Count &&
+                record.payloadByteCount == prepared.finalSequencePayloadData.count &&
+                record.statePayloadData == prepared.finalSequencePayloadData
+        }
+
+        if matchesTarget(note, record) {
+            try validateCommittedResolution(record: record, prepared: prepared)
+            return false
+        }
+        guard try revalidateDivergenceSnapshot(snapshot) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+
+        do {
+            note.content = prepared.finalBody
+            note.richTextContentData = targetRichText
+            record.formatVersion = snapshot.sequenceFormatVersion
+            record.revision = targetRevision
+            record.visibleUTF16Count = prepared.finalSequenceVisibleUTF16Count
+            record.tombstonedUTF16Count = prepared.finalSequenceTombstonedUTF16Count
+            record.payloadByteCount = prepared.finalSequencePayloadData.count
+            record.statePayloadData = prepared.finalSequencePayloadData
+            try validateCommittedResolution(record: record, prepared: prepared)
+            try saveOperation(context)
+        } catch {
+            context.rollback()
+            throw error
+        }
+
+        // The save callback succeeding is not proof that the intended pair
+        // became durable. Reopen the store before reporting the note committed.
+        let verified = ModelContext(container)
+        verified.autosaveEnabled = false
+        guard let savedNote = try fetchNote(noteID: snapshot.noteID, in: verified),
+              let savedRecord = try fetchRecord(noteID: snapshot.noteID, in: verified),
+              matchesTarget(savedNote, savedRecord),
+              savedNote.title == snapshot.savedTitle,
+              savedNote.isPinned == snapshot.savedIsPinned,
+              savedNote.createdAt == snapshot.savedCreatedAt,
+              savedNote.modifiedAt == snapshot.savedModifiedAt,
+              savedNote.deletedAt == snapshot.savedDeletedAt,
+              savedNote.folder?.id == snapshot.savedFolderID,
+              savedRecord.markStatePayloadData == snapshot.markStatePayloadData,
+              savedRecord.markRevision == snapshot.markRevision,
+              savedRecord.markFormatVersion == snapshot.markFormatVersion else {
+            throw NoteSequenceStateStoreError.verificationFailure
+        }
+        try validateCommittedResolution(record: savedRecord, prepared: prepared)
+        return true
+    }
+
+    private func validateCommittedResolution(
+        record: NoteSequenceStateRecord,
+        prepared: NoteLocalDivergenceCommitPreparation
+    ) throws {
+        let sequence = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: record, noteID: prepared.intent.noteID
+        )
+        guard NoteSequenceStateExactText.matches(sequence.visibleText, prepared.finalBody) else {
+            throw NoteSequenceStateStoreError.verificationFailure
+        }
+        if record.markFormatVersion == NoteStructuralFormattingPersistence.schemaVersion {
+            _ = try NoteStructuralFormattingPersistence.decode(
+                record: record, pairedWith: sequence
+            )
+        } else if record.markFormatVersion != 0 ||
+                  record.markRevision != 0 ||
+                  !record.markStatePayloadData.isEmpty {
+            throw NoteSequenceStateStoreError.corruptMarkState
+        }
+    }
+
     private func hasValidSequenceWithDivergentBody(noteID: UUID) throws -> Bool {
         try validatedDivergenceSnapshot(noteID: noteID) != nil
     }
