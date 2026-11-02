@@ -875,6 +875,114 @@ final class PendingSyncRecoveryTests: XCTestCase {
         XCTAssertTrue(admin.unsentSnapshot.pendingBatches.isEmpty)
     }
 
+    func testMYR238OwnerHistoryCompletionRetainsExistingAnchoredUnsentBatch() async throws {
+        let container = try makeContainer()
+        let initial = ModelContext(container)
+        let note = Note(title: "Existing", content: "A")
+        initial.insert(note)
+        try initial.save()
+        let noteID = note.id
+        let migrator = await NoteSequenceStateBootstrapMigrator(
+            container: container, allowsExistingStateReplacement: false
+        )
+        try await migrator.runToCompletion()
+
+        let stateContext = ModelContext(container)
+        let original = try XCTUnwrap(stateContext.fetch(
+            FetchDescriptor<NoteSequenceStateRecord>()
+        ).first { $0.noteID == noteID })
+        let state = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: original, noteID: noteID
+        )
+        let deviceID = UUID()
+        let now = Date(timeIntervalSince1970: 1_810)
+        let anchored = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: noteID, utf16Offset: 1, text: "B",
+            modifiedAt: now,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "A"),
+            operationID: SyncOperationID(deviceID: deviceID, localCounter: 902),
+            state: state
+        )
+        guard case .noteBodyTextInsertedAnchored(let inserted) = anchored else {
+            return XCTFail("Expected anchored insertion")
+        }
+        let advanced = try SyncBatchAnchoredInsertReplay.applying(
+            inserted, to: state
+        ).sequenceState
+        let encoded = try NoteSequenceStatePersistenceCodec.encode(
+            state: advanced, noteID: noteID
+        )
+        let historicalNote = try XCTUnwrap(stateContext.fetch(
+            FetchDescriptor<Note>()
+        ).first { $0.id == noteID })
+        historicalNote.content = advanced.visibleText
+        original.statePayloadData = encoded
+        original.payloadByteCount = encoded.count
+        original.visibleUTF16Count = advanced.visibleUTF16Count
+        original.tombstonedUTF16Count = advanced.tombstonedUTF16Count
+        original.revision += 1
+        try stateContext.save()
+
+        let divergedContext = ModelContext(container)
+        let later = try XCTUnwrap(divergedContext.fetch(
+            FetchDescriptor<Note>()
+        ).first { $0.id == noteID })
+        later.content = "Different saved body"
+        try divergedContext.save()
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR238-represented-local-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let vm = NotesViewModel(
+            context: ModelContext(container),
+            syncConflictStore: SyncConflictStore(
+                fileURL: directory.appendingPathComponent("conflicts.json")
+            ),
+            pendingIncomingBatchQueueFileURL: nil,
+            anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore(
+                fileURL: directory.appendingPathComponent("anchored.json")
+            ),
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false,
+            defersModelInitializationUntilMigration: true
+        )
+        vm.isolateDivergentNoteIDs([noteID])
+        let store = await NoteLocalDivergenceEvidenceStore(
+            fileURL: directory.appendingPathComponent("ledger.json")
+        )
+        let pending = SyncBatch(
+            id: UUID(), originDeviceID: deviceID,
+            createdAt: now, batchSequence: 1, changes: [anchored]
+        )
+        let admin = FakePendingSyncQueueAdmin(
+            legacySnapshot: SyncQueueSnapshot(),
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: [pending], health: .healthy
+            )
+        )
+
+        try await vm.prepareProtectedLocalDivergenceChoice(
+            noteID: noteID, choice: .keepAnchoredHistory,
+            queueAdmin: admin, evidenceStore: store
+        )
+        try await vm.completeProtectedLocalDivergence(
+            noteID: noteID, queueAdmin: admin, evidenceStore: store
+        )
+        XCTAssertEqual(vm.refreshedNote(withID: noteID)?.content, "AB")
+        let durable = try XCTUnwrap(ModelContext(container).fetch(
+            FetchDescriptor<NoteSequenceStateRecord>()
+        ).first { $0.noteID == noteID })
+        XCTAssertEqual(durable.statePayloadData, encoded)
+        XCTAssertEqual(admin.unsentSnapshot.pendingBatches, [pending])
+        XCTAssertTrue(admin.isSuspended)
+        XCTAssertFalse(admin.didFlushAllOutboundWork)
+        let restarted = await NoteLocalDivergenceEvidenceStore(
+            fileURL: directory.appendingPathComponent("ledger.json")
+        )
+        let unfinished = try await restarted.hasUnfinishedResolutionIntents()
+        XCTAssertFalse(unfinished)
+    }
+
     func testMYR238SavedBodyCompletionCannotCommitWithoutDurableOperationQueue() async throws {
         let container = try makeContainer()
         let initial = ModelContext(container)
