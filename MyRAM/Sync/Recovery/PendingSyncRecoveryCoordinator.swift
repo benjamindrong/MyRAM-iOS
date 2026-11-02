@@ -159,7 +159,7 @@ final class PendingSyncRecoveryCoordinator {
         try await requireProtectedLocalResolutionQueueBoundary(
             noteID, expected: expected, incomingSnapshot: incomingSnapshot
         )
-        for batch in expected.unsent + expected.localObligations.map(\\.batch) {
+        for batch in expected.unsent + expected.localObligations.map(\.batch) {
             guard !batch.changes.contains(where: { $0.noteID == noteID }) else {
                 throw RecoveryError.unresolvedLocalResolutionQueueWork
             }
@@ -184,7 +184,7 @@ final class PendingSyncRecoveryCoordinator {
         for obligation in expected.localObligations {
             _ = try SyncConvergenceLocalEvidenceCapture.validate(obligation: obligation)
         }
-        for batch in expected.unsent + expected.localObligations.map(\\.batch) {
+        for batch in expected.unsent + expected.localObligations.map(\.batch) {
             for change in batch.changes where change.noteID == noteID {
                 switch change {
                 case .noteBodyTextInsertedAnchored(let inserted):
