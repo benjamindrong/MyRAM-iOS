@@ -1018,7 +1018,9 @@ struct NotesListView: View {
     private var desktopEditorDetail: some View {
         if let selectedNote {
             if state.divergentNoteIDs.contains(selectedNote.id) {
-                DivergentNoteReadOnlyView(note: selectedNote)
+                DivergentNoteReadOnlyView(
+                    note: selectedNote, vm: vm, syncController: syncController
+                )
             } else {
             NoteEditorView(
                 vm: vm,
@@ -2068,7 +2070,9 @@ private struct MobileNoteEditorSheet: ViewModifier {
             content
                 .sheet(item: $selectedNote) { note in
                     if divergentNoteIDs.contains(note.id) {
-                        DivergentNoteReadOnlyView(note: note)
+                        DivergentNoteReadOnlyView(
+                            note: note, vm: vm, syncController: syncController
+                        )
                     } else {
                     NoteEditorView(
                         vm: vm,
@@ -2089,24 +2093,146 @@ private struct MobileNoteEditorSheet: ViewModifier {
 
 private struct DivergentNoteReadOnlyView: View {
     let note: Note
+    @ObservedObject var vm: NotesViewModel
+    @ObservedObject var syncController: MyRAMSyncController
+
+    @State private var snapshot: NoteLocalDivergenceSnapshot?
+    @State private var selectedChoice: NoteLocalDivergenceResolutionChoice?
+    @State private var pendingChoice: NoteLocalDivergenceResolutionChoice?
+    @State private var showingConfirmation = false
+    @State private var isPreparing = false
+    @State private var errorMessage: String?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 Label("Editing paused for this note", systemImage: "exclamationmark.triangle")
                     .font(.headline)
-                Text("The saved note text and its synchronization history disagree. Both remain preserved. Other notes can still be edited; sync is paused.")
+                Text("The saved text and synchronization history disagree. Neither version has been discarded. Other notes remain editable; sync is paused.")
                     .font(.subheadline)
                 Text(note.title.isEmpty ? "Untitled" : note.title)
                     .font(.title2.bold())
-                Text(note.content)
-                    .textSelection(.enabled)
+
+                if let snapshot {
+                    Group {
+                        Text("Saved text").font(.headline)
+                        Text(snapshot.savedBody)
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("divergence-saved-text")
+                        Divider()
+                        Text("Synchronization history").font(.headline)
+                        Text(snapshot.sequenceVisibleText)
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("divergence-anchored-history")
+                    }
                     .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if let selectedChoice {
+                        Text(selectedChoice == .keepSavedBody
+                             ? "Saved-text choice recorded."
+                             : "Synchronization-history choice recorded.")
+                            .font(.headline)
+                        Text("The choice is preserved, but the resolution is not complete. Editing and syncing remain paused until pending work is reconciled.")
+                            .font(.subheadline)
+                            .accessibilityIdentifier("divergence-choice-pending-reconciliation")
+                    } else {
+                        Text("Choose which version to keep. This records an irreversible choice for this recovery attempt; it does not immediately modify the note or resume syncing.")
+                            .font(.subheadline)
+                        Button("Choose saved text") {
+                            pendingChoice = .keepSavedBody
+                            showingConfirmation = true
+                        }
+                        .disabled(isPreparing)
+                        .accessibilityIdentifier("divergence-choose-saved")
+                        Button("Choose synchronization history") {
+                            pendingChoice = .keepAnchoredHistory
+                            showingConfirmation = true
+                        }
+                        .disabled(isPreparing)
+                        .accessibilityIdentifier("divergence-choose-history")
+                    }
+                } else {
+                    Text(note.content)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if errorMessage == nil {
+                        ProgressView("Loading preserved versions")
+                    }
+                }
+                if isPreparing {
+                    ProgressView("Preserving choice and queue evidence")
+                }
+                if let errorMessage {
+                    Text(errorMessage)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("divergence-resolution-error")
+                }
             }
             .padding()
         }
         .navigationTitle("Protected Note")
         .accessibilityIdentifier("divergent-note-readonly")
+        .task(id: note.id) {
+            await inspect()
+        }
+        .confirmationDialog(
+            "Confirm owner choice",
+            isPresented: $showingConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Record this choice") {
+                if let pendingChoice {
+                    Task { await prepare(pendingChoice) }
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingChoice = nil
+            }
+        } message: {
+            Text("Both original versions remain archived, but the choice cannot be changed during this recovery. No note or sync data will be replaced by this action.")
+        }
+    }
+
+    @MainActor
+    private func inspect() async {
+        do {
+            let store = await NoteLocalDivergenceEvidenceStore()
+            let result = try await vm.inspectProtectedLocalDivergence(
+                noteID: note.id, evidenceStore: store
+            )
+            snapshot = result.snapshot
+            selectedChoice = result.selected
+            errorMessage = nil
+        } catch {
+            errorMessage = "Unable to inspect preserved versions: \(error)"
+        }
+    }
+
+    @MainActor
+    private func prepare(_ choice: NoteLocalDivergenceResolutionChoice) async {
+        guard !isPreparing, selectedChoice == nil else { return }
+        isPreparing = true
+        defer {
+            isPreparing = false
+            pendingChoice = nil
+        }
+        do {
+            let store = await NoteLocalDivergenceEvidenceStore()
+            try await vm.prepareProtectedLocalDivergenceChoice(
+                noteID: note.id, choice: choice,
+                queueAdmin: syncController, evidenceStore: store
+            )
+            let result = try await vm.inspectProtectedLocalDivergence(
+                noteID: note.id, evidenceStore: store
+            )
+            snapshot = result.snapshot
+            selectedChoice = result.selected
+            errorMessage = nil
+        } catch {
+            errorMessage = "Resolution preparation remains incomplete: \(error)"
+            await inspect()
+        }
     }
 }
 
