@@ -776,6 +776,89 @@ final class PendingSyncRecoveryTests: XCTestCase {
         XCTAssertTrue(admin.unsentSnapshot.pendingBatches.isEmpty)
     }
 
+    func testMYR238SavedBodyCompletionCannotCommitWithoutDurableOperationQueue() async throws {
+        let container = try makeContainer()
+        let initial = ModelContext(container)
+        let note = Note(content: "Anchored historical text")
+        initial.insert(note)
+        try initial.save()
+        let noteID = note.id
+        let migrator = await NoteSequenceStateBootstrapMigrator(
+            container: container, allowsExistingStateReplacement: false
+        )
+        try await migrator.runToCompletion()
+        let historicalRecord = try XCTUnwrap(ModelContext(container).fetch(
+            FetchDescriptor<NoteSequenceStateRecord>()
+        ).first { $0.noteID == noteID })
+        let historicalPayload = historicalRecord.statePayloadData
+        let modified = ModelContext(container)
+        let saved = try XCTUnwrap(modified.fetch(
+            FetchDescriptor<Note>()
+        ).first { $0.id == noteID })
+        saved.content = "New unsent saved text"
+        try modified.save()
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR238-saved-owner-precommit-\\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let vm = NotesViewModel(
+            context: ModelContext(container),
+            syncConflictStore: SyncConflictStore(
+                fileURL: directory.appendingPathComponent("conflicts.json")
+            ),
+            pendingIncomingBatchQueueFileURL: nil,
+            anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore(
+                fileURL: directory.appendingPathComponent("anchored.json")
+            ),
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false,
+            defersModelInitializationUntilMigration: true
+        )
+        vm.isolateDivergentNoteIDs([noteID])
+        let store = await NoteLocalDivergenceEvidenceStore(
+            fileURL: directory.appendingPathComponent("ledger.json")
+        )
+        let admin = FakePendingSyncQueueAdmin(
+            legacySnapshot: SyncQueueSnapshot(),
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: [], health: .healthy
+            )
+        )
+        try await vm.prepareProtectedLocalDivergenceChoice(
+            noteID: noteID, choice: .keepSavedBody,
+            queueAdmin: admin, evidenceStore: store
+        )
+        let candidate = try await store.preparedCommit(for: noteID)
+        let prepared = try XCTUnwrap(candidate)
+        XCTAssertFalse(prepared.capturedChanges.isEmpty)
+        do {
+            try await vm.completeProtectedLocalDivergence(
+                noteID: noteID, queueAdmin: admin, evidenceStore: store
+            )
+            XCTFail("An unpublished anchored edit must block before note commit")
+        } catch let error as NoteLocalDivergenceEvidenceStoreError {
+            XCTAssertEqual(error, .unresolvedCapturedResolutionChanges)
+        }
+        let persisted = try XCTUnwrap(ModelContext(container).fetch(
+            FetchDescriptor<Note>()
+        ).first { $0.id == noteID })
+        XCTAssertEqual(persisted.content, "New unsent saved text")
+        let record = try XCTUnwrap(ModelContext(container).fetch(
+            FetchDescriptor<NoteSequenceStateRecord>()
+        ).first { $0.noteID == noteID })
+        XCTAssertEqual(record.statePayloadData, historicalPayload)
+        let phase = try await store.noteCommitPhase(for: noteID)
+        XCTAssertNil(phase)
+        let restarted = await NoteLocalDivergenceEvidenceStore(
+            fileURL: directory.appendingPathComponent("ledger.json")
+        )
+        let unfinished = try await restarted.hasUnfinishedResolutionIntents()
+        XCTAssertTrue(unfinished)
+        XCTAssertTrue(admin.isSuspended)
+        XCTAssertTrue(admin.unsentSnapshot.pendingBatches.isEmpty)
+        XCTAssertFalse(admin.didFlushAllOutboundWork)
+    }
+
     func testCoordinatorBuilderFailureLeavesQueuesAndJournalUntouched() async throws {
         let fileURL = temporaryJournalURL()
         defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
