@@ -526,6 +526,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
         }
         XCTAssertEqual(local, preimage.localObligations)
         XCTAssertEqual(admin.unsentSnapshot.pendingBatches, [unrelated])
+        XCTAssertTrue(admin.isSuspended)
         XCTAssertFalse(admin.didFlushAllOutboundWork)
 
         local = [SyncConvergenceLocalObligation(legacyBatch: unrelated)]
@@ -595,6 +596,42 @@ final class PendingSyncRecoveryTests: XCTestCase {
             XCTAssertEqual(error, .unresolvedLocalResolutionQueueWork)
         }
         XCTAssertEqual(admin.legacySnapshot, legacy)
+        XCTAssertFalse(admin.didFlushAllOutboundWork)
+    }
+
+    func testMYR238ResolutionCompletionRejectsIncomingWorkForProtectedNote() async throws {
+        let noteID = UUID()
+        let remote = makeBatch(idSuffix: 262, noteID: noteID)
+        let admin = FakePendingSyncQueueAdmin(
+            legacySnapshot: SyncQueueSnapshot(),
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .healthy)
+        )
+        let coordinator = PendingSyncRecoveryCoordinator(
+            queueAdmin: admin,
+            localQueueSnapshot: {
+                FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: [], health: .healthy
+                )
+            },
+            replaceLocalObligations: { _ in },
+            flushReadyLocalBatch: { nil }
+        )
+        let incoming = FileBackedSyncBatchQueueSnapshot(
+            pendingBatches: [remote], health: .healthy
+        )
+        let captured = try await coordinator.captureLocalResolutionQueueOwnership(
+            incomingSnapshot: incoming
+        )
+        do {
+            try await coordinator.requireNoConflictingWorkForResolvedNote(
+                noteID, expected: captured, incomingSnapshot: incoming
+            )
+            XCTFail("Incoming work must not be silently superseded by resolution")
+        } catch let error as PendingSyncRecoveryCoordinator.RecoveryError {
+            XCTAssertEqual(error, .unresolvedLocalResolutionQueueWork)
+        }
+        XCTAssertTrue(admin.isSuspended)
+        XCTAssertEqual(captured.incoming, [remote])
         XCTAssertFalse(admin.didFlushAllOutboundWork)
     }
 
