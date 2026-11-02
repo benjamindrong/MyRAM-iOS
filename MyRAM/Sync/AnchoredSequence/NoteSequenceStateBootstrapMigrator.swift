@@ -67,6 +67,19 @@ struct NoteLocalDivergenceResolutionPlan: Equatable, Sendable {
     let capturedChanges: [SyncConvergenceCapturedLocalChange]
 }
 
+/// Recovered before any SwiftData or queue write: exact proposed authority bytes
+/// and the captured operations that would make the saved text authoritative.
+/// This is a write-ahead *preparation*, never a completed commit or sync receipt.
+struct NoteLocalDivergenceCommitPreparation: Codable, Equatable {
+    let intent: NoteLocalDivergenceResolutionIntent
+    let finalBody: String
+    let finalSequencePayloadData: Data
+    let finalSequenceVisibleUTF16Count: Int
+    let finalSequenceTombstonedUTF16Count: Int
+    let finalMarkStatePayloadData: Data
+    let capturedChanges: [SyncConvergenceCapturedLocalChange]
+}
+
 /// An immutable, append-only ledger of local note/body versus anchored-history evidence.
 /// Neither a captured snapshot nor this ledger authorizes choosing a winner or resuming sync.
 struct NoteLocalDivergenceEvidenceEnvelope: Codable, Equatable {
@@ -79,6 +92,9 @@ struct NoteLocalDivergenceEvidenceEnvelope: Codable, Equatable {
     var resolutionIntents: [NoteLocalDivergenceResolutionIntent]? = nil
     // Old v1 archives have no queue preparation. Never infer one from intent.
     var queuePreparations: [NoteLocalDivergenceQueuePreparation]? = nil
+    // Compatible with older v1 archives. Never infer transaction authority
+    // from the mere presence of an owner choice or a queue preimage.
+    var commitPreparations: [NoteLocalDivergenceCommitPreparation]? = nil
 
     static let empty = Self(formatVersion: supportedVersion, snapshots: [])
 
@@ -109,6 +125,28 @@ struct NoteLocalDivergenceEvidenceEnvelope: Codable, Equatable {
         for prepared in queuePreparations ?? [] {
             guard (resolutionIntents ?? []).contains(prepared.intent),
                   preparedNoteIDs.insert(prepared.intent.noteID).inserted else {
+                throw NoteLocalDivergenceEvidenceStoreError.corruptArchive
+            }
+        }
+        var commitPreparedNoteIDs = Set<UUID>()
+        for prepared in commitPreparations ?? [] {
+            guard (queuePreparations ?? []).contains(where: { $0.intent == prepared.intent }),
+                  snapshots.indices.contains(prepared.intent.evidenceIndex),
+                  commitPreparedNoteIDs.insert(prepared.intent.noteID).inserted else {
+                throw NoteLocalDivergenceEvidenceStoreError.corruptArchive
+            }
+            let snapshot = snapshots[prepared.intent.evidenceIndex]
+            let chosenBody = prepared.intent.choice == .keepSavedBody
+                ? snapshot.savedBody : snapshot.sequenceVisibleText
+            guard prepared.finalBody == chosenBody,
+                  prepared.finalMarkStatePayloadData == snapshot.markStatePayloadData,
+                  prepared.finalSequenceVisibleUTF16Count == chosenBody.utf16.count,
+                  prepared.finalSequenceTombstonedUTF16Count >= snapshot.sequenceTombstonedUTF16Count,
+                  (prepared.intent.choice != .keepAnchoredHistory || (
+                    prepared.finalSequencePayloadData == snapshot.sequencePayloadData &&
+                    prepared.finalSequenceTombstonedUTF16Count == snapshot.sequenceTombstonedUTF16Count &&
+                    prepared.capturedChanges.isEmpty
+                  )) else {
                 throw NoteLocalDivergenceEvidenceStoreError.corruptArchive
             }
         }
@@ -269,6 +307,68 @@ final class NoteLocalDivergenceEvidenceStore {
         for noteID: UUID
     ) throws -> NoteLocalDivergenceQueuePreparation? {
         try loadEnvelope().queuePreparations?.first { $0.intent.noteID == noteID }
+    }
+
+    /// Freeze the already-reviewed owner choice as an immutable, replayable
+    /// write-ahead preparation. No Note, CRDT, queue or networking is changed.
+    /// Later transaction execution must re-check the exact queue preimage and
+    /// note/mark snapshot before any authority mutation.
+    func prepareCommit(
+        for snapshot: NoteLocalDivergenceSnapshot,
+        checkedBy migrator: NoteSequenceStateBootstrapMigrator
+    ) async throws -> NoteLocalDivergenceCommitPreparation {
+        guard try migrator.revalidateDivergenceSnapshot(snapshot) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+        let envelope = try loadEnvelope()
+        guard let index = envelope.snapshots.firstIndex(of: snapshot),
+              let queuePreparation = (envelope.queuePreparations ?? []).first(where: {
+                  $0.intent.noteID == snapshot.noteID && $0.intent.evidenceIndex == index
+              }) else {
+            throw NoteLocalDivergenceEvidenceStoreError.conflictingQueueOwnership
+        }
+
+        // Never generate fresh operation identities on a replay. Those from the
+        // original prepared plan are the only identities a future commit can use.
+        if let existing = (envelope.commitPreparations ?? []).first(where: {
+            $0.intent.noteID == snapshot.noteID
+        }) {
+            guard existing.intent == queuePreparation.intent else {
+                throw NoteLocalDivergenceEvidenceStoreError.conflictingResolution
+            }
+            return existing
+        }
+
+        let plan = try await migrator.makeOwnerResolutionPlan(
+            for: snapshot, choice: queuePreparation.intent.choice
+        )
+        let encoded = try NoteSequenceStatePersistenceCodec.encode(
+            state: plan.finalState, noteID: snapshot.noteID
+        )
+        let prepared = NoteLocalDivergenceCommitPreparation(
+            intent: queuePreparation.intent,
+            finalBody: plan.finalBody,
+            finalSequencePayloadData: encoded,
+            finalSequenceVisibleUTF16Count: plan.finalState.visibleUTF16Count,
+            finalSequenceTombstonedUTF16Count: plan.finalState.tombstonedUTF16Count,
+            finalMarkStatePayloadData: snapshot.markStatePayloadData,
+            capturedChanges: plan.capturedChanges
+        )
+        var updated = try loadEnvelope()
+        guard updated == envelope,
+              try migrator.revalidateDivergenceSnapshot(snapshot) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+        updated.commitPreparations = (updated.commitPreparations ?? []) + [prepared]
+        try saveEnvelope(updated)
+        guard try migrator.revalidateDivergenceSnapshot(snapshot) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+        return prepared
+    }
+
+    func preparedCommit(for noteID: UUID) throws -> NoteLocalDivergenceCommitPreparation? {
+        try loadEnvelope().commitPreparations?.first { $0.intent.noteID == noteID }
     }
 
     /// Any unfinished intent requires queue/authority recovery before sync is
