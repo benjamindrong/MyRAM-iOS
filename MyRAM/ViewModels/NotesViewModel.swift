@@ -558,6 +558,18 @@ final class NotesViewModel: ObservableObject {
               ) else {
             throw NoteLocalDivergenceEvidenceStoreError.unresolvedResolutionIntent
         }
+        // An owner choice that creates new anchored operations cannot complete
+        // through the no-write queue path. Reject it before even recording a
+        // started note commit; otherwise SwiftData can advance while its
+        // prepared operations remain unpublished across restart.
+        guard let prepared = try await evidenceStore.preparedCommit(for: noteID),
+              prepared.intent == intent else {
+            throw NoteLocalDivergenceEvidenceStoreError.unresolvedResolutionIntent
+        }
+        guard intent.choice == .keepAnchoredHistory,
+              prepared.capturedChanges.isEmpty else {
+            throw NoteLocalDivergenceEvidenceStoreError.unresolvedCapturedResolutionChanges
+        }
         let migrator = await NoteSequenceStateBootstrapMigrator(
             container: context.container
         )
