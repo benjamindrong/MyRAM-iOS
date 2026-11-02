@@ -799,7 +799,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
         try modified.save()
 
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MYR238-saved-owner-precommit-\\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MYR238-saved-owner-precommit-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let vm = NotesViewModel(
             context: ModelContext(container),
