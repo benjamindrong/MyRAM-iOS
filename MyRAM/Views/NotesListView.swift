@@ -61,7 +61,12 @@ final class NotesListState: ObservableObject {
                     try await vm.rollbackIfNeededOnLaunch(syncController: syncController)
                 },
                 migrateNoteSequenceStates: {
-                    try await NoteSequenceStateBootstrapMigrator(
+                    // Check durable unfinished intents *before* migrations.
+                    // Otherwise a crash after note save but before queue
+                    // reconciliation could expose the note to mark writes.
+                    let protectedNotes = try await NoteLocalDivergenceEvidenceStore()
+                        .unfinishedResolutionNoteIDs()
+                    return try await NoteSequenceStateBootstrapMigrator(
                         container: context.container,
                         legacyFormattingProjection: { data, _ in
                             await MainActor.run {
@@ -83,7 +88,9 @@ final class NotesListState: ObservableObject {
                                 return RTFCoding.encode(attributed)
                             }
                         }
-                    ).runPreservingDivergentStates()
+                    ).runPreservingDivergentStates(
+                        protectedNoteIDs: protectedNotes
+                    )
                 },
                 completeModelInitializationAfterMigration: { [vm] in
                     vm.completeStartupInitializationAfterMigration()
