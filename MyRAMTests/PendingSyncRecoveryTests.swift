@@ -1428,6 +1428,109 @@ final class NotesListStateBootstrapTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: journalURL), faultBytes)
     }
 
+    func testMYR238UnfinishedOwnerResolutionPreventsSyncAdmissionAcrossRetry() async throws {
+        let container = try makeContainer()
+        var pending = true
+        var starts = 0
+        var resumes = 0
+        var checks = 0
+        let state = NotesListState(
+            context: container.mainContext,
+            startsBootstrapAutomatically: false,
+            bootstrapActionsFactory: { vm, _ in
+                NotesListState.BootstrapActions(
+                    rollbackIfNeededOnLaunch: {},
+                    migrateNoteSequenceStates: { [] },
+                    completeModelInitializationAfterMigration: {
+                        vm.completeStartupInitializationAfterMigration()
+                    },
+                    refreshPendingSyncStatus: {},
+                    resumeOutboundAfterRecovery: { resumes += 1 },
+                    startNetworkingIfNeeded: { starts += 1 },
+                    resumePendingConvergencePresentationIfNeeded: {},
+                    hasUnfinishedLocalResolution: {
+                        checks += 1
+                        return pending
+                    }
+                )
+            }
+        )
+
+        await state.bootstrapAfterRecovery()
+        XCTAssertEqual(state.bootstrapState, .ready)
+        XCTAssertEqual(starts, 0)
+        XCTAssertEqual(resumes, 0)
+        XCTAssertNotNil(state.syncRecoveryMessage)
+        let note = try XCTUnwrap(state.vm.createNewNote())
+        let saved = await state.vm.commitNoteEditForProduction(
+            note, title: "Healthy", content: "Saved while resolution is unfinished"
+        )
+        XCTAssertTrue(saved)
+
+        await state.bootstrapAfterRecovery()
+        XCTAssertEqual(starts, 0)
+        XCTAssertEqual(resumes, 0)
+        XCTAssertEqual(checks, 2)
+
+        pending = false
+        await state.bootstrapAfterRecovery()
+        XCTAssertEqual(state.bootstrapState, .ready)
+        XCTAssertEqual(starts, 1)
+        XCTAssertEqual(resumes, 1)
+        XCTAssertNil(state.syncRecoveryMessage)
+        let loaded = try ModelContext(container).fetch(FetchDescriptor<Note>())
+        XCTAssertEqual(
+            loaded.first { $0.id == note.id }?.content,
+            "Saved while resolution is unfinished"
+        )
+    }
+
+    func testMYR238CorruptResolutionLedgerPausesSyncWithoutBlockingHealthyNotes() async throws {
+        let container = try makeContainer()
+        var unreadable = true
+        var starts = 0
+        let state = NotesListState(
+            context: container.mainContext,
+            startsBootstrapAutomatically: false,
+            bootstrapActionsFactory: { vm, _ in
+                NotesListState.BootstrapActions(
+                    rollbackIfNeededOnLaunch: {},
+                    migrateNoteSequenceStates: { [] },
+                    completeModelInitializationAfterMigration: {
+                        vm.completeStartupInitializationAfterMigration()
+                    },
+                    refreshPendingSyncStatus: {},
+                    resumeOutboundAfterRecovery: {},
+                    startNetworkingIfNeeded: { starts += 1 },
+                    resumePendingConvergencePresentationIfNeeded: {},
+                    hasUnfinishedLocalResolution: {
+                        if unreadable {
+                            throw NoteLocalDivergenceEvidenceStoreError.corruptArchive
+                        }
+                        return false
+                    }
+                )
+            }
+        )
+        await state.bootstrapAfterRecovery()
+        XCTAssertEqual(state.bootstrapState, .ready)
+        XCTAssertEqual(starts, 0)
+        XCTAssertNotNil(state.syncRecoveryMessage)
+        XCTAssertNotNil(state.startupFailureSupportDetails)
+
+        let note = try XCTUnwrap(state.vm.createNewNote())
+        let saved = await state.vm.commitNoteEditForProduction(
+            note, title: "Preserved", content: "Offline note"
+        )
+        XCTAssertTrue(saved)
+        unreadable = false
+        await state.bootstrapAfterRecovery()
+        XCTAssertEqual(starts, 1)
+        XCTAssertNil(state.syncRecoveryMessage)
+        let loaded = try ModelContext(container).fetch(FetchDescriptor<Note>())
+        XCTAssertEqual(loaded.first { $0.id == note.id }?.content, "Offline note")
+    }
+
     func testSyncRecoveryFailureAllowsLocalCreateEditSaveAndRetry() async throws {
         let container = try makeContainer()
         var fails = true
