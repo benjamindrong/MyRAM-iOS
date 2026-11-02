@@ -2375,7 +2375,8 @@ final class MyRAMTests: XCTestCase {
             syncBatchQuietWindow: 0
         )
 
-        XCTAssertTrue(await vm.commitNoteEditForProduction(note, title: "Shared", content: "Hello world")
+        let committed = await vm.commitNoteEditForProduction(note, title: "Shared", content: "Hello world"
+        XCTAssertTrue(committed)
         for _ in 0..<20 where recorder.recordedBatches.isEmpty {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
@@ -2416,7 +2417,8 @@ final class MyRAMTests: XCTestCase {
             syncBatchQuietWindow: 0
         )
 
-        XCTAssertTrue(await vm.commitNoteEditForProduction(note, title: "Renamed", content: "Hello world")
+        let committed = await vm.commitNoteEditForProduction(note, title: "Renamed", content: "Hello world"
+        XCTAssertTrue(committed)
         for _ in 0..<20 where recorder.recordedBatches.isEmpty {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
@@ -2642,7 +2644,8 @@ final class MyRAMTests: XCTestCase {
             resumesPendingConvergenceOnInit: false
         )
 
-        XCTAssertTrue(await viewModel.commitNoteEditForProduction(note, title: "Draft", content: "axc")
+        let committed = await viewModel.commitNoteEditForProduction(note, title: "Draft", content: "axc"
+        XCTAssertTrue(committed)
 
         XCTAssertEqual(note.content, "axc")
         XCTAssertEqual(note.title, "Draft")
@@ -2689,7 +2692,8 @@ final class MyRAMTests: XCTestCase {
             resumesPendingConvergenceOnInit: false
         )
 
-        XCTAssertTrue(await viewModel.commitNoteEditForProduction(note, title: "Shared", content: "operation 87")
+        let committed = await viewModel.commitNoteEditForProduction(note, title: "Shared", content: "operation 87"
+        XCTAssertTrue(committed)
         XCTAssertEqual(note.content, "operation 87")
 
         await viewModel.prepareLocalOwnershipForBootstrapForTesting()
@@ -2723,7 +2727,8 @@ final class MyRAMTests: XCTestCase {
             resumesPendingConvergenceOnInit: false
         )
 
-        XCTAssertTrue(await viewModel.commitNoteEditForProduction(note, title: "Draft", content: replacementBody)
+        let committed = await viewModel.commitNoteEditForProduction(note, title: "Draft", content: replacementBody
+        XCTAssertTrue(committed)
 
         XCTAssertEqual(note.content, replacementBody)
         XCTAssertEqual(note.title, "Draft")
