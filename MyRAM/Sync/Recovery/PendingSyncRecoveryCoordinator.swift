@@ -19,6 +19,7 @@ final class PendingSyncRecoveryCoordinator {
         case unhealthyLocalObligationQueue
         case unhealthyIncomingBatchQueue
         case staleLocalResolutionQueueOwnership
+        case unresolvedLocalResolutionQueueWork
         case journalWriteFailed
         case replacementFailed
         case rollbackFailed
@@ -143,6 +144,40 @@ final class PendingSyncRecoveryCoordinator {
         )
         guard observed == expected else {
             throw RecoveryError.staleLocalResolutionQueueOwnership
+        }
+    }
+
+    /// Completion is intentionally more restrictive than capture. A frozen
+    /// queue snapshot may contain untransmitted user edits, so a matching
+    /// preimage alone can never justify releasing this note to sync.
+    /// This check never changes or discards any queue entry.
+    func requireNoConflictingWorkForResolvedNote(
+        _ noteID: UUID,
+        expected: NoteLocalDivergenceQueueOwnershipEvidence,
+        incomingSnapshot: FileBackedSyncBatchQueueSnapshot
+    ) async throws {
+        try await requireUnchangedLocalResolutionQueueOwnership(
+            expected, incomingSnapshot: incomingSnapshot
+        )
+
+        // Legacy acknowledgements are not associated with an entity ID.
+        // Losing or bypassing one may make an earlier body operation appear
+        // settled; require an independently clean acknowledgement boundary.
+        guard expected.legacy.pendingAcknowledgementIDs.isEmpty else {
+            throw RecoveryError.unresolvedLocalResolutionQueueWork
+        }
+        for change in expected.legacy.pendingChanges where change.entityType == .item {
+            guard let changedNoteID = UUID(uuidString: change.entityID) else {
+                throw RecoveryError.unresolvedLocalResolutionQueueWork
+            }
+            guard changedNoteID != noteID else {
+                throw RecoveryError.unresolvedLocalResolutionQueueWork
+            }
+        }
+        for batch in expected.unsent + expected.incoming + expected.localObligations.map(\.batch) {
+            guard !batch.changes.contains(where: { $0.noteID == noteID }) else {
+                throw RecoveryError.unresolvedLocalResolutionQueueWork
+            }
         }
     }
 
