@@ -1359,20 +1359,6 @@ final class NotesViewModel: ObservableObject {
         return true
     }
 
-    func updateNote(
-        _ note: Note,
-        title: String,
-        content: String,
-        richTextContentData: Data? = nil
-    ) {
-        commitNoteEdit(
-            note,
-            title: title,
-            content: content,
-            richTextContentData: richTextContentData
-        )
-    }
-
     func addPinnedThought(to note: Note, text: String = "") -> PinnedThought? {
         guard note.deletedAt == nil, mayMutateNote(note) else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
