@@ -164,6 +164,11 @@ final class NotesListState: ObservableObject {
                         "Pending sync recovery also failed: \(String(describing: recoveryError), privacy: .private)"
                     )
                 }
+            } else if let recoveryError {
+                let diagnostic = String(describing: recoveryError)
+                Self.startupLogger.error("Pending sync recovery failed: \(diagnostic, privacy: .private)")
+                startupFailureSupportDetails = "Pending sync recovery: \(diagnostic)"
+                syncRecoveryMessage = "Sync recovery is paused. You can keep working with local notes."
             } else if let resolutionLedgerError {
                 Self.startupLogger.error(
                     "Local resolution ledger unavailable: \(String(describing: resolutionLedgerError), privacy: .private)"
@@ -173,11 +178,6 @@ final class NotesListState: ObservableObject {
             } else if unfinishedResolution {
                 startupFailureSupportDetails = "An explicit local note resolution has not completed."
                 syncRecoveryMessage = "A local note resolution is unfinished. Sync remains paused; healthy notes remain editable."
-            } else if let recoveryError {
-                let diagnostic = String(describing: recoveryError)
-                Self.startupLogger.error("Pending sync recovery failed: \(diagnostic, privacy: .private)")
-                startupFailureSupportDetails = "Pending sync recovery: \(diagnostic)"
-                syncRecoveryMessage = "Sync recovery is paused. You can keep working with local notes."
             } else {
                 vm.completeStartupSyncRecovery()
                 await bootstrapActions.refreshPendingSyncStatus()
