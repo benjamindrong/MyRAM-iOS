@@ -418,6 +418,104 @@ final class NotesViewModel: ObservableObject {
         return false
     }
 
+    /// Offers read-only evidence; merely viewing an unresolved note cannot
+    /// authorize a winner. An earlier immutable choice remains visible after
+    /// relaunch and cannot silently be replaced.
+    func inspectProtectedLocalDivergence(
+        noteID: UUID,
+        evidenceStore: NoteLocalDivergenceEvidenceStore
+    ) async throws -> (
+        snapshot: NoteLocalDivergenceSnapshot,
+        selected: NoteLocalDivergenceResolutionChoice?
+    ) {
+        guard startupQuarantinedNoteIDs.contains(noteID) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+        let chosen = try await evidenceStore.preparedResolution(for: noteID)
+        let snapshots = try await evidenceStore.snapshots(for: noteID)
+        let snapshot: NoteLocalDivergenceSnapshot
+        if let chosen, snapshots.indices.contains(chosen.evidenceIndex) {
+            snapshot = snapshots[chosen.evidenceIndex]
+        } else if let current = try await NoteSequenceStateBootstrapMigrator(
+            container: context.container
+        ).validatedDivergenceSnapshot(noteID: noteID) {
+            snapshot = current
+        } else if let retained = snapshots.last {
+            // A partially committed body can now agree with its history; the
+            // frozen evidence remains readable without pretending completion.
+            snapshot = retained
+        } else {
+            throw NoteLocalDivergenceEvidenceStoreError.snapshotNotPreserved
+        }
+        return (snapshot, chosen?.choice)
+    }
+
+    /// Owner approval is durable, but it is not a note/queue commit. Even after
+    /// successful preparation both versions remain untouched and sync stays
+    /// suspended until a separate complete recovery protocol is verified.
+    func prepareProtectedLocalDivergenceChoice(
+        noteID: UUID,
+        choice: NoteLocalDivergenceResolutionChoice,
+        queueAdmin: PendingSyncQueueAdministrating,
+        evidenceStore: NoteLocalDivergenceEvidenceStore
+    ) async throws {
+        guard startupQuarantinedNoteIDs.contains(noteID) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+        queueAdmin.suspendOutboundForRecovery()
+        guard await editorLifecyclePersistence.awaitAllDurableCompletion() else {
+            throw PendingSyncRecoveryCoordinator.RecoveryError.pendingLocalEditsNotDurable
+        }
+        await prepareLocalOwnershipForBootstrap()
+        let migrator = await NoteSequenceStateBootstrapMigrator(container: context.container)
+        guard let snapshot = try await migrator.validatedDivergenceSnapshot(noteID: noteID) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+
+        // Persist the immutable note/formatting/CRDT preimage first. A failed
+        // subsequent step leaves it retained, never replaced or discarded.
+        _ = try await evidenceStore.preserve(snapshot, checkedBy: migrator)
+        _ = try await evidenceStore.prepareOwnerSelectedResolution(
+            snapshot: snapshot, choice: choice, checkedBy: migrator
+        )
+
+        let coordinator = PendingSyncRecoveryCoordinator(
+            queueAdmin: queueAdmin,
+            localQueueSnapshot: { [weak self] in
+                guard let self else {
+                    return FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                        obligations: [],
+                        health: .readFailed("Local queue owner unavailable")
+                    )
+                }
+                return FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: self.pendingLocalConvergenceBatches.pendingObligations,
+                    health: self.pendingLocalConvergenceBatches.snapshot().health
+                )
+            },
+            replaceLocalObligations: { [weak self] obligations in
+                guard let self else {
+                    throw PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed
+                }
+                try self.pendingLocalConvergenceBatches.replacePendingObligations(obligations)
+            },
+            flushReadyLocalBatch: { nil }
+        )
+        let incoming = pendingIncomingBatches.snapshot()
+        let ownership = try await coordinator.captureLocalResolutionQueueOwnership(
+            incomingSnapshot: incoming
+        )
+        _ = try await evidenceStore.prepareQueueOwnership(
+            for: snapshot, ownership: ownership, checkedBy: migrator
+        )
+        _ = try await evidenceStore.prepareCommit(for: snapshot, checkedBy: migrator)
+        try await coordinator.requireUnchangedLocalResolutionQueueOwnership(
+            ownership, incomingSnapshot: pendingIncomingBatches.snapshot()
+        )
+        // No applyPreparedNoteCommit, queue replacement, journal cleanup or
+        // resumeOutboundAfterRecovery: preparation never implies completion.
+    }
+
     func completeStartupSyncRecovery() {
         isStartupSyncRecoveryPending = false
     }
