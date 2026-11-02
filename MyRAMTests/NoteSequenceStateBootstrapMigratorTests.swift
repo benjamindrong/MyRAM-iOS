@@ -589,7 +589,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
     }
 
     func testMYR238CommitPreparationSurvivesRestartWithoutChangingAuthority() async throws {
-        for choice: NoteLocalDivergenceResolutionChoice in [.keepSavedBody, .keepAnchoredHistory] {
+        for choice in [NoteLocalDivergenceResolutionChoice.keepSavedBody, .keepAnchoredHistory] {
             let container = try makeContainer()
             let noteID = try insertNote(body: "Anchored original", in: container)
             let migrator = await makeMigrator(container, allowsExistingStateReplacement: false)
@@ -635,7 +635,8 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
             )
             XCTAssertEqual(repeated, prepared)
             XCTAssertEqual(try Data(contentsOf: url), bytes)
-            XCTAssertTrue(try await restarted.hasUnfinishedResolutionIntents())
+            let pending = try await restarted.hasUnfinishedResolutionIntents()
+            XCTAssertTrue(pending)
 
             let record = try XCTUnwrap(fetchRecords(in: container).first)
             XCTAssertEqual(record.statePayloadData, snapshot.sequencePayloadData)
@@ -692,7 +693,8 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), original)
         let missing = try await store.preparedCommit(for: noteID)
         XCTAssertNil(missing)
-        XCTAssertTrue(try await store.hasUnfinishedResolutionIntents())
+        let pending = try await store.hasUnfinishedResolutionIntents()
+        XCTAssertTrue(pending)
     }
 
     func testMYR238InvalidMarkCannotBeQuarantinedAsTextDivergence() async throws {
