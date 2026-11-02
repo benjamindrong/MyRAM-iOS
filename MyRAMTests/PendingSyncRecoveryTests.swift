@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import XCTest
 import NearbySyncCore
 import SwiftData
@@ -632,6 +633,104 @@ final class PendingSyncRecoveryTests: XCTestCase {
         }
         XCTAssertTrue(admin.isSuspended)
         XCTAssertEqual(captured.incoming, [remote])
+        XCTAssertFalse(admin.didFlushAllOutboundWork)
+    }
+
+    func testMYR238AlreadyRepresentedAnchoredQueueRemainsOwnedWithoutMutation() async throws {
+        let noteID = UUID()
+        let deviceID = UUID()
+        let date = Date(timeIntervalSince1970: 1_800)
+        let initial = try NoteSequenceStateBootstrapAdapter.makeInitialState(
+            noteID: noteID, body: "A"
+        )
+        let change = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: noteID,
+            utf16Offset: 1,
+            text: "B",
+            modifiedAt: date,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "A"),
+            operationID: SyncOperationID(deviceID: deviceID, localCounter: 901),
+            state: initial
+        )
+        guard case .noteBodyTextInsertedAnchored(let inserted) = change else {
+            return XCTFail("Expected an anchored insertion")
+        }
+        let committed = try SyncBatchAnchoredInsertReplay.applying(
+            inserted, to: initial
+        ).sequenceState
+        let title = SyncBatchChange.noteTitleChanged(
+            SyncBatchNoteTitleChangedChange(
+                noteID: noteID, title: "Latest title", modifiedAt: date
+            )
+        )
+        let pending = SyncBatch(
+            id: UUID(), originDeviceID: deviceID, createdAt: date,
+            batchSequence: 1, changes: [change, title]
+        )
+        let admin = FakePendingSyncQueueAdmin(
+            legacySnapshot: SyncQueueSnapshot(),
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: [pending], health: .healthy
+            )
+        )
+        let coordinator = PendingSyncRecoveryCoordinator(
+            queueAdmin: admin,
+            localQueueSnapshot: {
+                FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: [], health: .healthy
+                )
+            },
+            replaceLocalObligations: { _ in
+                XCTFail("Existing operation owners must never be replaced")
+            },
+            flushReadyLocalBatch: { nil }
+        )
+        let emptyIncoming = FileBackedSyncBatchQueueSnapshot(
+            pendingBatches: [], health: .healthy
+        )
+        let frozen = try await coordinator.captureLocalResolutionQueueOwnership(
+            incomingSnapshot: emptyIncoming
+        )
+        try await coordinator.requireRepresentedLocalWorkForResolvedNote(
+            noteID, expected: frozen,
+            selectedState: committed, savedTitle: "Latest title",
+            savedModifiedAt: date, incomingSnapshot: emptyIncoming
+        )
+        // An absent structural run, stale metadata, or pending inbound work
+        // cannot be certified just because the same batch remains in a queue.
+        for (state, title) in [
+            (initial, "Latest title"),
+            (committed, "Older title")
+        ] {
+            do {
+                try await coordinator.requireRepresentedLocalWorkForResolvedNote(
+                    noteID, expected: frozen,
+                    selectedState: state, savedTitle: title,
+                    savedModifiedAt: date, incomingSnapshot: emptyIncoming
+                )
+                XCTFail("Unrepresented operation or metadata must remain blocked")
+            } catch let error as PendingSyncRecoveryCoordinator.RecoveryError {
+                XCTAssertEqual(error, .unresolvedLocalResolutionQueueWork)
+            }
+        }
+        let incoming = FileBackedSyncBatchQueueSnapshot(
+            pendingBatches: [pending], health: .healthy
+        )
+        let frozenWithIncoming = try await coordinator.captureLocalResolutionQueueOwnership(
+            incomingSnapshot: incoming
+        )
+        do {
+            try await coordinator.requireRepresentedLocalWorkForResolvedNote(
+                noteID, expected: frozenWithIncoming,
+                selectedState: committed, savedTitle: "Latest title",
+                savedModifiedAt: date, incomingSnapshot: incoming
+            )
+            XCTFail("Uncommitted incoming work must not inherit local proof")
+        } catch let error as PendingSyncRecoveryCoordinator.RecoveryError {
+            XCTAssertEqual(error, .unresolvedLocalResolutionQueueWork)
+        }
+        XCTAssertEqual(admin.unsentSnapshot.pendingBatches, [pending])
+        XCTAssertTrue(admin.isSuspended)
         XCTAssertFalse(admin.didFlushAllOutboundWork)
     }
 
