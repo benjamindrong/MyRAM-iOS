@@ -93,8 +93,8 @@ struct NoteLocalDivergenceNoteCommitProgress: Codable, Equatable {
     let phase: NoteLocalDivergenceNoteCommitPhase
 }
 
-/// Final evidence that a no-write queue reconciliation was completed after the
-/// owner-approved note pair was durably verified. The original snapshot and
+/// Final evidence that an unchanged-queue reconciliation completed after the
+/// owner-approved note pair and any queued local effects were verified. The original snapshot and
 /// queue preimage are retained, not consumed.
 struct NoteLocalDivergenceCompletionReceipt: Codable, Equatable {
     let intent: NoteLocalDivergenceResolutionIntent
@@ -532,7 +532,7 @@ final class NoteLocalDivergenceEvidenceStore {
     /// their original queues, prepared operations, and global sync barrier.
     /// The caller supplies the suspended coordinator's fresh health-checked
     /// note-specific ownership preflight; this actor never clears queues.
-    func finalizePreparedCleanQueueResolution(
+    func finalizePreparedQueuePreservingResolution(
         for snapshot: NoteLocalDivergenceSnapshot,
         checkedBy migrator: NoteSequenceStateBootstrapMigrator,
         verifyQueueOwnership: @MainActor () async throws -> Void
