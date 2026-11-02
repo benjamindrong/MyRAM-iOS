@@ -2326,7 +2326,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(payload.baseText, "Version to Sync")
     }
 
-    func testOrdinaryNoteSyncIsBlockedWhileContentConflictIsActive() throws {
+    func testOrdinaryNoteSyncIsBlockedWhileContentConflictIsActive() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let conflictFileURL = temporarySyncConflictFileURL()
@@ -2336,6 +2336,8 @@ final class MyRAMTests: XCTestCase {
         let note = Note(title: "Shared", content: "Local-only text")
         note.id = UUID()
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
         let expiresAt = Date().addingTimeInterval(1_000)
         let conflict = SyncConflictVersion(
             entityType: .note,
@@ -2351,7 +2353,8 @@ final class MyRAMTests: XCTestCase {
         _ = conflictStore.preserve(conflict)
         let vm = NotesViewModel(context: context, syncController: recorder, syncConflictStore: conflictStore)
 
-        vm.commitNoteEdit(note, title: "Shared", content: "typed during review")
+        let committed = await vm.commitNoteEditForProduction(note, title: "Shared", content: "typed during review")
+        XCTAssertTrue(committed)
 
         XCTAssertEqual(note.content, "typed during review")
         XCTAssertTrue(recorder.recordedChanges.isEmpty)
@@ -3105,6 +3108,7 @@ final class MyRAMTests: XCTestCase {
         note.id = noteID
         note.modifiedAt = Date(timeIntervalSince1970: 100)
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
 
         let injector = InjectableLegacyIncomingSaveFailure(shouldFail: true)
@@ -3132,7 +3136,8 @@ final class MyRAMTests: XCTestCase {
 
         // A later, wholly unrelated edit succeeds and saves normally.
         injector.shouldFail = false
-        vm.commitNoteEdit(note, title: "Original", content: "Original body edited locally")
+        let committed = await vm.commitNoteEditForProduction(note, title: "Original", content: "Original body edited locally")
+        XCTAssertTrue(committed)
         XCTAssertEqual(note.content, "Original body edited locally")
 
         let reopenedContainer = try makeContainer(isStoredInMemoryOnly: false, configurationName: storeName)
@@ -5957,10 +5962,13 @@ final class MyRAMTests: XCTestCase {
         note.id = UUID()
         note.modifiedAt = Date(timeIntervalSince1970: 100)
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
         let vm = NotesViewModel(context: context, syncController: recorder, syncConflictStore: conflictStore)
         vm.selectNote(note)
 
-        vm.commitNoteEdit(note, title: "Shared", content: "Shared body\nDevice B text")
+        let committed = await vm.commitNoteEditForProduction(note, title: "Shared", content: "Shared body\nDevice B text")
+        XCTAssertTrue(committed)
 
         let deviceANote = Note(title: "Shared", content: "Shared body\nDevice A text")
         deviceANote.id = note.id
@@ -5991,7 +5999,8 @@ final class MyRAMTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: fixture.conflictFileURL.deletingLastPathComponent()) }
         let typedAfterConflict = "Local before conflict\nTyped after conflict"
 
-        fixture.vm.commitNoteEdit(fixture.note, title: "Shared", content: typedAfterConflict)
+        let committed = await fixture.vm.commitNoteEditForProduction(fixture.note, title: "Shared", content: typedAfterConflict)
+        XCTAssertTrue(committed)
 
         XCTAssertEqual(fixture.note.content, typedAfterConflict)
         XCTAssertEqual(fixture.vm.localText(forSyncConflict: fixture.conflict), typedAfterConflict)
@@ -6030,7 +6039,8 @@ final class MyRAMTests: XCTestCase {
         let typedAfterConflict = "Local before conflict\nTyped after conflict"
         fixture.note.richTextContentData = Data("local editor formatting".utf8)
 
-        fixture.vm.commitNoteEdit(fixture.note, title: "Shared", content: typedAfterConflict)
+        let committed = await fixture.vm.commitNoteEditForProduction(fixture.note, title: "Shared", content: typedAfterConflict)
+        XCTAssertTrue(committed)
 
         XCTAssertEqual(fixture.note.content, typedAfterConflict)
         XCTAssertTrue(fixture.recorder.recordedChanges.isEmpty)
@@ -6120,7 +6130,8 @@ final class MyRAMTests: XCTestCase {
         let typedAfterConflict = "Local before conflict\nTyped after conflict"
         let mergedText = "\(typedAfterConflict)\nVersion to Sync"
 
-        fixture.vm.commitNoteEdit(fixture.note, title: "Shared", content: typedAfterConflict)
+        let committed = await fixture.vm.commitNoteEditForProduction(fixture.note, title: "Shared", content: typedAfterConflict)
+        XCTAssertTrue(committed)
 
         XCTAssertEqual(fixture.note.content, typedAfterConflict)
         XCTAssertTrue(fixture.recorder.recordedChanges.isEmpty)
@@ -9412,6 +9423,8 @@ final class MyRAMTests: XCTestCase {
         note.id = UUID()
         note.modifiedAt = Date(timeIntervalSince1970: 100)
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
         let conflict = SyncConflictVersion(
             entityType: .note,
             entityID: note.id,
