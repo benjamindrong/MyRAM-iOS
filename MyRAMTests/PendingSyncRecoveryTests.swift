@@ -743,6 +743,37 @@ final class PendingSyncRecoveryTests: XCTestCase {
         } catch let error as NoteLocalDivergenceEvidenceStoreError {
             XCTAssertEqual(error, .conflictingResolution)
         }
+
+        // A changed queue must fail *before* the SwiftData note pair is
+        // committed. A later clean retry must recover the actual editor
+        // context, not display its cached, divergent pre-commit body.
+        admin.unsentSnapshot = FileBackedSyncBatchQueueSnapshot(
+            pendingBatches: [makeBatch(idSuffix: 263)], health: .healthy
+        )
+        do {
+            try await vm.completeProtectedLocalDivergence(
+                noteID: noteID, queueAdmin: admin, evidenceStore: store
+            )
+            XCTFail("Changed queue ownership must block final resolution")
+        } catch let error as PendingSyncRecoveryCoordinator.RecoveryError {
+            XCTAssertEqual(error, .staleLocalResolutionQueueOwnership)
+        }
+        let persistedBeforeCompletion = try ModelContext(container).fetch(
+            FetchDescriptor<Note>()
+        ).first { $0.id == noteID }
+        XCTAssertEqual(persistedBeforeCompletion?.content, "Saved owner text")
+        admin.unsentSnapshot = FileBackedSyncBatchQueueSnapshot(
+            pendingBatches: [], health: .healthy
+        )
+        try await vm.completeProtectedLocalDivergence(
+            noteID: noteID, queueAdmin: admin, evidenceStore: store
+        )
+        let stillUnfinished = try await store.hasUnfinishedResolutionIntents()
+        XCTAssertFalse(stillUnfinished)
+        XCTAssertEqual(vm.refreshedNote(withID: noteID)?.content, "Original anchored text")
+        XCTAssertTrue(admin.isSuspended, "Only startup owns outbound resumption")
+        XCTAssertFalse(admin.didFlushAllOutboundWork)
+        XCTAssertTrue(admin.unsentSnapshot.pendingBatches.isEmpty)
     }
 
     func testCoordinatorBuilderFailureLeavesQueuesAndJournalUntouched() async throws {
