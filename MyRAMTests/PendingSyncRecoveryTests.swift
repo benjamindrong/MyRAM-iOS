@@ -442,6 +442,52 @@ final class PendingSyncRecoveryTests: XCTestCase {
         XCTAssertFalse(admin.didFlushAllOutboundWork)
     }
 
+    func testMYR238QueueOwnershipRejectsConflictingIncomingBatchIDs() async throws {
+        let outbound = makeBatch(idSuffix: 255)
+        let sameIDWithDifferentPayload = makeBatch(idSuffix: 255)
+        XCTAssertEqual(outbound.id, sameIDWithDifferentPayload.id)
+        XCTAssertNotEqual(outbound, sameIDWithDifferentPayload)
+
+        let admin = FakePendingSyncQueueAdmin(
+            legacySnapshot: SyncQueueSnapshot(),
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: [outbound], health: .healthy
+            )
+        )
+        let coordinator = PendingSyncRecoveryCoordinator(
+            queueAdmin: admin,
+            localQueueSnapshot: {
+                FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: [], health: .healthy
+                )
+            },
+            replaceLocalObligations: { _ in },
+            flushReadyLocalBatch: { nil }
+        )
+        let matchingIncoming = FileBackedSyncBatchQueueSnapshot(
+            pendingBatches: [outbound, outbound], health: .healthy
+        )
+        let captured = try await coordinator.captureLocalResolutionQueueOwnership(
+            incomingSnapshot: matchingIncoming
+        )
+        XCTAssertEqual(captured.incoming, [outbound, outbound])
+
+        for batches in [[sameIDWithDifferentPayload], [outbound, sameIDWithDifferentPayload]] {
+            do {
+                _ = try await coordinator.captureLocalResolutionQueueOwnership(
+                    incomingSnapshot: FileBackedSyncBatchQueueSnapshot(
+                        pendingBatches: batches, health: .healthy
+                    )
+                )
+                XCTFail("Conflicting batch IDs must never be archived as valid queue ownership")
+            } catch let error as SyncPeerBootstrapOwnershipError {
+                XCTAssertEqual(error, .conflictingDuplicateBatchID(outbound.id))
+            }
+        }
+        XCTAssertFalse(admin.isSuspended)
+        XCTAssertEqual(admin.unsentSnapshot.pendingBatches, [outbound])
+    }
+
     func testCoordinatorBuilderFailureLeavesQueuesAndJournalUntouched() async throws {
         let fileURL = temporaryJournalURL()
         defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
