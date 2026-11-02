@@ -342,9 +342,16 @@ final class NoteLocalDivergenceEvidenceStore {
         let plan = try await migrator.makeOwnerResolutionPlan(
             for: snapshot, choice: queuePreparation.intent.choice
         )
-        let encoded = try NoteSequenceStatePersistenceCodec.encode(
-            state: plan.finalState, noteID: snapshot.noteID
-        )
+        // Choosing existing anchored history must retain its exact original
+        // bytes, even if a future codec encoder would normalize them.
+        let encoded: Data
+        if plan.choice == .keepAnchoredHistory {
+            encoded = snapshot.sequencePayloadData
+        } else {
+            encoded = try NoteSequenceStatePersistenceCodec.encode(
+                state: plan.finalState, noteID: snapshot.noteID
+            )
+        }
         let prepared = NoteLocalDivergenceCommitPreparation(
             intent: queuePreparation.intent,
             finalBody: plan.finalBody,
