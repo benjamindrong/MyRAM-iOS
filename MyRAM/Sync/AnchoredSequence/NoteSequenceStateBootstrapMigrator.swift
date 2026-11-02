@@ -55,6 +55,18 @@ struct NoteLocalDivergenceQueuePreparation: Codable, Equatable {
     let ownership: NoteLocalDivergenceQueueOwnershipEvidence
 }
 
+/// A read-only candidate for an explicit owner decision. Constructing it never
+/// changes Note, CRDT, marks, queues or sync admission. A separate journaled
+/// transaction must still prove durable queue ownership before applying it.
+struct NoteLocalDivergenceResolutionPlan: Equatable, Sendable {
+    let original: NoteLocalDivergenceSnapshot
+    let choice: NoteLocalDivergenceResolutionChoice
+    let finalBody: String
+    let finalState: SyncTextSequenceState
+    let finalMarkState: SyncTextMarkState
+    let capturedChanges: [SyncConvergenceCapturedLocalChange]
+}
+
 /// An immutable, append-only ledger of local note/body versus anchored-history evidence.
 /// Neither a captured snapshot nor this ledger authorizes choosing a winner or resuming sync.
 struct NoteLocalDivergenceEvidenceEnvelope: Codable, Equatable {
@@ -483,6 +495,82 @@ final class NoteSequenceStateBootstrapMigrator {
     /// In particular, matching visible text alone cannot authorize mutation.
     func revalidateDivergenceSnapshot(_ expected: NoteLocalDivergenceSnapshot) throws -> Bool {
         try validatedDivergenceSnapshot(noteID: expected.noteID) == expected
+    }
+
+    /// Derive a complete anchored candidate without rewriting either authority.
+    /// Keeping saved text produces replayable anchored operations against the
+    /// retained history; keeping history does not invent a local text operation.
+    /// The original raw evidence and pending work must be durably preserved
+    /// before a separate owner-authorized commit is attempted.
+    func makeOwnerResolutionPlan(
+        for expected: NoteLocalDivergenceSnapshot,
+        choice: NoteLocalDivergenceResolutionChoice
+    ) async throws -> NoteLocalDivergenceResolutionPlan {
+        guard try revalidateDivergenceSnapshot(expected) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        guard let record = try fetchRecord(noteID: expected.noteID, in: context) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+        let original = try NoteSequenceStatePersistenceCodec
+            .decodeStructurallyValidatedState(
+                record: record, noteID: expected.noteID
+            )
+        let marks: SyncTextMarkState
+        if record.markFormatVersion == NoteStructuralFormattingPersistence.schemaVersion {
+            marks = try NoteStructuralFormattingPersistence.decode(
+                record: record, pairedWith: original
+            )
+        } else if record.markFormatVersion == 0,
+                  record.markRevision == 0,
+                  record.markStatePayloadData.isEmpty {
+            marks = .empty
+        } else {
+            throw NoteSequenceStateStoreError.corruptMarkState
+        }
+
+        let finalBody: String
+        let finalState: SyncTextSequenceState
+        let changes: [SyncConvergenceCapturedLocalChange]
+        switch choice {
+        case .keepAnchoredHistory:
+            finalBody = original.visibleText
+            finalState = original
+            changes = []
+        case .keepSavedBody:
+            let captured = try await SyncBatchAnchoredLocalCapture.capture(
+                noteID: expected.noteID,
+                oldBody: original.visibleText,
+                newBody: expected.savedBody,
+                modifiedAt: expected.savedModifiedAt,
+                initialState: original,
+                operationIDReserver: operationIDReserver
+            )
+            finalBody = expected.savedBody
+            finalState = captured.finalState
+            changes = captured.capturedChanges
+        }
+        // Do not silently drop or rebuild structural marks when a chosen text
+        // would make existing references invalid. Preserve the raw evidence and
+        // require a separate explicit formatting reconciliation instead.
+        do {
+            try marks.validating(against: finalState)
+        } catch {
+            throw NoteSequenceStateStoreError.corruptMarkState
+        }
+        guard try revalidateDivergenceSnapshot(expected) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+        return NoteLocalDivergenceResolutionPlan(
+            original: expected,
+            choice: choice,
+            finalBody: finalBody,
+            finalState: finalState,
+            finalMarkState: marks,
+            capturedChanges: changes
+        )
     }
 
     private func hasValidSequenceWithDivergentBody(noteID: UUID) throws -> Bool {
