@@ -163,7 +163,7 @@ final class NoteLocalDivergenceEvidenceStore {
         }
     }
 
-    private static func defaultFileURL() -> URL {
+    nonisolated private static func defaultFileURL() -> URL {
         let support = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first ?? FileManager.default.temporaryDirectory
