@@ -12,7 +12,7 @@ typealias NoteStructuralFormattingCacheRenderOperation =
 /// Capturing this value performs no persistence, authority change or networking.
 /// A future resolution must durably retain this exact snapshot, including raw mark
 /// and sequence bytes, and prove queue ownership before changing either authority.
-struct NoteLocalDivergenceSnapshot: Codable, Equatable {
+struct NoteLocalDivergenceSnapshot: Codable, Equatable, Sendable {
     let noteID: UUID
     let savedTitle: String
     let savedBody: String
@@ -32,6 +32,145 @@ struct NoteLocalDivergenceSnapshot: Codable, Equatable {
     let markFormatVersion: Int
     let markRevision: UInt64
     let markStatePayloadData: Data
+}
+
+/// An immutable, append-only ledger of local note/body versus anchored-history evidence.
+/// Neither a captured snapshot nor this ledger authorizes choosing a winner or resuming sync.
+struct NoteLocalDivergenceEvidenceEnvelope: Codable, Equatable {
+    static let supportedVersion = 1
+
+    let formatVersion: Int
+    var snapshots: [NoteLocalDivergenceSnapshot]
+
+    static let empty = Self(formatVersion: supportedVersion, snapshots: [])
+
+    func validate() throws {
+        guard formatVersion == Self.supportedVersion else {
+            throw NoteLocalDivergenceEvidenceStoreError.unsupportedVersion(formatVersion)
+        }
+        for (index, snapshot) in snapshots.enumerated() {
+            guard snapshot.sequencePayloadByteCount == snapshot.sequencePayloadData.count,
+                  snapshot.sequenceVisibleUTF16Count >= 0,
+                  snapshot.sequenceTombstonedUTF16Count >= 0,
+                  !NoteSequenceStateExactText.matches(
+                    snapshot.savedBody, snapshot.sequenceVisibleText
+                  ),
+                  !snapshots.prefix(index).contains(snapshot) else {
+                throw NoteLocalDivergenceEvidenceStoreError.corruptArchive
+            }
+        }
+    }
+}
+
+enum NoteLocalDivergenceEvidenceStoreError: Error, Equatable {
+    case unsupportedVersion(Int)
+    case corruptArchive
+    case staleSnapshot
+    case persistenceFailed
+}
+
+struct NoteLocalDivergenceEvidenceFileIO: Sendable {
+    var fileExists: @Sendable (URL) -> Bool
+    var readData: @Sendable (URL) throws -> Data
+    var createDirectory: @Sendable (URL) throws -> Void
+    var writeData: @Sendable (Data, URL) throws -> Void
+
+    static let live = Self(
+        fileExists: { FileManager.default.fileExists(atPath: $0.path) },
+        readData: { try Data(contentsOf: $0) },
+        createDirectory: {
+            try FileManager.default.createDirectory(at: $0, withIntermediateDirectories: true)
+        },
+        writeData: { data, url in try data.write(to: url, options: [.atomic]) }
+    )
+}
+
+/// Serialized on the same persistence actor as the structural snapshot source.
+/// The archive never updates the note, sequence, formatting, queues or networking.
+@NoteSequenceStatePersistenceActor
+final class NoteLocalDivergenceEvidenceStore {
+    private let fileURL: URL
+    private let fileIO: NoteLocalDivergenceEvidenceFileIO
+
+    init(
+        fileURL: URL = NoteLocalDivergenceEvidenceStore.defaultFileURL(),
+        fileIO: NoteLocalDivergenceEvidenceFileIO = .live
+    ) {
+        self.fileURL = fileURL
+        self.fileIO = fileIO
+    }
+
+    /// Preserve only a currently verified local divergence. Never overwrite an
+    /// earlier generation from the same note; it may contain unsent user work.
+    @discardableResult
+    func preserve(
+        _ snapshot: NoteLocalDivergenceSnapshot,
+        checkedBy migrator: NoteSequenceStateBootstrapMigrator
+    ) throws -> Bool {
+        guard try migrator.revalidateDivergenceSnapshot(snapshot) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+        var envelope = try loadEnvelope()
+        if envelope.snapshots.contains(snapshot) {
+            return false
+        }
+        envelope.snapshots.append(snapshot)
+        try saveEnvelope(envelope)
+        // A late local mutation cannot make the captured evidence authoritative.
+        guard try migrator.revalidateDivergenceSnapshot(snapshot) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+        return true
+    }
+
+    func snapshots(for noteID: UUID) throws -> [NoteLocalDivergenceSnapshot] {
+        try loadEnvelope().snapshots.filter { $0.noteID == noteID }
+    }
+
+    private func loadEnvelope() throws -> NoteLocalDivergenceEvidenceEnvelope {
+        guard fileIO.fileExists(fileURL) else { return .empty }
+        do {
+            let data = try fileIO.readData(fileURL)
+            let envelope = try JSONDecoder().decode(
+                NoteLocalDivergenceEvidenceEnvelope.self,
+                from: data
+            )
+            try envelope.validate()
+            return envelope
+        } catch let error as NoteLocalDivergenceEvidenceStoreError {
+            throw error
+        } catch is DecodingError {
+            throw NoteLocalDivergenceEvidenceStoreError.corruptArchive
+        } catch {
+            throw NoteLocalDivergenceEvidenceStoreError.persistenceFailed
+        }
+    }
+
+    private func saveEnvelope(_ expected: NoteLocalDivergenceEvidenceEnvelope) throws {
+        try expected.validate()
+        do {
+            try fileIO.createDirectory(fileURL.deletingLastPathComponent())
+            let bytes = try JSONEncoder().encode(expected)
+            try fileIO.writeData(bytes, fileURL)
+            // Never report durable preservation on a write that cannot be read back
+            // with the exact same authorities, including byte-exact mark payloads.
+            let persisted = try loadEnvelope()
+            guard persisted == expected else {
+                throw NoteLocalDivergenceEvidenceStoreError.persistenceFailed
+            }
+        } catch {
+            throw NoteLocalDivergenceEvidenceStoreError.persistenceFailed
+        }
+    }
+
+    private static func defaultFileURL() -> URL {
+        let support = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first ?? FileManager.default.temporaryDirectory
+        return support
+            .appendingPathComponent("MyRAM", isDirectory: true)
+            .appendingPathComponent("local-divergence-evidence-v1.json")
+    }
 }
 
 @NoteSequenceStatePersistenceActor
