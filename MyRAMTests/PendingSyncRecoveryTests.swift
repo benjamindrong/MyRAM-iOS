@@ -685,6 +685,25 @@ final class PendingSyncRecoveryTests: XCTestCase {
             )
         )
 
+        // An unhealthy queue must be detected before an irrevocable choice
+        // is written; clearing the fault later must remain an option.
+        admin.unsentSnapshot = FileBackedSyncBatchQueueSnapshot(
+            pendingBatches: [], health: .corrupt
+        )
+        do {
+            try await vm.prepareProtectedLocalDivergenceChoice(
+                noteID: noteID, choice: .keepAnchoredHistory,
+                queueAdmin: admin, evidenceStore: store
+            )
+            XCTFail("Unreadable queue must not freeze an owner decision")
+        } catch let error as PendingSyncRecoveryCoordinator.RecoveryError {
+            XCTAssertEqual(error, .unhealthyUnsentBatchQueue)
+        }
+        let beforeChoice = try await store.preparedResolution(for: noteID)
+        XCTAssertNil(beforeChoice)
+        admin.unsentSnapshot = FileBackedSyncBatchQueueSnapshot(
+            pendingBatches: [], health: .healthy
+        )
         try await vm.prepareProtectedLocalDivergenceChoice(
             noteID: noteID, choice: .keepAnchoredHistory,
             queueAdmin: admin, evidenceStore: store
