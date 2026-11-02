@@ -687,7 +687,8 @@ final class NoteSequenceStateBootstrapMigrator {
     /// idempotent across a crash between SwiftData save and journal update.
     func applyPreparedNoteCommit(
         _ prepared: NoteLocalDivergenceCommitPreparation,
-        expected snapshot: NoteLocalDivergenceSnapshot
+        expected snapshot: NoteLocalDivergenceSnapshot,
+        allowMutation: Bool = true
     ) throws -> Bool {
         guard prepared.intent.noteID == snapshot.noteID,
               prepared.finalMarkStatePayloadData == snapshot.markStatePayloadData,
@@ -741,7 +742,10 @@ final class NoteSequenceStateBootstrapMigrator {
             try validateCommittedResolution(record: record, prepared: prepared)
             return false
         }
-        guard try revalidateDivergenceSnapshot(snapshot) else {
+        // Once a receipt says the note was durably saved, a later unexpected
+        // return to its old bytes must not be silently interpreted as a retry.
+        guard allowMutation,
+              try revalidateDivergenceSnapshot(snapshot) else {
             throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
         }
 
