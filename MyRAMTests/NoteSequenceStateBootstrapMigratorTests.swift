@@ -1,6 +1,7 @@
 import Foundation
 import SwiftData
 import XCTest
+import NearbySyncCore
 import AnchoredSequenceCore
 @preconcurrency import MultipeerConnectivity
 
