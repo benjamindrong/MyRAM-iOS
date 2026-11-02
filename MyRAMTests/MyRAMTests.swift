@@ -8146,19 +8146,20 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(reopenedNote.photoAttachments.count, 1)
     }
 
-    func testUpdateNoteKeepsExistingNotesWithoutAttachmentsCompatible() throws {
+    func testActivatedNoteEditKeepsExistingNotesWithoutAttachmentsCompatible() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
         let note = try XCTUnwrap(vm.createNewNote())
 
-        vm.updateNote(note, title: "Title", content: "Content")
+        let saved = await vm.commitNoteEditForProduction(note, title: "Title", content: "Content")
+        XCTAssertTrue(saved)
 
         XCTAssertEqual(note.title, "Title")
         XCTAssertEqual(note.content, "Content")
         XCTAssertTrue(note.photoAttachments.isEmpty)
     }
 
-    func testUpdateNotePersistsRichTextDataAlongsidePlainText() throws {
+    func testActivatedNoteEditRejectsUnpairedRichTextCache() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
         let note = try XCTUnwrap(vm.createNewNote())
@@ -8169,16 +8170,27 @@ final class MyRAMTests: XCTestCase {
         )
         let richTextData = try XCTUnwrap(RichTextContentCodec.encode(attributedText))
 
-        vm.updateNote(
+        // Rich-text presentation bytes cannot be made authoritative without a
+        // matching structural mark projection. The activated save must commit
+        // the body and anchored sequence, discarding this unpaired cache.
+        let saved = await vm.commitNoteEditForProduction(
             note,
             title: "Styled",
             content: attributedText.string,
             richTextContentData: richTextData
         )
 
+        XCTAssertTrue(saved)
         XCTAssertEqual(note.title, "Styled")
         XCTAssertEqual(note.content, "Styled note")
-        XCTAssertEqual(note.richTextContentData, richTextData)
+        XCTAssertNil(note.richTextContentData)
+        let record = try XCTUnwrap(try container.mainContext.fetch(
+            FetchDescriptor<NoteSequenceStateRecord>()
+        ).first { $0.noteID == note.id })
+        let sequence = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: record, noteID: note.id
+        )
+        XCTAssertEqual(sequence.visibleText, "Styled note")
     }
 
     func testRichTextCodecFallsBackToPlainTextWhenRichDataMissing() {
@@ -8392,11 +8404,12 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(exported.contains("Body:\nBook flights"))
     }
 
-    func testExportNotesForSharingSingleNoteCreatesStructuredJSONFileAndImageFiles() throws {
+    func testExportNotesForSharingSingleNoteCreatesStructuredJSONFileAndImageFiles() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
         let note = try XCTUnwrap(vm.createNewNote())
-        vm.updateNote(note, title: "Daily Log", content: "UTF-8 test ✅")
+        let saved = await vm.commitNoteEditForProduction(note, title: "Daily Log", content: "UTF-8 test ✅")
+        XCTAssertTrue(saved)
         note.createdAt = Date(timeIntervalSince1970: 1000)
         note.modifiedAt = Date(timeIntervalSince1970: 2000)
         _ = vm.addPinnedThought(to: note, text: "Review receipt")
@@ -8430,16 +8443,18 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(noteText.contains("Body:\nUTF-8 test ✅"))
     }
 
-    func testExportNotesForSharingMultipleNotesIncludesFolderPathsAndPhotos() throws {
+    func testExportNotesForSharingMultipleNotesIncludesFolderPathsAndPhotos() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
         let note1 = try XCTUnwrap(vm.createNewNote())
-        vm.updateNote(note1, title: "First Note", content: "Body A")
+        let firstSaved = await vm.commitNoteEditForProduction(note1, title: "First Note", content: "Body A")
+        XCTAssertTrue(firstSaved)
 
         vm.createFolder(named: "Work")
         let workFolder = try XCTUnwrap(vm.folders.first(where: { $0.name == "Work" }))
         let note2 = try XCTUnwrap(vm.createNewNote())
-        vm.updateNote(note2, title: "Second Note", content: "Body B")
+        let secondSaved = await vm.commitNoteEditForProduction(note2, title: "Second Note", content: "Body B")
+        XCTAssertTrue(secondSaved)
         vm.moveNote(note2, to: workFolder)
         let imageData = try makeJPEGData()
         vm.addPhotoAttachment(to: note2, imageData: imageData)
@@ -8464,13 +8479,14 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: jpgURLs[0]), imageData)
     }
 
-    func testImportNotesFromMyRAMExportRestoresNotesPinnedThoughtsAndFolders() throws {
+    func testImportNotesFromMyRAMExportRestoresNotesPinnedThoughtsAndFolders() async throws {
         let sourceContainer = try makeContainer(isStoredInMemoryOnly: true)
         let sourceVM = NotesViewModel(context: sourceContainer.mainContext)
         sourceVM.createFolder(named: "Work")
         let workFolder = try XCTUnwrap(sourceVM.folders.first(where: { $0.name == "Work" }))
         let sourceNote = try XCTUnwrap(sourceVM.createNewNote())
-        sourceVM.updateNote(sourceNote, title: "Imported Plan", content: "Follow up tomorrow")
+        let saved = await sourceVM.commitNoteEditForProduction(sourceNote, title: "Imported Plan", content: "Follow up tomorrow")
+        XCTAssertTrue(saved)
         sourceVM.moveNote(sourceNote, to: workFolder)
         let pinnedThought = try XCTUnwrap(sourceVM.addPinnedThought(to: sourceNote, text: "Call Sam"))
         pinnedThought.isCollapsed = true
