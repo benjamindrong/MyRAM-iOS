@@ -524,10 +524,10 @@ final class NotesViewModel: ObservableObject {
         // resumeOutboundAfterRecovery: preparation never implies completion.
     }
 
-    /// Resume a prepared owner choice only when all note-specific queues can
-    /// be proven free of unresolved work. This intentionally does not publish
-    /// the saved-body edit script: it remains protected for lossless queue
-    /// reconciliation, including after a partial SwiftData commit.
+    /// Complete only an anchored-history choice whose pending local effects
+    /// are proven already represented in that exact history. Preserve all
+    /// queue identities and acknowledgement ownership; remote, legacy and
+    /// unresolved saved-body operations remain protected across restart.
     func completeProtectedLocalDivergence(
         noteID: UUID,
         queueAdmin: PendingSyncQueueAdministrating,
@@ -573,10 +573,16 @@ final class NotesViewModel: ObservableObject {
         let migrator = await NoteSequenceStateBootstrapMigrator(
             container: context.container
         )
+        let selectedState = try await migrator.anchoredHistoryForPreparedResolution(
+            snapshot
+        )
         let coordinator = localResolutionCoordinator(queueAdmin: queueAdmin)
-        try await coordinator.requireNoConflictingWorkForResolvedNote(
+        try await coordinator.requireRepresentedLocalWorkForResolvedNote(
             noteID,
             expected: queue.ownership,
+            selectedState: selectedState,
+            savedTitle: snapshot.savedTitle,
+            savedModifiedAt: snapshot.savedModifiedAt,
             incomingSnapshot: pendingIncomingBatches.snapshot()
         )
         _ = try await evidenceStore.commitPreparedNote(
@@ -598,9 +604,12 @@ final class NotesViewModel: ObservableObject {
                 guard let self else {
                     throw PendingSyncRecoveryCoordinator.RecoveryError.staleLocalResolutionQueueOwnership
                 }
-                try await coordinator.requireNoConflictingWorkForResolvedNote(
+                try await coordinator.requireRepresentedLocalWorkForResolvedNote(
                     noteID,
                     expected: queue.ownership,
+                    selectedState: selectedState,
+                    savedTitle: snapshot.savedTitle,
+                    savedModifiedAt: snapshot.savedModifiedAt,
                     incomingSnapshot: self.pendingIncomingBatches.snapshot()
                 )
             }
