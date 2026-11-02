@@ -635,6 +635,97 @@ final class PendingSyncRecoveryTests: XCTestCase {
         XCTAssertFalse(admin.didFlushAllOutboundWork)
     }
 
+    func testMYR238ExplicitOwnerChoiceArchivesPreimageWithoutWritingNoteOrSyncQueues() async throws {
+        let container = try makeContainer()
+        let originalContext = ModelContext(container)
+        let note = Note(content: "Original anchored text")
+        originalContext.insert(note)
+        try originalContext.save()
+        let noteID = note.id
+        let migrator = await NoteSequenceStateBootstrapMigrator(
+            container: container, allowsExistingStateReplacement: false
+        )
+        try await migrator.runToCompletion()
+
+        let changedContext = ModelContext(container)
+        let changed = try XCTUnwrap(changedContext.fetch(
+            FetchDescriptor<Note>()
+        ).first { $0.id == noteID })
+        changed.content = "Saved owner text"
+        try changedContext.save()
+        let originalRecord = try XCTUnwrap(ModelContext(container).fetch(
+            FetchDescriptor<NoteSequenceStateRecord>()
+        ).first)
+        let originalPayload = originalRecord.statePayloadData
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR238-owner-choice-ui-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let vm = NotesViewModel(
+            context: ModelContext(container),
+            syncConflictStore: SyncConflictStore(
+                fileURL: directory.appendingPathComponent("conflicts.json")
+            ),
+            pendingIncomingBatchQueueFileURL: nil,
+            anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore(
+                fileURL: directory.appendingPathComponent("anchored.json")
+            ),
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false,
+            defersModelInitializationUntilMigration: true
+        )
+        vm.isolateDivergentNoteIDs(Set([noteID]))
+        let store = await NoteLocalDivergenceEvidenceStore(
+            fileURL: directory.appendingPathComponent("ledger.json")
+        )
+        let admin = FakePendingSyncQueueAdmin(
+            legacySnapshot: SyncQueueSnapshot(),
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: [], health: .healthy
+            )
+        )
+
+        try await vm.prepareProtectedLocalDivergenceChoice(
+            noteID: noteID, choice: .keepAnchoredHistory,
+            queueAdmin: admin, evidenceStore: store
+        )
+        let inspection = try await vm.inspectProtectedLocalDivergence(
+            noteID: noteID, evidenceStore: store
+        )
+        XCTAssertEqual(inspection.selected, .keepAnchoredHistory)
+        XCTAssertEqual(inspection.snapshot.savedBody, "Saved owner text")
+        XCTAssertEqual(inspection.snapshot.sequenceVisibleText, "Original anchored text")
+        let queue = try await store.preparedQueueOwnership(for: noteID)
+        XCTAssertNotNil(queue)
+        let prepared = try await store.preparedCommit(for: noteID)
+        XCTAssertNotNil(prepared)
+        let phase = try await store.noteCommitPhase(for: noteID)
+        XCTAssertNil(phase)
+        XCTAssertTrue(admin.isSuspended)
+        XCTAssertFalse(admin.didFlushAllOutboundWork)
+        XCTAssertTrue(admin.unsentSnapshot.pendingBatches.isEmpty)
+        XCTAssertEqual(try XCTUnwrap(ModelContext(container).fetch(
+            FetchDescriptor<NoteSequenceStateRecord>()
+        ).first).statePayloadData, originalPayload)
+        XCTAssertEqual(try XCTUnwrap(ModelContext(container).fetch(
+            FetchDescriptor<Note>()
+        ).first { $0.id == noteID }).content, "Saved owner text")
+
+        try await vm.prepareProtectedLocalDivergenceChoice(
+            noteID: noteID, choice: .keepAnchoredHistory,
+            queueAdmin: admin, evidenceStore: store
+        )
+        do {
+            try await vm.prepareProtectedLocalDivergenceChoice(
+                noteID: noteID, choice: .keepSavedBody,
+                queueAdmin: admin, evidenceStore: store
+            )
+            XCTFail("An explicit owner choice must not be silently replaced")
+        } catch let error as NoteLocalDivergenceEvidenceStoreError {
+            XCTAssertEqual(error, .conflictingResolution)
+        }
+    }
+
     func testCoordinatorBuilderFailureLeavesQueuesAndJournalUntouched() async throws {
         let fileURL = temporaryJournalURL()
         defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
