@@ -80,6 +80,19 @@ struct NoteLocalDivergenceCommitPreparation: Codable, Equatable {
     let capturedChanges: [SyncConvergenceCapturedLocalChange]
 }
 
+/// The note-state commit receipt never authorizes queue cleanup or sync resume.
+/// The unfinished owner intent survives both phases until all queue obligations
+/// are separately reconciled.
+enum NoteLocalDivergenceNoteCommitPhase: String, Codable {
+    case started
+    case noteSaved
+}
+
+struct NoteLocalDivergenceNoteCommitProgress: Codable, Equatable {
+    let intent: NoteLocalDivergenceResolutionIntent
+    let phase: NoteLocalDivergenceNoteCommitPhase
+}
+
 /// An immutable, append-only ledger of local note/body versus anchored-history evidence.
 /// Neither a captured snapshot nor this ledger authorizes choosing a winner or resuming sync.
 struct NoteLocalDivergenceEvidenceEnvelope: Codable, Equatable {
@@ -95,6 +108,8 @@ struct NoteLocalDivergenceEvidenceEnvelope: Codable, Equatable {
     // Compatible with older v1 archives. Never infer transaction authority
     // from the mere presence of an owner choice or a queue preimage.
     var commitPreparations: [NoteLocalDivergenceCommitPreparation]? = nil
+    // A noteSaved receipt is never a completed cross-store transaction.
+    var noteCommitProgress: [NoteLocalDivergenceNoteCommitProgress]? = nil
 
     static let empty = Self(formatVersion: supportedVersion, snapshots: [])
 
@@ -147,6 +162,14 @@ struct NoteLocalDivergenceEvidenceEnvelope: Codable, Equatable {
                     prepared.finalSequenceTombstonedUTF16Count == snapshot.sequenceTombstonedUTF16Count &&
                     prepared.capturedChanges.isEmpty
                   )) else {
+                throw NoteLocalDivergenceEvidenceStoreError.corruptArchive
+            }
+        }
+        var progressedNoteIDs = Set<UUID>()
+        for progress in noteCommitProgress ?? [] {
+            guard (commitPreparations ?? []).contains(where: {
+                $0.intent == progress.intent
+            }), progressedNoteIDs.insert(progress.intent.noteID).inserted else {
                 throw NoteLocalDivergenceEvidenceStoreError.corruptArchive
             }
         }
@@ -376,6 +399,89 @@ final class NoteLocalDivergenceEvidenceStore {
 
     func preparedCommit(for noteID: UUID) throws -> NoteLocalDivergenceCommitPreparation? {
         try loadEnvelope().commitPreparations?.first { $0.intent.noteID == noteID }
+    }
+
+    /// Atomically records that a previously prepared, owner-approved note
+    /// mutation has begun, then applies the exact planned SwiftData pair.
+    /// The queue recapture closure MUST be owned by the suspended recovery
+    /// coordinator. No queues are replaced, acknowledged or transmitted.
+    /// A crash after SwiftData save but before receipt persistence is replayed
+    /// by checking the exact target bytes before attempting another write.
+    func commitPreparedNote(
+        for snapshot: NoteLocalDivergenceSnapshot,
+        checkedBy migrator: NoteSequenceStateBootstrapMigrator,
+        recaptureQueueOwnership: @MainActor () async throws -> NoteLocalDivergenceQueueOwnershipEvidence
+    ) async throws -> Bool {
+        let preflight = try loadEnvelope()
+        guard let index = preflight.snapshots.firstIndex(of: snapshot),
+              let queue = (preflight.queuePreparations ?? []).first(where: {
+                  $0.intent.noteID == snapshot.noteID && $0.intent.evidenceIndex == index
+              }),
+              let prepared = (preflight.commitPreparations ?? []).first(where: {
+                  $0.intent == queue.intent
+              }) else {
+            throw NoteLocalDivergenceEvidenceStoreError.conflictingQueueOwnership
+        }
+
+        // Always validate *all* durable obligations while outgoing and incoming
+        // work remain suspended. A changed acknowledgement or admission must
+        // not be erased by a stale queue preimage.
+        let observed = try await recaptureQueueOwnership()
+        guard observed == queue.ownership else {
+            throw NoteLocalDivergenceEvidenceStoreError.conflictingQueueOwnership
+        }
+        var current = try loadEnvelope()
+        guard current == preflight else {
+            throw NoteLocalDivergenceEvidenceStoreError.conflictingQueueOwnership
+        }
+        let phase = (current.noteCommitProgress ?? []).first {
+            $0.intent.noteID == snapshot.noteID
+        }?.phase
+
+        if phase == .noteSaved {
+            // A recorded success can only be rechecked, never replayed over
+            // a changed note. This also verifies the paired structural marks.
+            return try migrator.applyPreparedNoteCommit(
+                prepared, expected: snapshot, allowMutation: false
+            )
+        }
+        if phase == nil {
+            guard try migrator.revalidateDivergenceSnapshot(snapshot) else {
+                throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+            }
+            current.noteCommitProgress = (current.noteCommitProgress ?? []) + [
+                NoteLocalDivergenceNoteCommitProgress(
+                    intent: prepared.intent, phase: .started
+                )
+            ]
+            try saveEnvelope(current)
+        }
+
+        let changed = try migrator.applyPreparedNoteCommit(
+            prepared, expected: snapshot
+        )
+        var saved = try loadEnvelope()
+        guard saved.noteCommitProgress?.contains(where: {
+            $0.intent == prepared.intent && $0.phase == .started
+        }) == true else {
+            throw NoteLocalDivergenceEvidenceStoreError.corruptArchive
+        }
+        saved.noteCommitProgress = saved.noteCommitProgress?.map {
+            $0.intent == prepared.intent
+                ? NoteLocalDivergenceNoteCommitProgress(
+                    intent: prepared.intent, phase: .noteSaved
+                ) : $0
+        }
+        try saveEnvelope(saved)
+        return changed
+    }
+
+    func noteCommitPhase(
+        for noteID: UUID
+    ) throws -> NoteLocalDivergenceNoteCommitPhase? {
+        try loadEnvelope().noteCommitProgress?.first {
+            $0.intent.noteID == noteID
+        }?.phase
     }
 
     /// Any unfinished intent requires queue/authority recovery before sync is
