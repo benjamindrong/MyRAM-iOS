@@ -541,6 +541,12 @@ final class NotesViewModel: ObservableObject {
             throw PendingSyncRecoveryCoordinator.RecoveryError.pendingLocalEditsNotDurable
         }
         await prepareLocalOwnershipForBootstrap()
+        // An isolated SwiftData resolution cannot invalidate uncommitted
+        // main-context changes. Flushes must be owned by their normal editor
+        // lifecycle rather than silently rolled back by recovery.
+        guard !context.hasChanges else {
+            throw PendingSyncRecoveryCoordinator.RecoveryError.pendingLocalEditsNotDurable
+        }
 
         guard let intent = try await evidenceStore.preparedResolution(for: noteID) else {
             throw NoteLocalDivergenceEvidenceStoreError.unresolvedResolutionIntent
@@ -587,6 +593,20 @@ final class NotesViewModel: ObservableObject {
                 )
             }
         )
+        // The note and structural pair were saved in a separate ModelContext.
+        // Discard *only clean* main-context object registrations before using
+        // them again; otherwise a stale cached Note could immediately recreate
+        // the saved-body/CRDT mismatch on the next editor commit.
+        guard !context.hasChanges else {
+            throw PendingSyncRecoveryCoordinator.RecoveryError.pendingLocalEditsNotDurable
+        }
+        context.rollback()
+        guard let fresh = fetchNote(withID: noteID),
+              let prepared = try await evidenceStore.preparedCommit(for: noteID),
+              fresh.content == prepared.finalBody,
+              fresh.richTextContentData == nil else {
+            throw NoteSequenceStateStoreError.verificationFailure
+        }
         startupQuarantinedNoteIDs.remove(noteID)
         refreshCurrentFolderContent()
     }
