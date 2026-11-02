@@ -792,7 +792,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         let before = try await store.hasUnfinishedResolutionIntents()
         XCTAssertTrue(before, "Note saved is not a completion receipt")
         do {
-            _ = try await store.finalizePreparedCleanQueueResolution(
+            _ = try await store.finalizePreparedQueuePreservingResolution(
                 for: snapshot, checkedBy: migrator,
                 verifyQueueOwnership: {
                     throw PendingSyncRecoveryCoordinator.RecoveryError.staleLocalResolutionQueueOwnership
@@ -804,7 +804,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         }
         let blocked = try await store.hasUnfinishedResolutionIntents()
         XCTAssertTrue(blocked)
-        let finalized = try await store.finalizePreparedCleanQueueResolution(
+        let finalized = try await store.finalizePreparedQueuePreservingResolution(
             for: snapshot, checkedBy: migrator,
             verifyQueueOwnership: {}
         )
@@ -812,7 +812,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         let restarted = await NoteLocalDivergenceEvidenceStore(fileURL: url)
         let unfinished = try await restarted.hasUnfinishedResolutionIntents()
         XCTAssertFalse(unfinished)
-        let repeated = try await restarted.finalizePreparedCleanQueueResolution(
+        let repeated = try await restarted.finalizePreparedQueuePreservingResolution(
             for: snapshot, checkedBy: migrator,
             verifyQueueOwnership: {}
         )
@@ -858,7 +858,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
             recaptureQueueOwnership: { queues }
         )
         do {
-            _ = try await store.finalizePreparedCleanQueueResolution(
+            _ = try await store.finalizePreparedQueuePreservingResolution(
                 for: snapshot, checkedBy: migrator,
                 verifyQueueOwnership: {}
             )
@@ -909,7 +909,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
             fileURL: archive, fileIO: failedIO
         )
         do {
-            _ = try await failing.finalizePreparedCleanQueueResolution(
+            _ = try await failing.finalizePreparedQueuePreservingResolution(
                 for: snapshot, checkedBy: migrator,
                 verifyQueueOwnership: {}
             )
@@ -923,7 +923,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         XCTAssertTrue(unfinished)
         let phase = try await restarted.noteCommitPhase(for: noteID)
         XCTAssertEqual(phase, .noteSaved)
-        let repaired = try await restarted.finalizePreparedCleanQueueResolution(
+        let repaired = try await restarted.finalizePreparedQueuePreservingResolution(
             for: snapshot, checkedBy: migrator,
             verifyQueueOwnership: {}
         )
