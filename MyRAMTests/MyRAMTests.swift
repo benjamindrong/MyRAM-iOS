@@ -8512,13 +8512,19 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(importVM.currentNote?.id, importedNote.id)
     }
 
-    func testSetNotePinnedMovesNoteAheadOfUnpinnedNotes() throws {
+    func testSetNotePinnedMovesNoteAheadOfUnpinnedNotes() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
         let older = try XCTUnwrap(vm.createNewNote())
-        vm.updateNote(older, title: "Older", content: "")
+        let olderSaved = await vm.commitNoteEditForProduction(
+            older, title: "Older", content: ""
+        )
+        XCTAssertTrue(olderSaved)
         let newer = try XCTUnwrap(vm.createNewNote())
-        vm.updateNote(newer, title: "Newer", content: "")
+        let newerSaved = await vm.commitNoteEditForProduction(
+            newer, title: "Newer", content: ""
+        )
+        XCTAssertTrue(newerSaved)
 
         vm.setNotePinned(older, isPinned: true)
 
