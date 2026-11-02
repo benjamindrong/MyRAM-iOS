@@ -488,7 +488,14 @@ final class NoteLocalDivergenceEvidenceStore {
     /// admitted, even if the note body happens to match its anchored history.
     /// Errors remain distinct from an empty ledger and must fail closed.
     func hasUnfinishedResolutionIntents() throws -> Bool {
-        try !(loadEnvelope().resolutionIntents ?? []).isEmpty
+        try !unfinishedResolutionNoteIDs().isEmpty
+    }
+
+    /// Read before startup migration. A note with an unfinished intent is
+    /// protected even when a partial SwiftData commit made its body match
+    /// anchored history; only queue reconciliation may release it.
+    func unfinishedResolutionNoteIDs() throws -> Set<UUID> {
+        try Set((loadEnvelope().resolutionIntents ?? []).map(\.noteID))
     }
 
 
@@ -579,17 +586,24 @@ final class NoteSequenceStateBootstrapMigrator {
     }
 
     func runToCompletion() async throws {
-        _ = try await migrate(preservingDivergentStates: false)
+        _ = try await migrate(preservingDivergentStates: false, protectedNoteIDs: [])
     }
 
     /// The captured note body and its structurally valid anchored sequence are
     /// independent retained authorities until an explicit conflict resolution.
     /// A divergence is not permission to replace either representation.
-    func runPreservingDivergentStates() async throws -> Set<UUID> {
-        try await migrate(preservingDivergentStates: true)
+    func runPreservingDivergentStates(
+        protectedNoteIDs: Set<UUID> = []
+    ) async throws -> Set<UUID> {
+        try await migrate(
+            preservingDivergentStates: true, protectedNoteIDs: protectedNoteIDs
+        )
     }
 
-    private func migrate(preservingDivergentStates: Bool) async throws -> Set<UUID> {
+    private func migrate(
+        preservingDivergentStates: Bool,
+        protectedNoteIDs: Set<UUID>
+    ) async throws -> Set<UUID> {
         let enumerationContext = ModelContext(container)
         enumerationContext.autosaveEnabled = false
         let noteIDs = try enumerationContext.fetch(FetchDescriptor<Note>())
@@ -601,6 +615,13 @@ final class NoteSequenceStateBootstrapMigrator {
         let store = SwiftDataNoteSequenceStateStore(container: container)
         var divergentNoteIDs = Set<UUID>()
         for noteID in noteIDs {
+            // An interrupted owner-approved commit can temporarily make
+            // the visible body match while queued work is still unresolved.
+            // Do not run mark migration or any note writer on that authority.
+            if protectedNoteIDs.contains(noteID) {
+                divergentNoteIDs.insert(noteID)
+                continue
+            }
             try beforeEachNote(noteID)
 
             if allowsExistingStateReplacement && !preservingDivergentStates {
