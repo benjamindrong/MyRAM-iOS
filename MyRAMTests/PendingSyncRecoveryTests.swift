@@ -1531,6 +1531,43 @@ final class NotesListStateBootstrapTests: XCTestCase {
         XCTAssertEqual(loaded.first { $0.id == note.id }?.content, "Offline note")
     }
 
+    func testMYR238PendingResolutionDoesNotHideRollbackFailure() async throws {
+        let container = try makeContainer()
+        var started = false
+        let state = NotesListState(
+            context: container.mainContext,
+            startsBootstrapAutomatically: false,
+            bootstrapActionsFactory: { vm, _ in
+                NotesListState.BootstrapActions(
+                    rollbackIfNeededOnLaunch: {
+                        throw PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed
+                    },
+                    migrateNoteSequenceStates: { [] },
+                    completeModelInitializationAfterMigration: {
+                        vm.completeStartupInitializationAfterMigration()
+                    },
+                    refreshPendingSyncStatus: {},
+                    resumeOutboundAfterRecovery: {},
+                    startNetworkingIfNeeded: { started = true },
+                    resumePendingConvergencePresentationIfNeeded: {},
+                    hasUnfinishedLocalResolution: { true }
+                )
+            }
+        )
+        await state.bootstrapAfterRecovery()
+        XCTAssertEqual(state.bootstrapState, .ready)
+        XCTAssertFalse(started)
+        XCTAssertTrue(
+            state.startupFailureSupportDetails?.contains("Pending sync recovery") == true
+        )
+        let note = try XCTUnwrap(state.vm.createNewNote())
+        let saved = await state.vm.commitNoteEditForProduction(
+            note, title: "Offline", content: "Retained"
+        )
+        XCTAssertTrue(saved)
+        XCTAssertFalse(started)
+    }
+
     func testSyncRecoveryFailureAllowsLocalCreateEditSaveAndRetry() async throws {
         let container = try makeContainer()
         var fails = true
