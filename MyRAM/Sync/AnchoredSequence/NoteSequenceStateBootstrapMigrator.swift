@@ -902,6 +902,38 @@ final class NoteSequenceStateBootstrapMigrator {
         )
     }
 
+    /// Decode the exact archived anchored generation from the live SwiftData
+    /// row before certifying any queued operations as already incorporated.
+    /// A changed revision, payload or formatting authority cannot be used as
+    /// proof that pending outbound operations belong to the selected history.
+    func anchoredHistoryForPreparedResolution(
+        _ snapshot: NoteLocalDivergenceSnapshot
+    ) throws -> SyncTextSequenceState {
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        guard let record = try fetchRecord(noteID: snapshot.noteID, in: context),
+              record.formatVersion == snapshot.sequenceFormatVersion,
+              record.revision == snapshot.sequenceRevision,
+              record.visibleUTF16Count == snapshot.sequenceVisibleUTF16Count,
+              record.tombstonedUTF16Count == snapshot.sequenceTombstonedUTF16Count,
+              record.payloadByteCount == snapshot.sequencePayloadByteCount,
+              record.statePayloadData == snapshot.sequencePayloadData,
+              record.markFormatVersion == snapshot.markFormatVersion,
+              record.markRevision == snapshot.markRevision,
+              record.markStatePayloadData == snapshot.markStatePayloadData else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+        let state = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: record, noteID: snapshot.noteID
+        )
+        guard NoteSequenceStateExactText.matches(
+            state.visibleText, snapshot.sequenceVisibleText
+        ) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+        return state
+    }
+
     /// The SwiftData portion of a journaled resolution. This must be invoked
     /// only after the owning ledger has recorded an explicit owner decision,
     /// frozen the pending queue preimage and durably marked note commit started.
