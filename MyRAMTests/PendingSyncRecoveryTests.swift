@@ -378,6 +378,70 @@ final class PendingSyncRecoveryTests: XCTestCase {
         }
     }
 
+    func testMYR238QueueOwnershipCaptureDetectsChangedOrUnhealthyQueues() async throws {
+        let legacy = SyncQueueSnapshot(
+            pendingChanges: [makeLegacyChange(entityID: "offline-note")],
+            appliedChangeIDs: [UUID()],
+            pendingAcknowledgementIDs: [UUID()]
+        )
+        let unsent = makeBatch(idSuffix: 251)
+        let originalLocal = makeBatch(idSuffix: 252)
+        var local = [SyncConvergenceLocalObligation(legacyBatch: originalLocal)]
+        let admin = FakePendingSyncQueueAdmin(
+            legacySnapshot: legacy,
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: [unsent], health: .healthy
+            )
+        )
+        let coordinator = PendingSyncRecoveryCoordinator(
+            queueAdmin: admin,
+            localQueueSnapshot: {
+                FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: local, health: .healthy
+                )
+            },
+            replaceLocalObligations: { local = $0 },
+            flushReadyLocalBatch: { nil }
+        )
+        let incoming = makeBatch(idSuffix: 253)
+        let healthyIncoming = FileBackedSyncBatchQueueSnapshot(
+            pendingBatches: [incoming], health: .healthy
+        )
+        let captured = try await coordinator.captureLocalResolutionQueueOwnership(
+            incomingSnapshot: healthyIncoming
+        )
+        XCTAssertEqual(captured.legacy, legacy)
+        XCTAssertEqual(captured.unsent, [unsent])
+        XCTAssertEqual(captured.incoming, [incoming])
+        XCTAssertEqual(captured.localObligations, local)
+        try await coordinator.requireUnchangedLocalResolutionQueueOwnership(
+            captured, incomingSnapshot: healthyIncoming
+        )
+
+        local.append(SyncConvergenceLocalObligation(legacyBatch: makeBatch(idSuffix: 254)))
+        do {
+            try await coordinator.requireUnchangedLocalResolutionQueueOwnership(
+                captured, incomingSnapshot: healthyIncoming
+            )
+            XCTFail("New pending local edit must invalidate queue ownership preimage")
+        } catch let error as PendingSyncRecoveryCoordinator.RecoveryError {
+            XCTAssertEqual(error, .staleLocalResolutionQueueOwnership)
+        }
+
+        do {
+            _ = try await coordinator.captureLocalResolutionQueueOwnership(
+                incomingSnapshot: FileBackedSyncBatchQueueSnapshot(
+                    pendingBatches: [], health: .corrupt
+                )
+            )
+            XCTFail("Unreadable incoming queue cannot be captured as empty")
+        } catch let error as PendingSyncRecoveryCoordinator.RecoveryError {
+            XCTAssertEqual(error, .unhealthyIncomingBatchQueue)
+        }
+        XCTAssertFalse(admin.isSuspended)
+        XCTAssertFalse(admin.didFlushAllOutboundWork)
+    }
+
     func testCoordinatorBuilderFailureLeavesQueuesAndJournalUntouched() async throws {
         let fileURL = temporaryJournalURL()
         defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
