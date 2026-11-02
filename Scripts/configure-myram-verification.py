@@ -49,6 +49,7 @@ EXPECTED_STORAGE_ROOT_FILES = {
     "MyRAM/Mac/Sync/MacLegacySyncReceiver.swift",
     "MyRAM/Mac/Sync/MacSyncBatchController.swift",
     "MyRAM/Sync/AnchoredSequence/FileBackedSyncOperationIDReservationStore.swift",
+    "MyRAM/Sync/AnchoredSequence/NoteSequenceStateBootstrapMigrator.swift",
     "MyRAM/Sync/Batch/FileBackedSyncBatchAnchoredRecoveryStore.swift",
     "MyRAM/Sync/Batch/SyncBatchPayload.swift",
     "MyRAM/Sync/MyRAMSyncController.swift",
