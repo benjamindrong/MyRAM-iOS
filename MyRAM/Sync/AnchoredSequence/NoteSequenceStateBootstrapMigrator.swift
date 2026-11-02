@@ -1,5 +1,6 @@
 import AnchoredSequenceCore
 import Foundation
+import NearbySyncCore
 import SwiftData
 
 typealias NoteLegacyFormattingProjectionOperation =
@@ -47,6 +48,13 @@ struct NoteLocalDivergenceResolutionIntent: Codable, Equatable, Sendable {
     let choice: NoteLocalDivergenceResolutionChoice
 }
 
+/// One prepared queue preimage bound to a single, explicit owner choice.
+/// This record is proof of persistence, not a cross-store commit receipt.
+struct NoteLocalDivergenceQueuePreparation: Codable, Equatable {
+    let intent: NoteLocalDivergenceResolutionIntent
+    let ownership: NoteLocalDivergenceQueueOwnershipEvidence
+}
+
 /// An immutable, append-only ledger of local note/body versus anchored-history evidence.
 /// Neither a captured snapshot nor this ledger authorizes choosing a winner or resuming sync.
 struct NoteLocalDivergenceEvidenceEnvelope: Codable, Equatable {
@@ -57,6 +65,8 @@ struct NoteLocalDivergenceEvidenceEnvelope: Codable, Equatable {
     // Optional for backward decoding of v1 evidence archives written before
     // explicit user resolution could be represented.
     var resolutionIntents: [NoteLocalDivergenceResolutionIntent]? = nil
+    // Old v1 archives have no queue preparation. Never infer one from intent.
+    var queuePreparations: [NoteLocalDivergenceQueuePreparation]? = nil
 
     static let empty = Self(formatVersion: supportedVersion, snapshots: [])
 
@@ -83,6 +93,13 @@ struct NoteLocalDivergenceEvidenceEnvelope: Codable, Equatable {
                 throw NoteLocalDivergenceEvidenceStoreError.corruptArchive
             }
         }
+        var preparedNoteIDs = Set<UUID>()
+        for prepared in queuePreparations ?? [] {
+            guard (resolutionIntents ?? []).contains(prepared.intent),
+                  preparedNoteIDs.insert(prepared.intent.noteID).inserted else {
+                throw NoteLocalDivergenceEvidenceStoreError.corruptArchive
+            }
+        }
     }
 }
 
@@ -92,6 +109,8 @@ enum NoteLocalDivergenceEvidenceStoreError: Error, Equatable {
     case staleSnapshot
     case snapshotNotPreserved
     case conflictingResolution
+    case unresolvedResolutionIntent
+    case conflictingQueueOwnership
     case persistenceFailed
 }
 
@@ -193,6 +212,51 @@ final class NoteLocalDivergenceEvidenceStore {
 
     func preparedResolution(for noteID: UUID) throws -> NoteLocalDivergenceResolutionIntent? {
         try loadEnvelope().resolutionIntents?.first { $0.noteID == noteID }
+    }
+
+    /// Queue ownership must come from the health-checked recovery owner while
+    /// sync is suspended. Once archived, re-capture and compare before any
+    /// future SwiftData or queue mutation; changed pending work is a blocker.
+    @discardableResult
+    func prepareQueueOwnership(
+        for snapshot: NoteLocalDivergenceSnapshot,
+        ownership: NoteLocalDivergenceQueueOwnershipEvidence,
+        checkedBy migrator: NoteSequenceStateBootstrapMigrator
+    ) throws -> Bool {
+        guard try migrator.revalidateDivergenceSnapshot(snapshot) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+        var envelope = try loadEnvelope()
+        guard let index = envelope.snapshots.firstIndex(of: snapshot),
+              let intent = (envelope.resolutionIntents ?? []).first(where: {
+                  $0.noteID == snapshot.noteID && $0.evidenceIndex == index
+              }) else {
+            throw NoteLocalDivergenceEvidenceStoreError.unresolvedResolutionIntent
+        }
+        let proposed = NoteLocalDivergenceQueuePreparation(
+            intent: intent,
+            ownership: ownership
+        )
+        if let existing = (envelope.queuePreparations ?? []).first(where: {
+            $0.intent.noteID == snapshot.noteID
+        }) {
+            guard existing == proposed else {
+                throw NoteLocalDivergenceEvidenceStoreError.conflictingQueueOwnership
+            }
+            return false
+        }
+        envelope.queuePreparations = (envelope.queuePreparations ?? []) + [proposed]
+        try saveEnvelope(envelope)
+        guard try migrator.revalidateDivergenceSnapshot(snapshot) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+        return true
+    }
+
+    func preparedQueueOwnership(
+        for noteID: UUID
+    ) throws -> NoteLocalDivergenceQueuePreparation? {
+        try loadEnvelope().queuePreparations?.first { $0.intent.noteID == noteID }
     }
 
     /// Any unfinished intent requires queue/authority recovery before sync is
