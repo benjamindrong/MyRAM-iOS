@@ -2230,8 +2230,9 @@ private struct DivergentNoteReadOnlyView: View {
             selectedChoice = result.selected
             errorMessage = nil
         } catch {
-            errorMessage = "Resolution preparation remains incomplete: \(error)"
+            let detail = String(describing: error)
             await inspect()
+            errorMessage = "Resolution preparation remains incomplete: \(detail)"
         }
     }
 }
