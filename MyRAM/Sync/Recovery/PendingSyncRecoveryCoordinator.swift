@@ -101,7 +101,7 @@ final class PendingSyncRecoveryCoordinator {
         let current = try await prepareSnapshots()
         // Reuse the established inter-queue ownership validator: identical
         // duplicated IDs are tolerated, conflicting payload IDs are rejected.
-        _ = try SyncPeerBootstrapOwnershipCandidate(
+        let ownership = try SyncPeerBootstrapOwnershipCandidate(
             unsentSnapshot: FileBackedSyncBatchQueueSnapshot(
                 pendingBatches: current.unsent,
                 health: .healthy
@@ -111,9 +111,19 @@ final class PendingSyncRecoveryCoordinator {
                 health: .healthy
             )
         )
-        try incomingSnapshot.pendingBatches.forEach(
-            SyncBatchAnchoredPayloadPolicy.validateInbound
+        // Include inbound work in the same ID integrity check. Otherwise a
+        // conflicting incoming payload could masquerade as a previously
+        // captured outbound obligation during a future resolution.
+        var batchesByID = Dictionary(
+            uniqueKeysWithValues: ownership.canonicalBatches.map { ($0.id, $0) }
         )
+        for batch in incomingSnapshot.pendingBatches {
+            try SyncBatchAnchoredPayloadPolicy.validateInbound(batch)
+            if let existing = batchesByID[batch.id], existing != batch {
+                throw SyncPeerBootstrapOwnershipError.conflictingDuplicateBatchID(batch.id)
+            }
+            batchesByID[batch.id] = batch
+        }
         return NoteLocalDivergenceQueueOwnershipEvidence(
             legacy: current.legacy,
             unsent: current.unsent,
