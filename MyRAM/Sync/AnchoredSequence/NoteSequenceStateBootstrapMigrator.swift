@@ -358,6 +358,33 @@ final class NoteSequenceStateBootstrapMigrator {
         guard !NoteSequenceStateExactText.matches(sequence.visibleText, note.content) else {
             return nil
         }
+        // A text mismatch is not a recoverable local conflict when its paired
+        // structural marks are corrupt, unsupported, or inconsistent. Validate
+        // the whole authority before preserving it or offering a resolution.
+        if record.markFormatVersion == NoteStructuralFormattingPersistence.schemaVersion {
+            do {
+                _ = try NoteStructuralFormattingPersistence.decode(
+                    record: record,
+                    pairedWith: sequence
+                )
+            } catch let error as NoteStructuralFormattingPersistenceError {
+                switch error {
+                case .unsupportedSchemaVersion(let version):
+                    throw NoteSequenceStateStoreError.unsupportedMarkVersion(version)
+                case .corruptPayload, .pairedValidationFailed:
+                    throw NoteSequenceStateStoreError.corruptMarkState
+                }
+            }
+        } else if record.markFormatVersion == 0 {
+            guard record.markRevision == 0,
+                  record.markStatePayloadData.isEmpty else {
+                throw NoteSequenceStateStoreError.corruptMarkState
+            }
+        } else {
+            throw NoteSequenceStateStoreError.unsupportedMarkVersion(
+                record.markFormatVersion
+            )
+        }
         return NoteLocalDivergenceSnapshot(
             noteID: note.id,
             savedTitle: note.title,
