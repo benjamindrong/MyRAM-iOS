@@ -34,6 +34,19 @@ struct NoteLocalDivergenceSnapshot: Codable, Equatable, Sendable {
     let markStatePayloadData: Data
 }
 
+/// Explicit owner choice bound to one immutable, previously archived divergence snapshot.
+/// This is an uncommitted intent, never permission for a background authority change.
+enum NoteLocalDivergenceResolutionChoice: String, Codable, Equatable, Sendable {
+    case keepSavedBody
+    case keepAnchoredHistory
+}
+
+struct NoteLocalDivergenceResolutionIntent: Codable, Equatable, Sendable {
+    let noteID: UUID
+    let evidenceIndex: Int
+    let choice: NoteLocalDivergenceResolutionChoice
+}
+
 /// An immutable, append-only ledger of local note/body versus anchored-history evidence.
 /// Neither a captured snapshot nor this ledger authorizes choosing a winner or resuming sync.
 struct NoteLocalDivergenceEvidenceEnvelope: Codable, Equatable {
@@ -41,6 +54,9 @@ struct NoteLocalDivergenceEvidenceEnvelope: Codable, Equatable {
 
     let formatVersion: Int
     var snapshots: [NoteLocalDivergenceSnapshot]
+    // Optional for backward decoding of v1 evidence archives written before
+    // explicit user resolution could be represented.
+    var resolutionIntents: [NoteLocalDivergenceResolutionIntent]? = nil
 
     static let empty = Self(formatVersion: supportedVersion, snapshots: [])
 
@@ -59,6 +75,14 @@ struct NoteLocalDivergenceEvidenceEnvelope: Codable, Equatable {
                 throw NoteLocalDivergenceEvidenceStoreError.corruptArchive
             }
         }
+        var intendedNoteIDs = Set<UUID>()
+        for intent in resolutionIntents ?? [] {
+            guard snapshots.indices.contains(intent.evidenceIndex),
+                  snapshots[intent.evidenceIndex].noteID == intent.noteID,
+                  intendedNoteIDs.insert(intent.noteID).inserted else {
+                throw NoteLocalDivergenceEvidenceStoreError.corruptArchive
+            }
+        }
     }
 }
 
@@ -66,6 +90,8 @@ enum NoteLocalDivergenceEvidenceStoreError: Error, Equatable {
     case unsupportedVersion(Int)
     case corruptArchive
     case staleSnapshot
+    case snapshotNotPreserved
+    case conflictingResolution
     case persistenceFailed
 }
 
@@ -126,6 +152,49 @@ final class NoteLocalDivergenceEvidenceStore {
     func snapshots(for noteID: UUID) throws -> [NoteLocalDivergenceSnapshot] {
         try loadEnvelope().snapshots.filter { $0.noteID == noteID }
     }
+    /// Records a deliberately selected choice, but does not mutate note, CRDT,
+    /// formatting, outbound queues, or the sync admission gate. The caller must
+    /// have durably preserved this exact evidence generation first.
+    @discardableResult
+    func prepareOwnerSelectedResolution(
+        snapshot: NoteLocalDivergenceSnapshot,
+        choice: NoteLocalDivergenceResolutionChoice,
+        checkedBy migrator: NoteSequenceStateBootstrapMigrator
+    ) throws -> Bool {
+        guard try migrator.revalidateDivergenceSnapshot(snapshot) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+        var envelope = try loadEnvelope()
+        guard let index = envelope.snapshots.firstIndex(of: snapshot) else {
+            throw NoteLocalDivergenceEvidenceStoreError.snapshotNotPreserved
+        }
+        let proposed = NoteLocalDivergenceResolutionIntent(
+            noteID: snapshot.noteID,
+            evidenceIndex: index,
+            choice: choice
+        )
+        if let existing = (envelope.resolutionIntents ?? []).first(where: {
+            $0.noteID == snapshot.noteID
+        }) {
+            guard existing == proposed else {
+                throw NoteLocalDivergenceEvidenceStoreError.conflictingResolution
+            }
+            return false
+        }
+        envelope.resolutionIntents = (envelope.resolutionIntents ?? []) + [proposed]
+        try saveEnvelope(envelope)
+        // A concurrently modified note is never certified as ready for a
+        // follow-on resolution, even when the intent was already written.
+        guard try migrator.revalidateDivergenceSnapshot(snapshot) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+        return true
+    }
+
+    func preparedResolution(for noteID: UUID) throws -> NoteLocalDivergenceResolutionIntent? {
+        try loadEnvelope().resolutionIntents?.first { $0.noteID == noteID }
+    }
+
 
     private func loadEnvelope() throws -> NoteLocalDivergenceEvidenceEnvelope {
         guard fileIO.fileExists(fileURL) else { return .empty }
