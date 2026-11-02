@@ -156,6 +156,9 @@ final class PendingSyncRecoveryCoordinator {
         expected: NoteLocalDivergenceQueueOwnershipEvidence,
         incomingSnapshot: FileBackedSyncBatchQueueSnapshot
     ) async throws {
+        // Never report readiness while outbound transport may still transmit
+        // an authority that predates the proposed local resolution.
+        queueAdmin.suspendOutboundForRecovery()
         try await requireUnchangedLocalResolutionQueueOwnership(
             expected, incomingSnapshot: incomingSnapshot
         )
