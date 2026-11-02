@@ -932,6 +932,68 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         XCTAssertTrue(stillUnfinished)
     }
 
+    func testMYR238StartupSkipsNotesWithIncompleteResolutionEvenAfterBodiesMatch() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Anchored history", in: container)
+        let otherID = try insertNote(body: "Healthy", in: container)
+        let migrator = await makeMigrator(container, allowsExistingStateReplacement: false)
+        try await migrator.runToCompletion()
+
+        // Older valid empty-mark rows need migration when healthy, but must
+        // remain byte-for-byte untouched once owner resolution is in progress.
+        let context = ModelContext(container)
+        let record = try XCTUnwrap(context.fetch(FetchDescriptor<NoteSequenceStateRecord>())
+            .first { $0.noteID == noteID })
+        record.markFormatVersion = 0
+        record.markRevision = 0
+        record.markStatePayloadData = Data()
+        try context.save()
+        try updateNote(noteID: noteID, body: "Owner's saved text", in: container)
+        let captured = try await migrator.validatedDivergenceSnapshot(noteID: noteID)
+        let snapshot = try XCTUnwrap(captured)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR238-boot-guard-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = await NoteLocalDivergenceEvidenceStore(
+            fileURL: directory.appendingPathComponent("ledger.json")
+        )
+        let ownership = NoteLocalDivergenceQueueOwnershipEvidence(
+            legacy: SyncQueueSnapshot(pendingChanges: []),
+            unsent: [], incoming: [], localObligations: []
+        )
+        _ = try await store.preserve(snapshot, checkedBy: migrator)
+        _ = try await store.prepareOwnerSelectedResolution(
+            snapshot: snapshot, choice: .keepAnchoredHistory, checkedBy: migrator
+        )
+        _ = try await store.prepareQueueOwnership(
+            for: snapshot, ownership: ownership, checkedBy: migrator
+        )
+        _ = try await store.prepareCommit(for: snapshot, checkedBy: migrator)
+        _ = try await store.commitPreparedNote(
+            for: snapshot, checkedBy: migrator,
+            recaptureQueueOwnership: { ownership }
+        )
+
+        let protectedIDs = try await store.unfinishedResolutionNoteIDs()
+        XCTAssertEqual(protectedIDs, Set([noteID]))
+        let before = try XCTUnwrap(fetchRecords(in: container).first { $0.noteID == noteID })
+        XCTAssertEqual(before.markFormatVersion, 0)
+        XCTAssertEqual(before.markStatePayloadData, Data())
+        let migrated = try await makeMigrator(
+            container, allowsExistingStateReplacement: false
+        ).runPreservingDivergentStates(protectedNoteIDs: protectedIDs)
+        XCTAssertEqual(migrated, Set([noteID]))
+        let after = try XCTUnwrap(fetchRecords(in: container).first { $0.noteID == noteID })
+        XCTAssertEqual(after.statePayloadData, before.statePayloadData)
+        XCTAssertEqual(after.markFormatVersion, 0)
+        XCTAssertEqual(after.markStatePayloadData, Data())
+        let notes = try ModelContext(container).fetch(FetchDescriptor<Note>())
+        XCTAssertEqual(notes.first { $0.id == noteID }?.content, "Anchored history")
+        XCTAssertEqual(notes.first { $0.id == otherID }?.content, "Healthy")
+        let stillPending = try await store.hasUnfinishedResolutionIntents()
+        XCTAssertTrue(stillPending)
+    }
+
     func testMYR238InvalidMarkCannotBeQuarantinedAsTextDivergence() async throws {
         for invalidMark in ["malformed", "unsupported", "inconsistentLegacy"] {
             let container = try makeContainer()
