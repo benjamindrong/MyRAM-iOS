@@ -318,7 +318,8 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("archive.json")
         let store = await NoteLocalDivergenceEvidenceStore(fileURL: url)
-        XCTAssertTrue(try await store.preserve(snapshot, checkedBy: migrator))
+        let preserved = try await store.preserve(snapshot, checkedBy: migrator)
+        XCTAssertTrue(preserved)
         let prepared = try await store.prepareOwnerSelectedResolution(
             snapshot: snapshot,
             choice: .keepSavedBody,
@@ -336,7 +337,8 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         XCTAssertEqual(intent?.noteID, noteID)
         XCTAssertEqual(intent?.evidenceIndex, 0)
         XCTAssertEqual(intent?.choice, .keepSavedBody)
-        XCTAssertEqual(try await restarted.snapshots(for: noteID), [snapshot])
+        let restoredSnapshots = try await restarted.snapshots(for: noteID)
+        XCTAssertEqual(restoredSnapshots, [snapshot])
         let record = try XCTUnwrap(fetchRecords(in: container).first)
         XCTAssertEqual(record.statePayloadData, snapshot.sequencePayloadData)
         XCTAssertEqual(record.markStatePayloadData, snapshot.markStatePayloadData)
@@ -369,11 +371,12 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
             XCTAssertEqual(error, .snapshotNotPreserved)
         }
         _ = try await store.preserve(snapshot, checkedBy: migrator)
-        XCTAssertTrue(try await store.prepareOwnerSelectedResolution(
+        let firstPrepared = try await store.prepareOwnerSelectedResolution(
             snapshot: snapshot,
             choice: .keepAnchoredHistory,
             checkedBy: migrator
-        ))
+        )
+        XCTAssertTrue(firstPrepared)
         do {
             _ = try await store.prepareOwnerSelectedResolution(
                 snapshot: snapshot,
