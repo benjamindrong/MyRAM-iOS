@@ -195,6 +195,13 @@ final class NoteLocalDivergenceEvidenceStore {
         try loadEnvelope().resolutionIntents?.first { $0.noteID == noteID }
     }
 
+    /// Any unfinished intent requires queue/authority recovery before sync is
+    /// admitted, even if the note body happens to match its anchored history.
+    /// Errors remain distinct from an empty ledger and must fail closed.
+    func hasUnfinishedResolutionIntents() throws -> Bool {
+        try !(loadEnvelope().resolutionIntents ?? []).isEmpty
+    }
+
 
     private func loadEnvelope() throws -> NoteLocalDivergenceEvidenceEnvelope {
         guard fileIO.fileExists(fileURL) else { return .empty }
