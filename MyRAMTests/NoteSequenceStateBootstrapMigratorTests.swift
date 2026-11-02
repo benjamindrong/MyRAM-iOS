@@ -697,6 +697,178 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         XCTAssertTrue(pending)
     }
 
+    func testMYR238OwnerNoteCommitIsAtomicAndIdempotentWithoutQueueMutation() async throws {
+        for choice in [NoteLocalDivergenceResolutionChoice.keepSavedBody, .keepAnchoredHistory] {
+            let container = try makeContainer()
+            let noteID = try insertNote(body: "Old anchored history", in: container)
+            let migrator = await makeMigrator(container, allowsExistingStateReplacement: false)
+            try await migrator.runToCompletion()
+            try updateNote(noteID: noteID, body: "Saved owner edits", in: container)
+            let captured = try await migrator.validatedDivergenceSnapshot(noteID: noteID)
+            let snapshot = try XCTUnwrap(captured)
+            let archive = FileManager.default.temporaryDirectory
+                .appendingPathComponent("MYR238-note-commit-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: archive) }
+            let store = await NoteLocalDivergenceEvidenceStore(
+                fileURL: archive.appendingPathComponent("ledger.json")
+            )
+            let originalQueues = NoteLocalDivergenceQueueOwnershipEvidence(
+                legacy: SyncQueueSnapshot(pendingChanges: []),
+                unsent: [], incoming: [], localObligations: []
+            )
+            _ = try await store.preserve(snapshot, checkedBy: migrator)
+            _ = try await store.prepareOwnerSelectedResolution(
+                snapshot: snapshot, choice: choice, checkedBy: migrator
+            )
+            _ = try await store.prepareQueueOwnership(
+                for: snapshot, ownership: originalQueues, checkedBy: migrator
+            )
+            let frozen = try await store.prepareCommit(for: snapshot, checkedBy: migrator)
+            let beforePhase = try await store.noteCommitPhase(for: noteID)
+            XCTAssertNil(beforePhase)
+            let first = try await store.commitPreparedNote(
+                for: snapshot, checkedBy: migrator,
+                recaptureQueueOwnership: { originalQueues }
+            )
+            XCTAssertTrue(first)
+            let receipt = try await store.noteCommitPhase(for: noteID)
+            XCTAssertEqual(receipt, .noteSaved)
+            let savedNote = try XCTUnwrap(ModelContext(container).fetch(
+                FetchDescriptor<Note>(predicate: #Predicate { $0.id == noteID })
+            ).first)
+            XCTAssertEqual(savedNote.content, frozen.finalBody)
+            XCTAssertEqual(savedNote.title, snapshot.savedTitle)
+            XCTAssertEqual(savedNote.modifiedAt, snapshot.savedModifiedAt)
+            let record = try XCTUnwrap(fetchRecords(in: container).first)
+            XCTAssertEqual(record.statePayloadData, frozen.finalSequencePayloadData)
+            XCTAssertEqual(record.markStatePayloadData, snapshot.markStatePayloadData)
+            XCTAssertEqual(record.markRevision, snapshot.markRevision)
+
+            let restarted = await NoteLocalDivergenceEvidenceStore(
+                fileURL: archive.appendingPathComponent("ledger.json")
+            )
+            let replayed = try await restarted.commitPreparedNote(
+                for: snapshot, checkedBy: migrator,
+                recaptureQueueOwnership: { originalQueues }
+            )
+            XCTAssertFalse(replayed)
+            let pending = try await restarted.hasUnfinishedResolutionIntents()
+            XCTAssertTrue(pending, "A note receipt is not permission to resume sync")
+            XCTAssertEqual(try XCTUnwrap(fetchRecords(in: container).first).statePayloadData,
+                           frozen.finalSequencePayloadData)
+            let retainedEvidence = try await restarted.snapshots(for: noteID)
+            XCTAssertEqual(retainedEvidence, [snapshot])
+        }
+    }
+
+    func testMYR238OwnerNoteCommitRejectsStaleQueuesBeforeWritingJournal() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Anchored", in: container)
+        let migrator = await makeMigrator(container, allowsExistingStateReplacement: false)
+        try await migrator.runToCompletion()
+        try updateNote(noteID: noteID, body: "Saved", in: container)
+        let captured = try await migrator.validatedDivergenceSnapshot(noteID: noteID)
+        let snapshot = try XCTUnwrap(captured)
+        let archive = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR238-stale-queue-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: archive) }
+        let store = await NoteLocalDivergenceEvidenceStore(
+            fileURL: archive.appendingPathComponent("ledger.json")
+        )
+        let queued = NoteLocalDivergenceQueueOwnershipEvidence(
+            legacy: SyncQueueSnapshot(pendingChanges: []),
+            unsent: [], incoming: [], localObligations: []
+        )
+        _ = try await store.preserve(snapshot, checkedBy: migrator)
+        _ = try await store.prepareOwnerSelectedResolution(
+            snapshot: snapshot, choice: .keepSavedBody, checkedBy: migrator
+        )
+        _ = try await store.prepareQueueOwnership(
+            for: snapshot, ownership: queued, checkedBy: migrator
+        )
+        _ = try await store.prepareCommit(for: snapshot, checkedBy: migrator)
+        let oldBytes = try Data(contentsOf: archive.appendingPathComponent("ledger.json"))
+        do {
+            _ = try await store.commitPreparedNote(
+                for: snapshot, checkedBy: migrator,
+                recaptureQueueOwnership: {
+                    NoteLocalDivergenceQueueOwnershipEvidence(
+                        legacy: SyncQueueSnapshot(
+                            pendingChanges: [], pendingAcknowledgementIDs: [UUID()]
+                        ),
+                        unsent: [], incoming: [], localObligations: []
+                    )
+                }
+            )
+            XCTFail("Never mutate a note after pending queue ownership changes")
+        } catch let error as NoteLocalDivergenceEvidenceStoreError {
+            XCTAssertEqual(error, .conflictingQueueOwnership)
+        }
+        let phase = try await store.noteCommitPhase(for: noteID)
+        XCTAssertNil(phase)
+        XCTAssertEqual(try Data(contentsOf: archive.appendingPathComponent("ledger.json")), oldBytes)
+        XCTAssertEqual(try XCTUnwrap(fetchRecords(in: container).first).statePayloadData,
+                       snapshot.sequencePayloadData)
+    }
+
+    func testMYR238FailedSaveCanRestartFromDurableNoteCommitIntent() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Anchored", in: container)
+        let migrator = await makeMigrator(container, allowsExistingStateReplacement: false)
+        try await migrator.runToCompletion()
+        try updateNote(noteID: noteID, body: "Saved", in: container)
+        let captured = try await migrator.validatedDivergenceSnapshot(noteID: noteID)
+        let snapshot = try XCTUnwrap(captured)
+        let archive = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR238-failed-commit-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: archive) }
+        let store = await NoteLocalDivergenceEvidenceStore(
+            fileURL: archive.appendingPathComponent("ledger.json")
+        )
+        let ownership = NoteLocalDivergenceQueueOwnershipEvidence(
+            legacy: SyncQueueSnapshot(pendingChanges: []),
+            unsent: [], incoming: [], localObligations: []
+        )
+        _ = try await store.preserve(snapshot, checkedBy: migrator)
+        _ = try await store.prepareOwnerSelectedResolution(
+            snapshot: snapshot, choice: .keepSavedBody, checkedBy: migrator
+        )
+        _ = try await store.prepareQueueOwnership(
+            for: snapshot, ownership: ownership, checkedBy: migrator
+        )
+        _ = try await store.prepareCommit(for: snapshot, checkedBy: migrator)
+        let failingMigrator = await makeMigrator(
+            container, allowsExistingStateReplacement: false,
+            saveOperation: { _ in throw NSError(domain: "MYR238.injectedSaveFailure", code: 1) }
+        )
+        do {
+            _ = try await store.commitPreparedNote(
+                for: snapshot, checkedBy: failingMigrator,
+                recaptureQueueOwnership: { ownership }
+            )
+            XCTFail("SwiftData save failure must be surfaced")
+        } catch {}
+        let pendingPhase = try await store.noteCommitPhase(for: noteID)
+        XCTAssertEqual(pendingPhase, .started)
+        XCTAssertEqual(try XCTUnwrap(fetchRecords(in: container).first).statePayloadData,
+                       snapshot.sequencePayloadData)
+        let notesBeforeRetry = try ModelContext(container).fetch(FetchDescriptor<Note>())
+        XCTAssertEqual(notesBeforeRetry.first { $0.id == noteID }?.content, snapshot.savedBody)
+
+        let restarted = await NoteLocalDivergenceEvidenceStore(
+            fileURL: archive.appendingPathComponent("ledger.json")
+        )
+        let changed = try await restarted.commitPreparedNote(
+            for: snapshot, checkedBy: migrator,
+            recaptureQueueOwnership: { ownership }
+        )
+        XCTAssertTrue(changed)
+        let finalPhase = try await restarted.noteCommitPhase(for: noteID)
+        XCTAssertEqual(finalPhase, .noteSaved)
+        let stillBlocked = try await restarted.hasUnfinishedResolutionIntents()
+        XCTAssertTrue(stillBlocked)
+    }
+
     func testMYR238InvalidMarkCannotBeQuarantinedAsTextDivergence() async throws {
         for invalidMark in ["malformed", "unsupported", "inconsistentLegacy"] {
             let container = try makeContainer()
