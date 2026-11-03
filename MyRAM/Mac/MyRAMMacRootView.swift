@@ -1062,11 +1062,11 @@ private struct MacNoteListView: View {
             List(selection: selectedBinding) {
                 Section {
                     MacSyncConflictSummaryView(
-                    store: conflictStore,
-                    refreshToken: syncController.lastSyncAt,
-                    resolve: resolveConflict
-                )
-            }
+                        store: conflictStore,
+                        refreshToken: syncController.lastSyncAt,
+                        resolve: resolveConflict
+                    )
+                }
 
                 ForEach(notes, id: \.id) { note in
                     Button {
@@ -1184,6 +1184,7 @@ private struct MacSyncStatusView: View {
                         Button("Pair") {
                             syncController.invite(peer)
                         }
+                        .buttonStyle(.borderless)
                         .controlSize(.mini)
                     }
                 }
