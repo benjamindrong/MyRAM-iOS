@@ -795,12 +795,12 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
             _ = try await store.finalizePreparedQueuePreservingResolution(
                 for: snapshot, checkedBy: migrator,
                 verifyQueueOwnership: {
-                    throw PendingSyncRecoveryCoordinator.RecoveryError.staleLocalResolutionQueueOwnership
+                    throw MigratorTestFailure.queueOwnershipChanged
                 }
             )
             XCTFail("A failed queue recapture cannot complete resolution")
-        } catch let error as PendingSyncRecoveryCoordinator.RecoveryError {
-            XCTAssertEqual(error, .staleLocalResolutionQueueOwnership)
+        } catch let error as MigratorTestFailure {
+            XCTAssertEqual(error, .queueOwnershipChanged)
         }
         let blocked = try await store.hasUnfinishedResolutionIntents()
         XCTAssertTrue(blocked)
@@ -2623,8 +2623,9 @@ private actor MYR222OperationIDReserver: SyncOperationIDReserving {
     }
 }
 
-private enum MigratorTestFailure: Error {
+private enum MigratorTestFailure: Error, Equatable {
     case interrupted
+    case queueOwnershipChanged
 }
 
 private final class IDRecorder: @unchecked Sendable {
