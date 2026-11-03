@@ -1053,46 +1053,49 @@ private struct MacNoteListView: View {
     let onCreateNote: () -> Void
 
     var body: some View {
-        List(selection: selectedBinding) {
-            Section {
-                MacSyncStatusView(syncController: syncController)
-            }
+        VStack(spacing: 0) {
+            // Sync controls are independent of the selectable note list.
+            // A selection row must never intercept diagnostic or recovery actions.
+            MacSyncStatusView(syncController: syncController)
+            Divider()
 
-            Section {
-                MacSyncConflictSummaryView(
+            List(selection: selectedBinding) {
+                Section {
+                    MacSyncConflictSummaryView(
                     store: conflictStore,
                     refreshToken: syncController.lastSyncAt,
                     resolve: resolveConflict
                 )
             }
 
-            ForEach(notes, id: \.id) { note in
-                Button {
-                    onSelect(note)
-                } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(displayTitle(for: note))
-                            .font(.headline)
-                            .lineLimit(1)
-                        Text(displayPreview(for: note))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
+                ForEach(notes, id: \.id) { note in
+                    Button {
+                        onSelect(note)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(displayTitle(for: note))
+                                .font(.headline)
+                                .lineLimit(1)
+                            Text(displayPreview(for: note))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(selectionBackground(for: note))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .contentShape(Rectangle())
                     }
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(selectionBackground(for: note))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .tag(note.id)
-                .contextMenu {
-                    MyRAMWidgetSelectionButton(
-                        coordinator: widgetCoordinator,
-                        noteID: note.id
-                    )
+                    .buttonStyle(.plain)
+                    .tag(note.id)
+                    .contextMenu {
+                        MyRAMWidgetSelectionButton(
+                            coordinator: widgetCoordinator,
+                            noteID: note.id
+                        )
+                    }
                 }
             }
         }
@@ -1149,6 +1152,7 @@ private struct MacNoteListView: View {
 
 private struct MacSyncStatusView: View {
     @ObservedObject var syncController: MacSyncBatchController
+    @State private var showingSyncDiagnostics = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1195,24 +1199,49 @@ private struct MacSyncStatusView: View {
                     .foregroundStyle(.red)
             }
 
-            DisclosureGroup("Sync diagnostics (read only)") {
-                Text(syncController.readOnlySyncDiagnostics)
-                    .font(.system(.caption2, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityIdentifier("mac-sync-readonly-diagnostics")
+            Button("Sync diagnostics (read only)") {
+                showingSyncDiagnostics = true
+            }
+            .buttonStyle(.borderless)
+            .accessibilityIdentifier("mac-sync-show-diagnostics")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .sheet(isPresented: $showingSyncDiagnostics) {
+            MacSyncReadOnlyDiagnosticsSheet(syncController: syncController)
+        }
+    }
+}
 
+private struct MacSyncReadOnlyDiagnosticsSheet: View {
+    @ObservedObject var syncController: MacSyncBatchController
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Sync diagnostics")
+                    .font(.headline)
+                Spacer()
                 Button("Copy diagnostics") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(
                         syncController.readOnlySyncDiagnostics, forType: .string
                     )
                 }
-                .controlSize(.small)
-                .help("Copies identifiers as hashes; does not trigger sync or modify notes.")
+                .accessibilityIdentifier("mac-sync-copy-diagnostics")
+                Button("Close") { dismiss() }
+            }
+            ScrollView {
+                Text(syncController.readOnlySyncDiagnostics)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("mac-sync-readonly-diagnostics")
             }
         }
-        .padding(.vertical, 6)
+        .padding()
+        .frame(minWidth: 520, minHeight: 360)
     }
 }
 
