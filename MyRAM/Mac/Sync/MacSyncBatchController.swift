@@ -316,6 +316,61 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
                 "frozen_unsent_batches:\(bootstrap?.frozenUnsentBatchIDs.count ?? 0)," +
                 "frozen_local_batches:\(bootstrap?.frozenLocalObligationBatchIDs.count ?? 0)"
             )
+            guard let bootstrap else { continue }
+            let expectedNoteIDs = Set(bootstrap.snapshot.notes.map(\.id))
+            let missingNoteIDs = expectedNoteIDs.subtracting(
+                bootstrap.sequenceBaselineCoveredNoteIDs
+            )
+            let missingHashes = missingNoteIDs.map { Self.diagnosticHash($0.uuidString) }
+                .sorted().joined(separator: ",")
+            let coverageState: String
+            if !bootstrap.hasSequenceBaselineAcknowledgement {
+                coverageState = "awaiting_acknowledgement"
+            } else if !missingNoteIDs.isEmpty {
+                coverageState = "partial_note_baseline"
+            } else if !bootstrap.ordinarySyncReady {
+                coverageState = "post_baseline_incomplete"
+            } else {
+                coverageState = "complete"
+            }
+            lines.append(
+                "peer[\(index)]_bootstrap_coverage=state:\(coverageState)," +
+                "expected_notes:\(expectedNoteIDs.count)," +
+                "acknowledged_notes:\(bootstrap.sequenceBaselineCoveredNoteIDs.count)," +
+                "missing_notes:\(missingNoteIDs.count)," +
+                "missing_note_hashes:\(missingHashes)," +
+                "manifest_batches:\(bootstrap.coveredBatchIDs.count)"
+            )
+            for (batchIndex, batchID) in bootstrap.withheldHistoricalBatchIDs
+                .sorted(by: { $0.uuidString < $1.uuidString }).enumerated() {
+                let manifestEntry = bootstrap.snapshot.historyCoverage.first {
+                    $0.batchID == batchID
+                }
+                let cause: String
+                if let manifestEntry {
+                    if manifestEntry.noteIDs.isEmpty {
+                        cause = "empty_history"
+                    } else if !manifestEntry.noteIDs.isSubset(
+                        of: bootstrap.sequenceBaselineCoveredNoteIDs
+                    ) {
+                        cause = "missing_note_baseline"
+                    } else {
+                        cause = "unclassified"
+                    }
+                } else {
+                    cause = "absent_from_manifest"
+                }
+                let relatedNoteHashes = manifestEntry.map {
+                    $0.noteIDs.intersection(missingNoteIDs)
+                        .map { Self.diagnosticHash($0.uuidString) }
+                        .sorted().joined(separator: ",")
+                } ?? ""
+                lines.append(
+                    "peer[\(index)]_withheld[\(batchIndex)]=batch:" +
+                    Self.diagnosticHash(batchID.uuidString) +
+                    ",cause:\(cause),missing_note_hashes:\(relatedNoteHashes)"
+                )
+            }
         }
         return lines.joined(separator: "\n")
     }
