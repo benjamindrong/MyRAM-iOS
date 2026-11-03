@@ -2,16 +2,6 @@ import AnchoredSequenceCore
 import Foundation
 import NearbySyncCore
 
-/// Read-only, byte-preserving queue ownership preimage for a local divergence.
-/// A future resolution must compare this exact preimage again before mutation.
-/// Queue evidence alone never permits changing note authority or resuming sync.
-struct NoteLocalDivergenceQueueOwnershipEvidence: Codable, Equatable {
-    let legacy: SyncQueueSnapshot
-    let unsent: [SyncBatch]
-    let incoming: [SyncBatch]
-    let localObligations: [SyncConvergenceLocalObligation]
-}
-
 @MainActor
 final class PendingSyncRecoveryCoordinator {
     enum RecoveryError: Error, Equatable {
