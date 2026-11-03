@@ -2946,6 +2946,57 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(controller.lastErrorMessage, retainedMessage)
     }
 
+    func testMYR238PartialBaselineDiagnosticsExposeMissingHashesWithoutMutatingQueues() async throws {
+        let batch = makeBatch(idSuffix: 238_017)
+        let fixture = try makeMYR233BootstrapFixture(
+            unsentBatches: [batch],
+            localBatches: [],
+            peerDeviceID: "myr238-partial-coverage"
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let coveredNoteID = UUID(uuidString: "23800000-0000-0000-0000-000000000201")!
+        let uncoveredNoteID = UUID(uuidString: "23800000-0000-0000-0000-000000000202")!
+        for (id, body) in [(coveredNoteID, "Covered test text"), (uncoveredNoteID, "Hidden test text")] {
+            let note = Note(title: "Test note", content: body)
+            note.id = id
+            fixture.context.insert(note)
+            try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+                for: note, in: fixture.context
+            )
+        }
+        try fixture.context.save()
+
+        fixture.controller.beginBootstrapForTesting(to: fixture.peer)
+        let snapshot = try fixture.firstBootstrapSnapshot()
+        XCTAssertEqual(Set(snapshot.notes.map(\.id)), [coveredNoteID, uncoveredNoteID])
+        let before = fixture.unsentQueue.snapshot()
+
+        await fixture.controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: snapshot.id,
+                coveredBatchIDs: [],
+                coveredNoteIDs: [coveredNoteID]
+            ),
+            from: fixture.peer
+        )
+        let diagnostic = fixture.controller.readOnlySyncDiagnostics
+        XCTAssertEqual(diagnostic, fixture.controller.readOnlySyncDiagnostics)
+        XCTAssertTrue(diagnostic.contains(
+            "state:partial_note_baseline,expected_notes:2,acknowledged_notes:1,missing_notes:1"
+        ))
+        XCTAssertTrue(diagnostic.contains("cause:empty_history"))
+        XCTAssertTrue(diagnostic.contains("withheld_historical_batches:1"))
+        XCTAssertFalse(diagnostic.contains(coveredNoteID.uuidString))
+        XCTAssertFalse(diagnostic.contains(uncoveredNoteID.uuidString))
+        XCTAssertFalse(diagnostic.contains("Covered test text"))
+        XCTAssertFalse(diagnostic.contains("Hidden test text"))
+        XCTAssertEqual(fixture.unsentQueue.snapshot(), before)
+        XCTAssertFalse(fixture.controller.bootstrapStateForTesting(
+            peerDeviceID: "myr238-partial-coverage"
+        )?.ordinarySyncReady == true)
+    }
+
     func testMYR238ReadOnlyTransportOwnershipProjectionsDoNotAcknowledgeOrRelease() {
         let batchID = UUID(uuidString: "23800000-0000-0000-0000-000000000104")!
         let deviceID = "diagnostic-peer"
@@ -3212,6 +3263,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: peerDeviceID)
         return MYR233MacBootstrapFixture(
             directory: directory,
+            context: container.mainContext,
             controller: controller,
             coordinator: coordinator,
             unsentQueue: unsentQueue,
@@ -3421,6 +3473,7 @@ private final class MYR233MacSentMessageRecorder {
 
 private struct MYR233MacBootstrapFixture {
     let directory: URL
+    let context: ModelContext
     let controller: MacSyncBatchController
     let coordinator: MacSyncConvergenceCoordinator
     let unsentQueue: FileBackedSyncBatchQueue
