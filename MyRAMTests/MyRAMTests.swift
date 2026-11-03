@@ -2768,6 +2768,13 @@ final class MyRAMTests: XCTestCase {
         context.insert(folder)
         try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
+        let originalSequenceRecord = try XCTUnwrap(
+            context.fetch(FetchDescriptor<NoteSequenceStateRecord>()).first { $0.noteID == note.id }
+        )
+        let originalSequenceRevision = originalSequenceRecord.revision
+        let originalSequencePayload = originalSequenceRecord.statePayloadData
+        let originalMarkRevision = originalSequenceRecord.markRevision
+        let originalMarkPayload = originalSequenceRecord.markStatePayloadData
         folder.name = "Unrelated dirty change"
         var failNextSave = true
         struct SaveFailure: Error {}
@@ -2796,6 +2803,11 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(note.richTextContentData, originalRichText)
         XCTAssertEqual(note.modifiedAt, originalModifiedAt)
         XCTAssertEqual(folder.name, "Unrelated dirty change")
+        XCTAssertTrue(context.hasChanges, "The unrelated folder edit must remain pending.")
+        XCTAssertEqual(originalSequenceRecord.revision, originalSequenceRevision)
+        XCTAssertEqual(originalSequenceRecord.statePayloadData, originalSequencePayload)
+        XCTAssertEqual(originalSequenceRecord.markRevision, originalMarkRevision)
+        XCTAssertEqual(originalSequenceRecord.markStatePayloadData, originalMarkPayload)
         XCTAssertEqual(viewModel.syncBatchErrorMessage, "Unable to save the latest edit.")
         XCTAssertFalse(viewModel.hasRecentTextEditForTesting(noteID: note.id))
         let pendingBatchID = await viewModel.capturePendingLocalBatchForRecovery()
@@ -2814,6 +2826,17 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(reloadedNote.content, "abc")
         XCTAssertEqual(reloadedNote.richTextContentData, originalRichText)
         XCTAssertEqual(reloadedFolder.name, "Unrelated dirty change")
+        let persistedSequence = try XCTUnwrap(
+            freshContext.fetch(FetchDescriptor<NoteSequenceStateRecord>()).first { $0.noteID == noteID }
+        )
+        XCTAssertEqual(persistedSequence.revision, originalSequenceRevision)
+        XCTAssertEqual(persistedSequence.statePayloadData, originalSequencePayload)
+        XCTAssertEqual(persistedSequence.markRevision, originalMarkRevision)
+        XCTAssertEqual(persistedSequence.markStatePayloadData, originalMarkPayload)
+        let restoredState = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: persistedSequence, noteID: noteID
+        )
+        XCTAssertEqual(restoredState.visibleText, "abc")
     }
 
     func testIncomingBodyMutationFinalizesPendingLocalObligationBeforeAuthoritativeMutation() async throws {
