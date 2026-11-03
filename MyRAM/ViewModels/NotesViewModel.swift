@@ -1305,6 +1305,11 @@ final class NotesViewModel: ObservableObject {
         let oldRichTextContentData = note.richTextContentData
         let oldModifiedAt = note.modifiedAt
         let modifiedAt = Date.now
+        var stagedStructuralMutation: (
+            snapshot: NoteSequenceStateMutationSnapshot,
+            finalState: SyncTextSequenceState,
+            finalMarkState: SyncTextMarkState
+        )?
         let prepared: PreparedLocalNoteEdit
         do {
             prepared = try await prepareAnchoredLocalNoteEdit(
@@ -1329,6 +1334,9 @@ final class NotesViewModel: ObservableObject {
                         finalMarkState: finalMarkState,
                         in: context
                     )
+                if staged.textChanged || staged.markChanged {
+                    stagedStructuralMutation = (snapshot, finalState, finalMarkState)
+                }
                 if structuralFormattingProjection != nil {
                     // The editor produced this cache from its canonical structural
                     // projection; unsupported attributed input has already been stripped.
@@ -1343,7 +1351,27 @@ final class NotesViewModel: ObservableObject {
             }
             try saveContext()
         } catch {
-            context.rollback()
+            // A global context rollback would erase unrelated pending changes.
+            // Restore only this editor's staged authority, as the macOS editor does.
+            if let stagedStructuralMutation {
+                do {
+                    try NoteSequenceStateFullBodyIntegration
+                        .restoreSuppliedStateAndStructuralFormattingMutationAfterFailedSave(
+                            of: note,
+                            expected: stagedStructuralMutation.snapshot,
+                            failedFinalState: stagedStructuralMutation.finalState,
+                            failedFinalMarkState: stagedStructuralMutation.finalMarkState,
+                            in: context
+                        )
+                } catch {
+                    // An unprovable restore cannot be allowed into a later save.
+                    // In this exceptional case, discard the entire context transaction.
+                    context.rollback()
+                    startupQuarantinedNoteIDs.insert(note.id)
+                    syncBatchErrorMessage = "The failed edit could not be safely restored. Reopen MyRAM before editing this note."
+                    return false
+                }
+            }
             note.title = oldTitle
             note.content = oldContent
             note.richTextContentData = oldRichTextContentData
