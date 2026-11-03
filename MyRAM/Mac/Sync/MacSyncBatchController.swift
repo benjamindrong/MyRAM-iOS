@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import CryptoKit
 @preconcurrency import MultipeerConnectivity
 import NearbySyncCore
 import SwiftData
@@ -211,6 +212,117 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
     var hasConnectedPeers: Bool {
         networkingLifecycle != .stopped && !connectedPeersProvider().isEmpty
+    }
+
+    /// Captures current in-memory state only. No drain, invite, retry, queue
+    /// writes, identities, note content, or transport mutations are performed.
+    /// A new process cannot reconstruct the previous process's transient state.
+    var readOnlySyncDiagnostics: String {
+        var lines = [
+            "schema=myram.mac.sync-diagnostics.v1",
+            "networking=\(networkingLifecycle)",
+            "mc_session_connected_count=\(session.connectedPeers.count)",
+            "published_connected_count=\(connectedPeers.count)",
+            "pending_incoming_count=\(convergenceCoordinator?.pendingIncomingBatchCount ?? -1)",
+            "pending_local_obligation_count=\(convergenceCoordinator?.pendingLocalObligationCount ?? -1)",
+            "unsent_count=\(unsentBatches.pendingCount)",
+            "pending_incoming_transport_count=\(pendingIncomingBatchWork.count)",
+            "processing_incoming=\(isProcessingIncomingBatchWork)"
+        ]
+
+        let peerIDs = Set(
+            session.connectedPeers.map { MacSyncPeerIdentity(peerID: $0).deviceID }
+        )
+        lines.append("mc_session_peer_hashes=\(peerIDs.map(Self.diagnosticHash).sorted().joined(separator: ","))")
+
+        for (index, item) in (quarantinedWork?.items ?? []).enumerated() {
+            let domain: String
+            switch item.domain {
+            case .incoming: domain = "incoming"
+            case .localObligation: domain = "localObligation"
+            case .postCommit: domain = "postCommit"
+            }
+            let reason: String
+            switch item.reason {
+            case .localEvidenceContinuityViolation: reason = "localEvidenceContinuityViolation"
+            case .localEvidenceIndexMismatch: reason = "localEvidenceIndexMismatch"
+            case .localEvidenceInvalidOperation: reason = "localEvidenceInvalidOperation"
+            case .localEvidenceBaseHashMismatch: reason = "localEvidenceBaseHashMismatch"
+            case .staleAuthoritativeState: reason = "staleAuthoritativeState"
+            case .anchoredTerminalStructuralFailure(let failure):
+                reason = "anchoredTerminalStructuralFailure.\(failure.code.rawValue)"
+            case .anchoredBootstrapConflict(let conflict):
+                reason = "anchoredBootstrapConflict.\(conflict.reason.rawValue)"
+            }
+            lines.append(
+                "quarantine[\(index)]=domain:\(domain),reason:\(reason)," +
+                "batch:\(Self.diagnosticHash(item.batchID.uuidString))," +
+                "origin:\(Self.diagnosticHash(item.originDeviceID.uuidString))," +
+                "affected_notes:\(item.affectedNoteIDs.count)"
+            )
+        }
+        lines.append("quarantine_count=\(quarantinedWork?.items.count ?? 0)")
+
+        for (index, batch) in unsentBatches.pendingBatches.enumerated() {
+            lines.append(
+                "unsent[\(index)]=batch:\(Self.diagnosticHash(batch.id.uuidString))," +
+                "origin:\(Self.diagnosticHash(batch.originDeviceID.uuidString))"
+            )
+        }
+        let ackOwners = acknowledgementOutbox.pendingOwnersForDiagnostics
+            .map {
+                "batch:\(Self.diagnosticHash($0.batchID.uuidString))," +
+                "peer:\(Self.diagnosticHash($0.peerDeviceID))"
+            }.sorted()
+        lines.append("ack_outbox_count=\(ackOwners.count)")
+        lines += ackOwners.enumerated().map { "ack_outbox[\($0.offset)]=\($0.element)" }
+
+        let deliveryOwners = outstandingBatchDeliveries.pendingOwnersForDiagnostics
+            .map {
+                "batch:\(Self.diagnosticHash($0.batchID.uuidString))," +
+                "peer:\(Self.diagnosticHash($0.peerDeviceID))"
+            }.sorted()
+        lines.append("awaiting_delivery_ack_count=\(deliveryOwners.count)")
+        lines += deliveryOwners.enumerated().map { "delivery[\($0.offset)]=\($0.element)" }
+
+        let pendingReceive = pendingBatchReceives.pendingBatchIDsForDiagnostics
+            .map { Self.diagnosticHash($0.uuidString) }.sorted()
+        lines.append("receiving_batch_count=\(pendingReceive.count)")
+        lines.append("receiving_batch_hashes=\(pendingReceive.joined(separator: ","))")
+
+        let remoteACKOwners = acknowledgementPeerByRemoteBatchID.map {
+            "batch:\(Self.diagnosticHash($0.key.uuidString))," +
+            "peer:\(Self.diagnosticHash($0.value))"
+        }.sorted()
+        lines.append("remote_ack_route_count=\(remoteACKOwners.count)")
+        lines += remoteACKOwners.enumerated().map { "remote_ack[\($0.offset)]=\($0.element)" }
+
+        let knownPeers = peerIDs.union(bootstrapStateByPeerDeviceID.keys)
+            .union(bootstrapPreparationPeerDeviceIDs)
+            .union(pendingReceivedBootstrapByPeerDeviceID.keys)
+            .union(acknowledgementPeerByRemoteBatchID.values)
+        for (index, deviceID) in knownPeers.sorted().enumerated() {
+            let bootstrap = bootstrapStateByPeerDeviceID[deviceID]
+            lines.append(
+                "peer[\(index)]=id:\(Self.diagnosticHash(deviceID))," +
+                "capability_resolved:\(peerCapabilityRegistry.isBootstrapCapabilityResolved(forPeerDeviceID: deviceID))," +
+                "current_session_v2:\(peerCapabilityRegistry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: deviceID))," +
+                "bootstrap_preparing:\(bootstrapPreparationPeerDeviceIDs.contains(deviceID))," +
+                "bootstrap_pending:\(bootstrap != nil)," +
+                "bootstrap_ready:\(bootstrap?.ordinarySyncReady == true)," +
+                "baseline_ack:\(bootstrap?.hasSequenceBaselineAcknowledgement == true)," +
+                "bootstrap_retry:\(bootstrap?.retryAttempt ?? -1)," +
+                "withheld_historical_batches:\(bootstrap?.withheldHistoricalBatchIDs.count ?? 0)," +
+                "frozen_unsent_batches:\(bootstrap?.frozenUnsentBatchIDs.count ?? 0)," +
+                "frozen_local_batches:\(bootstrap?.frozenLocalObligationBatchIDs.count ?? 0)"
+            )
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func diagnosticHash(_ raw: String) -> String {
+        let digest = SHA256.hash(data: Data(("myram.mac.sync-diagnostics.v1:" + raw).utf8))
+        return digest.prefix(16).map { String(format: "%02x", $0) }.joined()
     }
 
     var advertisedBatchSchemaDiscoveryInfo: [String: String] {
