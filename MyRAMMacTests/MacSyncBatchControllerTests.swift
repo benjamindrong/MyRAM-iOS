@@ -2903,12 +2903,12 @@ final class MacSyncBatchControllerTests: XCTestCase {
         ))
         let statusView = source[statusStart.lowerBound..<sheetStart.lowerBound]
         let sheetView = source[sheetStart.lowerBound..<nextType.lowerBound]
-        XCTAssertTrue(statusView.contains("Button(\\"Sync diagnostics (read only)\\")"))
+        XCTAssertTrue(statusView.contains("Button(\"Sync diagnostics (read only)\")"))
         XCTAssertTrue(statusView.contains(".sheet(isPresented: $showingSyncDiagnostics)"))
         XCTAssertTrue(statusView.contains(".buttonStyle(.borderless)"))
         XCTAssertFalse(statusView.contains("DisclosureGroup("))
         XCTAssertTrue(sheetView.contains("syncController.readOnlySyncDiagnostics"))
-        XCTAssertTrue(sheetView.contains("Button(\\"Copy diagnostics\\")"))
+        XCTAssertTrue(sheetView.contains("Button(\"Copy diagnostics\")"))
         XCTAssertFalse(sheetView.contains("flushPendingBatch("))
         XCTAssertFalse(sheetView.contains("invite("))
     }
