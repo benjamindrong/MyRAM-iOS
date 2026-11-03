@@ -3,6 +3,17 @@ import Foundation
 import NearbySyncCore
 import SwiftData
 
+/// Read-only, byte-preserving queue ownership preimage for a local divergence.
+/// A future resolution must compare this exact preimage again before mutation.
+/// Queue evidence alone never permits changing note authority or resuming sync.
+/// Shared by the iOS recovery coordinator and the iOS/macOS resolution ledger.
+struct NoteLocalDivergenceQueueOwnershipEvidence: Codable, Equatable {
+    let legacy: SyncQueueSnapshot
+    let unsent: [SyncBatch]
+    let incoming: [SyncBatch]
+    let localObligations: [SyncConvergenceLocalObligation]
+}
+
 typealias NoteLegacyFormattingProjectionOperation =
     @Sendable (Data, String) async -> NoteStructuralFormattingProjection?
 
