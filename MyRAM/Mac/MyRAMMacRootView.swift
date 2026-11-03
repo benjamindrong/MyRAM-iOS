@@ -1194,6 +1194,23 @@ private struct MacSyncStatusView: View {
                     .font(.caption2)
                     .foregroundStyle(.red)
             }
+
+            DisclosureGroup("Sync diagnostics (read only)") {
+                Text(syncController.readOnlySyncDiagnostics)
+                    .font(.system(.caption2, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("mac-sync-readonly-diagnostics")
+
+                Button("Copy diagnostics") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(
+                        syncController.readOnlySyncDiagnostics, forType: .string
+                    )
+                }
+                .controlSize(.small)
+                .help("Copies identifiers as hashes; does not trigger sync or modify notes.")
+            }
         }
         .padding(.vertical, 6)
     }
