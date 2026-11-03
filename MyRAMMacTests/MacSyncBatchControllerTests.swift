@@ -2880,6 +2880,39 @@ final class MacSyncBatchControllerTests: XCTestCase {
         )
     }
 
+    func testMYR238DiagnosticControlLivesOutsideSelectableNoteList() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        try ProtectedRepositoryAuditPolicy.skipIfNeeded(repositoryURL: repository)
+        let source = try String(
+            contentsOf: repository.appendingPathComponent("MyRAM/Mac/MyRAMMacRootView.swift"),
+            encoding: .utf8
+        )
+        let noteListStart = try XCTUnwrap(source.range(of: "private struct MacNoteListView: View"))
+        let statusStart = try XCTUnwrap(source.range(of: "private struct MacSyncStatusView: View"))
+        let noteList = source[noteListStart.lowerBound..<statusStart.lowerBound]
+        let syncPanel = try XCTUnwrap(noteList.range(of: "MacSyncStatusView(syncController: syncController)"))
+        let selectableList = try XCTUnwrap(noteList.range(of: "List(selection: selectedBinding)"))
+        XCTAssertLessThan(syncPanel.lowerBound, selectableList.lowerBound)
+
+        let sheetStart = try XCTUnwrap(source.range(of: "private struct MacSyncReadOnlyDiagnosticsSheet: View"))
+        let nextType = try XCTUnwrap(source.range(
+            of: "enum MacMarkdownModeBindingFactory",
+            range: sheetStart.upperBound..<source.endIndex
+        ))
+        let statusView = source[statusStart.lowerBound..<sheetStart.lowerBound]
+        let sheetView = source[sheetStart.lowerBound..<nextType.lowerBound]
+        XCTAssertTrue(statusView.contains("Button(\\"Sync diagnostics (read only)\\")"))
+        XCTAssertTrue(statusView.contains(".sheet(isPresented: $showingSyncDiagnostics)"))
+        XCTAssertTrue(statusView.contains(".buttonStyle(.borderless)"))
+        XCTAssertFalse(statusView.contains("DisclosureGroup("))
+        XCTAssertTrue(sheetView.contains("syncController.readOnlySyncDiagnostics"))
+        XCTAssertTrue(sheetView.contains("Button(\\"Copy diagnostics\\")"))
+        XCTAssertFalse(sheetView.contains("flushPendingBatch("))
+        XCTAssertFalse(sheetView.contains("invite("))
+    }
+
     func testMYR238ReadOnlyDiagnosticsRetainQuarantineAndHideRawIdentifiers() throws {
         let controller = try makeController(unsentBatchQueueFileURL: nil)
         let batchID = UUID(uuidString: "23800000-0000-0000-0000-000000000101")!
