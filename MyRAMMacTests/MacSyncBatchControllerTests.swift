@@ -2880,6 +2880,59 @@ final class MacSyncBatchControllerTests: XCTestCase {
         )
     }
 
+    func testMYR238ReadOnlyDiagnosticsRetainQuarantineAndHideRawIdentifiers() throws {
+        let controller = try makeController(unsentBatchQueueFileURL: nil)
+        let batchID = UUID(uuidString: "23800000-0000-0000-0000-000000000101")!
+        let noteID = UUID(uuidString: "23800000-0000-0000-0000-000000000102")!
+        let originID = UUID(uuidString: "23800000-0000-0000-0000-000000000103")!
+        let item = SyncConvergenceQuarantinedItem(
+            domain: .localObligation,
+            batchID: batchID,
+            affectedNoteIDs: [noteID],
+            originDeviceID: originID,
+            reason: .localEvidenceBaseHashMismatch
+        )
+        let work = SyncConvergenceQuarantinedWork(items: [item])
+        controller.markConvergenceQuarantined(work)
+        let retainedMessage = controller.lastErrorMessage
+
+        let snapshot = controller.readOnlySyncDiagnostics
+
+        XCTAssertEqual(snapshot, controller.readOnlySyncDiagnostics)
+        XCTAssertTrue(snapshot.contains("schema=myram.mac.sync-diagnostics.v1"))
+        XCTAssertTrue(snapshot.contains("quarantine_count=1"))
+        XCTAssertTrue(snapshot.contains("domain:localObligation,reason:localEvidenceBaseHashMismatch"))
+        XCTAssertTrue(snapshot.contains("affected_notes:1"))
+        XCTAssertTrue(snapshot.contains("mc_session_connected_count=0"))
+        XCTAssertTrue(snapshot.contains("ack_outbox_count=0"))
+        XCTAssertTrue(snapshot.contains("awaiting_delivery_ack_count=0"))
+        XCTAssertFalse(snapshot.contains(batchID.uuidString))
+        XCTAssertFalse(snapshot.contains(noteID.uuidString))
+        XCTAssertFalse(snapshot.contains(originID.uuidString))
+        XCTAssertEqual(controller.quarantinedWork, work)
+        XCTAssertEqual(controller.lastErrorMessage, retainedMessage)
+    }
+
+    func testMYR238ReadOnlyTransportOwnershipProjectionsDoNotAcknowledgeOrRelease() {
+        let batchID = UUID(uuidString: "23800000-0000-0000-0000-000000000104")!
+        let deviceID = "diagnostic-peer"
+        var ackOutbox = SyncBatchAcknowledgementOutbox()
+        ackOutbox.enqueue(batchID, forPeerDeviceID: deviceID)
+        XCTAssertEqual(ackOutbox.pendingOwnersForDiagnostics.count, 1)
+        XCTAssertEqual(ackOutbox.pendingBatchIDs(forPeerDeviceID: deviceID), [batchID])
+
+        var deliveries = SyncBatchOutstandingDeliveryTracker()
+        let reservation = deliveries.reserve(batchID, forPeerDeviceID: deviceID)
+        XCTAssertNotNil(reservation)
+        XCTAssertEqual(deliveries.pendingOwnersForDiagnostics.count, 1)
+        XCTAssertTrue(deliveries.isAwaitingAcknowledgement(batchID, forPeerDeviceID: deviceID))
+
+        var receives = SyncBatchPendingReceiveTracker()
+        XCTAssertTrue(receives.begin(batchID))
+        XCTAssertEqual(receives.pendingBatchIDsForDiagnostics, [batchID])
+        XCTAssertTrue(receives.contains(batchID))
+    }
+
     func testProductionMacSyncFilesDoNotConstructOldDrainEngine() throws {
         let repo = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
