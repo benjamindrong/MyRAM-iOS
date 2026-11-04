@@ -2997,6 +2997,58 @@ final class MacSyncBatchControllerTests: XCTestCase {
         )?.ordinarySyncReady == true)
     }
 
+    func testMYR238AbsentManifestReferenceDiagnosticsStayHashedAndPreserveQueue() async throws {
+        let historical = makeLegacyBodyBatch(idSuffix: 238_018)
+        let fixture = try makeMYR233BootstrapFixture(
+            unsentBatches: [historical],
+            localBatches: [],
+            peerDeviceID: "myr238-absent-reference"
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let presentNoteID = UUID(uuidString: "23800000-0000-0000-0000-000000000203")!
+        let absentNoteID = UUID(uuidString: "17100000-0000-0000-0000-0000000000BA")!
+        let note = Note(title: "Present test note", content: "Present test body")
+        note.id = presentNoteID
+        fixture.context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: note, in: fixture.context
+        )
+        try fixture.context.save()
+
+        fixture.controller.beginBootstrapForTesting(to: fixture.peer)
+        let snapshot = try fixture.firstBootstrapSnapshot()
+        XCTAssertEqual(Set(snapshot.notes.map(\.id)), [presentNoteID])
+        XCTAssertTrue(snapshot.historyCoverage.isEmpty)
+        let before = fixture.unsentQueue.snapshot()
+
+        await fixture.controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: snapshot.id,
+                coveredBatchIDs: [],
+                coveredNoteIDs: [presentNoteID]
+            ),
+            from: fixture.peer
+        )
+
+        let diagnostic = fixture.controller.readOnlySyncDiagnostics
+        let withheld = try XCTUnwrap(
+            diagnostic.split(separator: "\n").first {
+                $0.contains("cause:absent_from_manifest")
+            }
+        )
+        XCTAssertTrue(withheld.contains("frozen_changes:1"))
+        XCTAssertTrue(withheld.contains("referenced_notes:1"))
+        XCTAssertTrue(withheld.contains("absent_reference_count:1"))
+        XCTAssertTrue(withheld.contains("absent_note_hashes:"))
+        XCTAssertFalse(withheld.contains("absent_note_hashes:,"))
+        XCTAssertFalse(diagnostic.contains(absentNoteID.uuidString))
+        XCTAssertFalse(diagnostic.contains(presentNoteID.uuidString))
+        XCTAssertFalse(diagnostic.contains("Present test body"))
+        XCTAssertEqual(diagnostic, fixture.controller.readOnlySyncDiagnostics)
+        XCTAssertEqual(fixture.unsentQueue.snapshot(), before)
+    }
+
     func testMYR238ReadOnlyTransportOwnershipProjectionsDoNotAcknowledgeOrRelease() {
         let batchID = UUID(uuidString: "23800000-0000-0000-0000-000000000104")!
         let deviceID = "diagnostic-peer"

@@ -365,10 +365,28 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
                         .map { Self.diagnosticHash($0.uuidString) }
                         .sorted().joined(separator: ",")
                 } ?? ""
+                // The frozen batch is already owned by this bootstrap. Inspect its
+                // reference IDs without reading or changing either production store.
+                // This distinguishes an omitted missing-note reference from an
+                // empty history entry without disclosing note content or raw IDs.
+                let frozenBatch = bootstrap.frozenBatch(for: batchID)
+                let referencedNoteIDs = Set(frozenBatch?.changes.map(\.noteID) ?? [])
+                let absentReferenceNoteIDs = referencedNoteIDs.subtracting(expectedNoteIDs)
+                let absentReferenceHashes = absentReferenceNoteIDs
+                    .map { Self.diagnosticHash($0.uuidString) }
+                    .sorted().joined(separator: ",")
+                let frozenOriginHash = frozenBatch.map {
+                    Self.diagnosticHash($0.originDeviceID.uuidString)
+                } ?? "unknown"
                 lines.append(
                     "peer[\(index)]_withheld[\(batchIndex)]=batch:" +
                     Self.diagnosticHash(batchID.uuidString) +
-                    ",cause:\(cause),missing_note_hashes:\(relatedNoteHashes)"
+                    ",cause:\(cause),missing_note_hashes:\(relatedNoteHashes)," +
+                    "frozen_origin_hash:\(frozenOriginHash)," +
+                    "frozen_changes:\(frozenBatch?.changes.count ?? -1)," +
+                    "referenced_notes:\(referencedNoteIDs.count)," +
+                    "absent_reference_count:\(absentReferenceNoteIDs.count)," +
+                    "absent_note_hashes:\(absentReferenceHashes)"
                 )
             }
         }
