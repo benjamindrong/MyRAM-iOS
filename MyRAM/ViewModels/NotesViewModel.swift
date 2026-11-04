@@ -327,6 +327,12 @@ final class NotesViewModel: ObservableObject {
             }
         }
         if let bootstrapController = syncController as? MyRAMSyncBootstrapConfiguring {
+            bootstrapController.bootstrapConflictLifecycleForReadOnlyDiagnostics = {
+                [syncConflictStore] noteID in
+                try syncConflictStore.bootstrapStructuralConflictRecordChecked(
+                    noteID: noteID
+                )?.lifecycle
+            }
             bootstrapController.onPrepareLocalOwnershipForBootstrap = { [weak self] in
                 await self?.prepareLocalOwnershipForBootstrap()
             }
