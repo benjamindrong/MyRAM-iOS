@@ -126,6 +126,42 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertTrue(queue.contains(pending.id))
     }
 
+    func testMYR238ExclusiveCaptureWithholdsBootstrapSendDuringMixedMembership() async throws {
+        let allowed = MCPeerID(displayName: "iPhone|23800000-0000-0000-0000-000000000531")
+        let other = MCPeerID(displayName: "Other|23800000-0000-0000-0000-000000000532")
+        let queueURL = temporaryQueueFileURL(named: "myr238-exclusive-outbound.json")
+        let queue = FileBackedSyncBatchQueue(fileURL: queueURL)
+        let historical = makeBatch(idSuffix: 238_020)
+        try queue.enqueueDurably(historical)
+        var members: [MCPeerID] = []
+        var transmitted: [Data] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: queue,
+            connectedPeersProvider: { members },
+            sendBatchDataOperation: { data, _, _ in transmitted.append(data) },
+            invitePeerOperation: { _, _, _ in },
+            exclusivePeerCaptureMode: true
+        )
+        let local = MCPeerID(displayName: "local|23800000-0000-0000-0000-000000000533")
+        let browser = MCNearbyServiceBrowser(peer: local, serviceType: "myram-verify")
+        controller.browser(browser, foundPeer: allowed, withDiscoveryInfo: nil)
+        await waitUntil { !controller.availablePeers.isEmpty }
+        let selected = try XCTUnwrap(controller.availablePeers.first)
+        XCTAssertTrue(controller.authorizeExclusivePeerForCapture(selected))
+        let before = queue.snapshot()
+
+        members = [allowed, other]
+        controller.recordBootstrapCapabilityForTesting(
+            "1", forPeerDeviceID: selected.deviceID
+        )
+        controller.beginBootstrapForTesting(to: allowed)
+        XCTAssertTrue(transmitted.isEmpty, "Mixed membership cannot send bootstrap data")
+        XCTAssertEqual(queue.snapshot(), before, "Denied bootstrap cannot release durable history")
+        XCTAssertFalse(controller.hasConnectedPeers)
+        controller.stopNetworking()
+    }
+
     func testMYR238ExclusiveCaptureUnexpectedConnectionStopsTransport() async throws {
         let allowed = MCPeerID(displayName: "iPhone|23800000-0000-0000-0000-000000000521")
         let other = MCPeerID(displayName: "Other|23800000-0000-0000-0000-000000000522")
