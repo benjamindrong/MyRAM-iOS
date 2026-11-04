@@ -9,6 +9,151 @@ import XCTest
 final class MacSyncBatchControllerTests: XCTestCase {
     private var retainedContainers: [ModelContainer] = []
 
+
+    func testMYR238ExclusiveCaptureRequiresOneOperatorAuthorizedExactPeer() async throws {
+        let allowed = MCPeerID(displayName: "iPhone|23800000-0000-0000-0000-000000000501")
+        let other = MCPeerID(displayName: "Other|23800000-0000-0000-0000-000000000502")
+        var members: [MCPeerID] = []
+        var invitations: [MCPeerID] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { members },
+            invitePeerOperation: { peer, _, _ in invitations.append(peer) },
+            exclusivePeerCaptureMode: true
+        )
+        let local = MCPeerID(displayName: "local|23800000-0000-0000-0000-000000000503")
+        let advertiser = MCNearbyServiceAdvertiser(
+            peer: local, discoveryInfo: nil, serviceType: "myram-verify"
+        )
+        let browser = MCNearbyServiceBrowser(peer: local, serviceType: "myram-verify")
+
+        var unarmed: Bool?
+        controller.advertiser(
+            advertiser, didReceiveInvitationFromPeer: allowed, withContext: nil
+        ) { accepted, _ in unarmed = accepted }
+        await waitUntil { unarmed != nil }
+        XCTAssertEqual(unarmed, false)
+        XCTAssertTrue(invitations.isEmpty)
+        XCTAssertFalse(controller.hasConnectedPeers)
+
+        controller.browser(browser, foundPeer: allowed, withDiscoveryInfo: nil)
+        controller.browser(browser, foundPeer: other, withDiscoveryInfo: nil)
+        await waitUntil { controller.availablePeers.count == 2 }
+        let chosen = try XCTUnwrap(controller.availablePeers.first { $0.peerID == allowed })
+        XCTAssertTrue(controller.authorizeExclusivePeerForCapture(chosen))
+        XCTAssertEqual(invitations, [allowed])
+        XCTAssertFalse(controller.authorizeExclusivePeerForCapture(chosen))
+        let disallowed = try XCTUnwrap(controller.availablePeers.first { $0.peerID == other })
+        controller.invite(disallowed)
+        XCTAssertEqual(invitations, [allowed])
+
+        var otherAccepted: Bool?
+        controller.advertiser(
+            advertiser, didReceiveInvitationFromPeer: other, withContext: nil
+        ) { accepted, _ in otherAccepted = accepted }
+        await waitUntil { otherAccepted != nil }
+        XCTAssertEqual(otherAccepted, false)
+
+        var allowedAccepted: Bool?
+        controller.advertiser(
+            advertiser, didReceiveInvitationFromPeer: allowed, withContext: nil
+        ) { accepted, acceptedSession in
+            allowedAccepted = accepted
+            if accepted { XCTAssertNotNil(acceptedSession) }
+        }
+        await waitUntil { allowedAccepted != nil }
+        XCTAssertEqual(allowedAccepted, true)
+        members = [allowed]
+        XCTAssertTrue(controller.hasConnectedPeers)
+        let diagnostics = controller.readOnlySyncDiagnostics
+        XCTAssertTrue(diagnostics.contains("exclusive_capture_mode=true"))
+        XCTAssertTrue(diagnostics.contains("exclusive_peer_authorized=true"))
+        XCTAssertTrue(diagnostics.contains("exclusive_session_ready=true"))
+        XCTAssertFalse(diagnostics.contains(allowed.displayName))
+        controller.stopNetworking()
+    }
+
+    func testMYR238ExclusiveCaptureCannotTrustConnectedPeerOrWrongACK() async throws {
+        let allowed = MCPeerID(displayName: "iPhone|23800000-0000-0000-0000-000000000511")
+        let impostor = MCPeerID(displayName: allowed.displayName)
+        let other = MCPeerID(displayName: "Other|23800000-0000-0000-0000-000000000512")
+        XCTAssertNotEqual(allowed, impostor)
+        let queueURL = temporaryQueueFileURL(named: "myr238-exclusive-queue.json")
+        let queue = FileBackedSyncBatchQueue(fileURL: queueURL)
+        let pending = makeBatch(idSuffix: 238_019)
+        try queue.enqueueDurably(pending)
+        var members = [allowed]
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil, unsentBatchQueue: queue,
+            connectedPeersProvider: { members },
+            invitePeerOperation: { _, _, _ in },
+            exclusivePeerCaptureMode: true
+        )
+        let local = MCPeerID(displayName: "local|23800000-0000-0000-0000-000000000513")
+        let browser = MCNearbyServiceBrowser(peer: local, serviceType: "myram-verify")
+        let session = MCSession(
+            peer: local, securityIdentity: nil, encryptionPreference: .required
+        )
+        controller.browser(browser, foundPeer: allowed, withDiscoveryInfo: nil)
+        await waitUntil { !controller.availablePeers.isEmpty }
+        let choice = try XCTUnwrap(controller.availablePeers.first)
+        XCTAssertFalse(controller.authorizeExclusivePeerForCapture(choice))
+        XCTAssertFalse(controller.hasConnectedPeers)
+
+        let payload = try MultipeerSyncMessageCoding.encode(
+            kind: .batchAcknowledgement,
+            payload: JSONEncoder().encode(SyncBatchAcknowledgement(batchID: pending.id))
+        )
+        controller.session(session, didReceive: payload, fromPeer: allowed)
+        await Task.yield()
+        XCTAssertTrue(queue.contains(pending.id))
+
+        members = []
+        XCTAssertTrue(controller.authorizeExclusivePeerForCapture(choice))
+        members = [allowed]
+        controller.session(session, didReceive: payload, fromPeer: impostor)
+        controller.session(session, didReceive: payload, fromPeer: other)
+        await Task.yield()
+        XCTAssertTrue(queue.contains(pending.id))
+
+        members = [allowed, other]
+        XCTAssertFalse(controller.hasConnectedPeers)
+        controller.session(session, didReceive: payload, fromPeer: allowed)
+        await Task.yield()
+        XCTAssertTrue(queue.contains(pending.id), "Mixed membership cannot release local history")
+        controller.stopNetworking()
+        XCTAssertTrue(queue.contains(pending.id))
+    }
+
+    func testMYR238ExclusiveCaptureUnexpectedConnectionStopsTransport() async throws {
+        let allowed = MCPeerID(displayName: "iPhone|23800000-0000-0000-0000-000000000521")
+        let other = MCPeerID(displayName: "Other|23800000-0000-0000-0000-000000000522")
+        var members: [MCPeerID] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil, unsentBatchQueue: nil,
+            connectedPeersProvider: { members },
+            invitePeerOperation: { _, _, _ in },
+            exclusivePeerCaptureMode: true
+        )
+        let local = MCPeerID(displayName: "local|23800000-0000-0000-0000-000000000523")
+        let browser = MCNearbyServiceBrowser(peer: local, serviceType: "myram-verify")
+        controller.browser(browser, foundPeer: allowed, withDiscoveryInfo: nil)
+        await waitUntil { !controller.availablePeers.isEmpty }
+        let chosen = try XCTUnwrap(controller.availablePeers.first)
+        XCTAssertTrue(controller.authorizeExclusivePeerForCapture(chosen))
+        members = [allowed, other]
+        let session = MCSession(
+            peer: local, securityIdentity: nil, encryptionPreference: .required
+        )
+        controller.session(session, peer: other, didChange: .connected)
+        await waitUntil {
+            controller.lastErrorMessage?.contains("unexpected connection") == true
+        }
+        XCTAssertFalse(controller.hasConnectedPeers)
+        XCTAssertTrue(controller.readOnlySyncDiagnostics.contains("exclusive_capture_mode=true"))
+    }
+
     func testReplacementInvitationWaitsForPrecedingConnectionToRetire() async throws {
         let prior = MCPeerID(displayName: "phone|replacement-owner")
         let replacement = prior // The restarted iPhone reuses its archived MCPeerID.
@@ -3353,7 +3498,8 @@ final class MacSyncBatchControllerTests: XCTestCase {
         sendBatchDataOperation:
             ((Data, [MCPeerID], MCSessionSendDataMode) throws -> Void)? = nil,
         invitePeerOperation:
-            ((MCPeerID, Data, TimeInterval) -> Void)? = nil
+            ((MCPeerID, Data, TimeInterval) -> Void)? = nil,
+        exclusivePeerCaptureMode: Bool = false
     ) throws -> MacSyncBatchController {
         let resolvedContext: ModelContext
         if let context {
@@ -3368,6 +3514,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
             unsentBatchQueueFileURL: unsentBatchQueueFileURL,
             unsentBatchQueue: unsentBatchQueue,
             startsNetworking: false,
+            exclusivePeerCaptureMode: exclusivePeerCaptureMode,
             connectedPeersProvider: connectedPeersProvider,
             sendBatchDataOperation: sendBatchDataOperation,
             invitePeerOperation: invitePeerOperation

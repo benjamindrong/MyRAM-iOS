@@ -31,6 +31,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     @Published private(set) var lastErrorMessage: String?
     @Published private(set) var lastSyncAt: Date?
     @Published private(set) var quarantinedWork: SyncConvergenceQuarantinedWork?
+    @Published private(set) var authorizedCapturePeer: MacSyncDiscoveredPeer?
 
     weak var convergenceCoordinator: MacSyncConvergenceCoordinator?
 #if DEBUG
@@ -39,6 +40,8 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 #endif
 
     private let runtimeConfiguration: MyRAMSyncRuntimeConfiguration
+    private let exclusivePeerCaptureMode: Bool
+    var requiresExclusivePeerAuthorization: Bool { exclusivePeerCaptureMode }
     nonisolated private let transportDiagnostics: MyRAMSyncTransportDiagnostics
     var applicationSyncEnabled: Bool { runtimeConfiguration.applicationSyncEnabled }
 
@@ -100,6 +103,8 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         unsentBatchQueueFileURL: URL? = MacSyncBatchController.unsentBatchQueueFileURL(),
         unsentBatchQueue: FileBackedSyncBatchQueue? = nil,
         startsNetworking: Bool = true,
+        exclusivePeerCaptureMode: Bool =
+            ProcessInfo.processInfo.arguments.contains("--myram-exclusive-peer-capture"),
         configurationBundle: Bundle = .main,
         identityProvider: () -> MacSyncDeviceIdentity = {
             MacSyncDeviceIdentityProvider().currentIdentity()
@@ -120,6 +125,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         // Only validated Verification identities may bind the isolated MPC service.
         let effectiveServiceType = configuration.recordsTransportDiagnostics ? "myram-verify" : serviceType
         runtimeConfiguration = configuration
+        self.exclusivePeerCaptureMode = exclusivePeerCaptureMode
         transportDiagnostics = MyRAMSyncTransportDiagnostics(configuration: configuration)
         let identity = identityProvider()
         let retainedPeerID = MyRAMSyncDeviceIdentityStore.currentPeerID(displayName: identity.peerDisplayName)
@@ -212,6 +218,37 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
     var hasConnectedPeers: Bool {
         networkingLifecycle != .stopped && !connectedPeersProvider().isEmpty
+            && (!exclusivePeerCaptureMode || exclusiveCaptureSessionIsReady)
+    }
+
+    private func permitsCapturePeer(_ peer: MCPeerID) -> Bool {
+        !exclusivePeerCaptureMode || authorizedCapturePeer?.peerID == peer
+    }
+
+    private var exclusiveCaptureSessionIsReady: Bool {
+        guard exclusivePeerCaptureMode else { return true }
+        let connected = connectedPeersProvider()
+        return connected.count == 1 && connected.first == authorizedCapturePeer?.peerID
+    }
+
+    /// One explicit operator selection per launch, bound to the discovered MPC identity.
+    /// A different peer can only be selected after terminating this process.
+    @discardableResult
+    func authorizeExclusivePeerForCapture(_ peer: MacSyncDiscoveredPeer) -> Bool {
+        guard exclusivePeerCaptureMode,
+              authorizedCapturePeer == nil,
+              networkingLifecycle != .stopped,
+              connectedPeersProvider().isEmpty,
+              UUID(uuidString: peer.deviceID) != nil,
+              peer.deviceID == MacSyncPeerIdentity(peerID: peer.peerID).deviceID,
+              availablePeers.contains(where: {
+                  $0.peerID == peer.peerID && $0.deviceID == peer.deviceID
+              }) else {
+            return false
+        }
+        authorizedCapturePeer = peer
+        invite(peer)
+        return true
     }
 
     /// Captures current in-memory state only. No drain, invite, retry, queue
@@ -223,6 +260,12 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             "networking=\(networkingLifecycle)",
             "mc_session_connected_count=\(session.connectedPeers.count)",
             "published_connected_count=\(connectedPeers.count)",
+            "exclusive_capture_mode=\(exclusivePeerCaptureMode)",
+            "exclusive_peer_authorized=\(authorizedCapturePeer != nil)",
+            "exclusive_session_ready=\(exclusiveCaptureSessionIsReady)",
+            "exclusive_authorized_peer_hash=\(authorizedCapturePeer.map {
+                Self.diagnosticHash($0.peerID.displayName)
+            } ?? "none")",
             "pending_incoming_count=\(convergenceCoordinator?.pendingIncomingBatchCount ?? -1)",
             "pending_local_obligation_count=\(convergenceCoordinator?.pendingLocalObligationCount ?? -1)",
             "unsent_count=\(unsentBatches.pendingCount)",
@@ -527,12 +570,20 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     ) throws {
         try runtimeConfiguration.requireApplicationSync()
         guard networkingLifecycle != .stopped else { throw CancellationError() }
+        if exclusivePeerCaptureMode {
+            guard exclusiveCaptureSessionIsReady,
+                  peers.count == 1,
+                  peers.first == authorizedCapturePeer?.peerID else {
+                throw CancellationError()
+            }
+        }
         transportDiagnostics.record("application.send", session: session, detail: "bytes=\(data.count)")
         try sendBatchDataOperation(data, peers, mode)
     }
 
     func invite(_ peer: MacSyncDiscoveredPeer) {
-        guard networkingLifecycle != .stopped else { return }
+        guard networkingLifecycle != .stopped, permitsCapturePeer(peer.peerID) else { return }
+        guard !exclusivePeerCaptureMode || connectedPeersProvider().isEmpty else { return }
         guard !connectedPeersProvider().contains(peer.peerID) else {
             lastConnectionEvent = "Connected: \(peer.displayName)"
             return
@@ -630,6 +681,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         _ batch: SyncBatch,
         connectedPeers: [MCPeerID]
     ) async -> Bool {
+        guard !exclusivePeerCaptureMode || exclusiveCaptureSessionIsReady else { return false }
         let eligiblePeers = connectedPeers.filter { peerID in
             let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
             guard peerCapabilityRegistry.isBootstrapCapabilityResolved(
@@ -764,6 +816,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
     private func flushUnsentBatches() async {
         guard applicationSyncEnabled else { return }
+        guard !exclusivePeerCaptureMode || exclusiveCaptureSessionIsReady else { return }
         guard !unsentBatches.isEmpty else { return }
         let connectedPeers = connectedPeersProvider()
 
@@ -807,6 +860,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     private func flushBatchAcknowledgements(forPeerDeviceID peerDeviceID: String) {
+        guard !exclusivePeerCaptureMode || exclusiveCaptureSessionIsReady else { return }
         let connectedPeers = connectedPeersProvider()
         guard let peerID = connectedPeers.first(where: {
             MacSyncPeerIdentity(peerID: $0).deviceID == peerDeviceID
@@ -1510,6 +1564,13 @@ extension MacSyncBatchController: MCSessionDelegate {
         transportDiagnostics.record("session.callback", session: session, peer: peerID, detail: "state=\(state.rawValue)")
         Task { @MainActor in
             guard networkingLifecycle != .stopped else { return }
+            if exclusivePeerCaptureMode &&
+                (!permitsCapturePeer(peerID) ||
+                    (state == .connected && !exclusiveCaptureSessionIsReady)) {
+                lastErrorMessage = "Exclusive peer capture encountered an unexpected connection."
+                stopNetworking()
+                return
+            }
             let identity = MacSyncPeerIdentity(peerID: peerID)
             MyRAMSyncBenchmarkTelemetry.shared.record(
                 .peerConnectionState,
@@ -1553,6 +1614,10 @@ extension MacSyncBatchController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         Task { @MainActor in
             guard networkingLifecycle != .stopped else { return }
+            guard !exclusivePeerCaptureMode ||
+                    (exclusiveCaptureSessionIsReady && permitsCapturePeer(peerID)) else {
+                return
+            }
             transportDiagnostics.record("application.received", session: session, peer: peerID, detail: "bytes=\(data.count)")
             guard applicationSyncEnabled else { return }
             guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
@@ -1641,6 +1706,13 @@ extension MacSyncBatchController {
     private func acceptInvitation(
         from peerID: MCPeerID, context: Data?, handler: (Bool, MCSession?) -> Void
     ) {
+        guard permitsCapturePeer(peerID),
+              !exclusivePeerCaptureMode || connectedPeersProvider().allSatisfy({
+                  $0 == peerID
+              }) else {
+            handler(false, nil)
+            return
+        }
         let identity = MacSyncPeerIdentity(peerID: peerID)
         pendingReplacementInvitations.removeValue(forKey: identity.deviceID)?.handler(false, nil)
         peerCapabilityRegistry.recordInvitationContext(context, forPeerDeviceID: identity.deviceID)
@@ -1661,7 +1733,11 @@ extension MacSyncBatchController: MCNearbyServiceAdvertiserDelegate {
     ) {
         transportDiagnostics.record("invitation.incoming.callback", peer: peerID, owner: advertiser, context: context)
         Task { @MainActor in
-            guard networkingLifecycle != .stopped else {
+            guard networkingLifecycle != .stopped,
+                  permitsCapturePeer(peerID),
+                  !exclusivePeerCaptureMode || connectedPeersProvider().allSatisfy({
+                      $0 == peerID
+                  }) else {
                 invitationHandler(false, nil)
                 return
             }
@@ -1712,7 +1788,9 @@ extension MacSyncBatchController: MCNearbyServiceBrowserDelegate {
                 bootstrapCapabilityResolutionTasks.removeValue(forKey: identity.deviceID)?.cancel()
             }
             transportDiagnostics.record("discovery.found", session: session, peer: peerID)
-            if applicationSyncEnabled, connectedPeersProvider().contains(peerID) {
+            if applicationSyncEnabled, connectedPeersProvider().contains(peerID),
+               (!exclusivePeerCaptureMode ||
+                   (exclusiveCaptureSessionIsReady && permitsCapturePeer(peerID))) {
                 if peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
                     forPeerDeviceID: identity.deviceID
                 ) {

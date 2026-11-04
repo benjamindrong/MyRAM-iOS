@@ -1174,6 +1174,15 @@ private struct MacSyncStatusView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            if syncController.requiresExclusivePeerAuthorization {
+                Text(syncController.authorizedCapturePeer == nil
+                    ? "Exclusive capture: authorize one intended iPhone before sync."
+                    : "Exclusive capture: one peer authorized for this launch.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("mac-sync-exclusive-capture-status")
+            }
+
             if !syncController.availablePeers.isEmpty {
                 ForEach(syncController.availablePeers) { peer in
                     HStack {
@@ -1181,9 +1190,16 @@ private struct MacSyncStatusView: View {
                             .font(.caption)
                             .lineLimit(1)
                         Spacer()
-                        Button("Pair") {
-                            syncController.invite(peer)
+                        Button(syncController.requiresExclusivePeerAuthorization
+                            ? "Authorize and connect" : "Pair") {
+                            if syncController.requiresExclusivePeerAuthorization {
+                                syncController.authorizeExclusivePeerForCapture(peer)
+                            } else {
+                                syncController.invite(peer)
+                            }
                         }
+                        .disabled(syncController.requiresExclusivePeerAuthorization &&
+                            syncController.authorizedCapturePeer != nil)
                         .buttonStyle(.borderless)
                         .controlSize(.mini)
                     }
