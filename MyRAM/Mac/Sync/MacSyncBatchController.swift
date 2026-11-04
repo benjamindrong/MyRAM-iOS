@@ -255,6 +255,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     /// writes, identities, note content, or transport mutations are performed.
     /// A new process cannot reconstruct the previous process's transient state.
     var readOnlySyncDiagnostics: String {
+        let authorizedPeerHash = authorizedCapturePeer.map {
+            Self.diagnosticHash($0.peerID.displayName)
+        } ?? "none"
         var lines = [
             "schema=myram.mac.sync-diagnostics.v1",
             "networking=\(networkingLifecycle)",
@@ -263,9 +266,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             "exclusive_capture_mode=\(exclusivePeerCaptureMode)",
             "exclusive_peer_authorized=\(authorizedCapturePeer != nil)",
             "exclusive_session_ready=\(exclusiveCaptureSessionIsReady)",
-            "exclusive_authorized_peer_hash=\(authorizedCapturePeer.map {
-                Self.diagnosticHash($0.peerID.displayName)
-            } ?? "none")",
+            "exclusive_authorized_peer_hash=\(authorizedPeerHash)",
             "pending_incoming_count=\(convergenceCoordinator?.pendingIncomingBatchCount ?? -1)",
             "pending_local_obligation_count=\(convergenceCoordinator?.pendingLocalObligationCount ?? -1)",
             "unsent_count=\(unsentBatches.pendingCount)",
