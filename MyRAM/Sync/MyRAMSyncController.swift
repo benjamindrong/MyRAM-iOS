@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 @preconcurrency import MultipeerConnectivity
 import NearbySyncCore
 import OSLog
@@ -173,6 +174,8 @@ protocol MyRAMSyncBootstrapConfiguring: AnyObject {
     var applyBootstrapSnapshot: ((SyncPeerBootstrapSnapshot) throws -> SyncPeerBootstrapApplyDisposition)? { get set }
     var onBootstrapPresentationRefresh: (() -> Void)? { get set }
     var onResumeIncomingAfterBootstrap: (() async -> Void)? { get set }
+    var bootstrapConflictLifecycleForReadOnlyDiagnostics:
+        ((UUID) throws -> SyncBootstrapStructuralConflictLifecycle?)? { get set }
 
     func resumeBootstrapAfterConflictResolution() async
 }
@@ -235,6 +238,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private struct PendingReceivedBootstrap {
         let snapshot: SyncPeerBootstrapSnapshot
         let peerID: MCPeerID
+        let coveredNoteIDs: Set<SyncBatchNoteID>
     }
 
     @Published private(set) var availablePeers: [MyRAMDiscoveredPeer] = []
@@ -243,7 +247,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     @Published private(set) var pendingSyncStatus = PendingSyncStatus.empty
     @Published private(set) var lastSyncAt: Date?
     @Published private(set) var lastErrorMessage: String?
-    @Published private(set) var lastConnectionEvent = "Browsing for nearby MyRAM devices"
+    @Published private(set) var lastConnectionEvent = "Networking has not started"
 
     let localPeerName: String
     var onChangesReceived: (([SyncChange]) async -> [LegacyIncomingChangeResult])?
@@ -259,6 +263,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     var applyBootstrapSnapshot: ((SyncPeerBootstrapSnapshot) throws -> SyncPeerBootstrapApplyDisposition)?
     var onBootstrapPresentationRefresh: (() -> Void)?
     var onResumeIncomingAfterBootstrap: (() async -> Void)?
+    var bootstrapConflictLifecycleForReadOnlyDiagnostics:
+        ((UUID) throws -> SyncBootstrapStructuralConflictLifecycle?)?
 #if DEBUG
     var onOrdinaryTargetMutationReadyForTesting: (() async -> Void)?
     var onCheckedPublicationLeaseAcquiredForTesting: (() async -> Void)?
@@ -360,8 +366,12 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     func startNetworkingIfNeeded() {
+        // A captured-data restore may run only inside an isolated Verification app.
+        // The test-mode identity itself prevents any MPC advertising or browsing.
+        guard !runtimeConfiguration.isOfflineRestoreVerification else { return }
         guard !hasStartedNetworking else { return }
         hasStartedNetworking = true
+        lastConnectionEvent = "Browsing for nearby MyRAM devices"
         transportDiagnostics.record("networking.start", session: session)
         advertiser.startAdvertisingPeer()
         browser.startBrowsingForPeers()
@@ -387,6 +397,97 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
     var hasConnectedPeers: Bool {
         !session.connectedPeers.isEmpty
+    }
+
+    /// No network operations, conflict resolution, queue drains, or writes.
+    /// Only the currently retained receiver snapshot and in-memory queue
+    /// projections are used; results cannot reconstruct a previous process.
+    var readOnlySyncDiagnostics: String {
+        var lines = [
+            "schema=myram.iphone.sync-diagnostics.v1",
+            "networking_started=\(hasStartedNetworking)",
+            "available_peer_count=\(availablePeers.count)",
+            "session_connected_count=\(session.connectedPeers.count)",
+            "published_connected_count=\(connectedPeers.count)",
+            "unsent_count=\(unsentBatches.pendingCount)",
+            "legacy_pending_count=\(pendingSyncStatus.legacyChanges)",
+            "local_convergence_pending_count=\(localConvergencePendingCountProvider?() ?? -1)",
+            "pending_incoming_transport_count=\(pendingIncomingBatchWork.count)",
+            "processing_incoming=\(isProcessingIncomingBatchWork)",
+            "queue_health_issue_count=\(pendingSyncStatus.healthIssues.count)"
+        ]
+        let connectedIDs = Set(session.connectedPeers.map {
+            MyRAMPeerIdentity(peerID: $0).deviceID
+        })
+        lines.append(
+            "session_peer_hashes=" +
+            connectedIDs.map(Self.diagnosticHash).sorted().joined(separator: ",")
+        )
+        for (index, batch) in unsentBatches.pendingBatches.enumerated() {
+            lines.append(
+                "unsent[\(index)]=batch:\(Self.diagnosticHash(batch.id.uuidString))," +
+                "origin:\(Self.diagnosticHash(batch.originDeviceID.uuidString))," +
+                "changes:\(batch.changes.count)"
+            )
+        }
+        let ackOwners = acknowledgementOutbox.pendingOwnersForDiagnostics
+            .map { "batch:\(Self.diagnosticHash($0.batchID.uuidString))," +
+                   "peer:\(Self.diagnosticHash($0.peerDeviceID))" }
+            .sorted()
+        lines.append("ack_outbox_count=\(ackOwners.count)")
+        lines += ackOwners.enumerated().map { "ack_outbox[\($0.offset)]=\($0.element)" }
+        let deliveries = outstandingBatchDeliveries.pendingOwnersForDiagnostics
+            .map { "batch:\(Self.diagnosticHash($0.batchID.uuidString))," +
+                   "peer:\(Self.diagnosticHash($0.peerDeviceID))" }
+            .sorted()
+        lines.append("awaiting_delivery_ack_count=\(deliveries.count)")
+        lines += deliveries.enumerated().map { "delivery[\($0.offset)]=\($0.element)" }
+        let receiving = pendingBatchReceives.pendingBatchIDsForDiagnostics
+            .map { Self.diagnosticHash($0.uuidString) }.sorted()
+        lines.append("receiving_batch_count=\(receiving.count)")
+        lines.append("receiving_batch_hashes=\(receiving.joined(separator: ","))")
+        lines.append("receiver_pending_bootstrap_peer_count=\(pendingReceivedBootstrapByPeerDeviceID.count)")
+        for (index, entry) in pendingReceivedBootstrapByPeerDeviceID.sorted(by: {
+            $0.key < $1.key
+        }).enumerated() {
+            let noteIDs = Set(entry.value.snapshot.notes.map(\.id))
+            let missing = noteIDs.subtracting(entry.value.coveredNoteIDs)
+            let missingHashes = missing.map { Self.diagnosticHash($0.uuidString) }
+                .sorted().joined(separator: ",")
+            lines.append(
+                "receiver[\(index)]=peer:\(Self.diagnosticHash(entry.key))," +
+                "snapshot:\(Self.diagnosticHash(entry.value.snapshot.id.uuidString))," +
+                "expected_notes:\(noteIDs.count)," +
+                "covered_notes:\(entry.value.coveredNoteIDs.count)," +
+                "missing_notes:\(missing.count)," +
+                "missing_note_hashes:\(missingHashes)"
+            )
+            for (noteIndex, noteID) in missing.sorted(by: {
+                $0.uuidString < $1.uuidString
+            }).enumerated() {
+                let state: String
+                if let reader = bootstrapConflictLifecycleForReadOnlyDiagnostics {
+                    do {
+                        state = try reader(noteID)?.rawValue ?? "no_structural_record"
+                    } catch {
+                        state = "structural_record_read_error"
+                    }
+                } else {
+                    state = "structural_record_unavailable"
+                }
+                lines.append(
+                    "receiver[\(index)]_missing[\(noteIndex)]=note:" +
+                    Self.diagnosticHash(noteID.uuidString) +
+                    ",structural_conflict_lifecycle:\(state)"
+                )
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func diagnosticHash(_ raw: String) -> String {
+        let digest = SHA256.hash(data: Data(("myram.mac.sync-diagnostics.v1:" + raw).utf8))
+        return digest.prefix(16).map { String(format: "%02x", $0) }.joined()
     }
 
 #if DEBUG
@@ -1440,7 +1541,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         } else {
             pendingReceivedBootstrapByPeerDeviceID[deviceID] = PendingReceivedBootstrap(
                 snapshot: snapshot,
-                peerID: peerID
+                peerID: peerID,
+                coveredNoteIDs: disposition.coveredNoteIDs
             )
         }
 

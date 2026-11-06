@@ -17,7 +17,7 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
             bootstrapActionsFactory: { _, _ in
                 NotesListState.BootstrapActions(
                     rollbackIfNeededOnLaunch: { events.append("rollback") },
-                    migrateNoteSequenceStates: { events.append("migration") },
+                    migrateNoteSequenceStates: { events.append("migration"); return [] },
                     completeModelInitializationAfterMigration: {
                         events.append("initialize")
                     },

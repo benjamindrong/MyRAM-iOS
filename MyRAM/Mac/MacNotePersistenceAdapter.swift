@@ -250,6 +250,14 @@ final class MacNotePersistenceAdapter {
     }
 
     func persistPreparedLocalNoteEdit(_ prepared: MacPreparedLocalNoteEdit) throws {
+        // The activated editor may persist only a complete anchored-state pair.
+        // Do not let an old or legacy prepared edit bypass the sequence transaction.
+        if SyncBatchAnchoredPayloadCapability.isEnabled,
+           (prepared.structuralSnapshot == nil ||
+            prepared.finalStructuralState == nil ||
+            prepared.finalStructuralMarkState == nil) {
+            throw MacPendingSaveFailure.captureFailed(noteID: prepared.noteID)
+        }
         guard let note = try loadNote(id: prepared.noteID) else {
             throw MacPendingSaveFailure.noteMissing(noteID: prepared.noteID)
         }

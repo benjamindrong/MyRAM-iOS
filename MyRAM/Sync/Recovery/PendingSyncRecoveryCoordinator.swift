@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import Foundation
 import NearbySyncCore
 
@@ -7,15 +8,19 @@ final class PendingSyncRecoveryCoordinator {
         case unhealthyLegacyQueue
         case unhealthyUnsentBatchQueue
         case unhealthyLocalObligationQueue
+        case unhealthyIncomingBatchQueue
+        case staleLocalResolutionQueueOwnership
+        case unresolvedLocalResolutionQueueWork
         case journalWriteFailed
         case replacementFailed
         case rollbackFailed
+        case pendingLocalEditsNotDurable
         case capturedBatchNotDurable(SyncBatchID)
     }
 
     private let queueAdmin: PendingSyncQueueAdministrating
-    private let localQueueSnapshot: () -> FileBackedSyncBatchQueueSnapshot
-    private let replaceLocalBatches: ([SyncBatch]) async throws -> Void
+    private let localQueueSnapshot: () -> FileBackedSyncConvergenceLocalObligationQueueSnapshot
+    private let replaceLocalObligations: ([SyncConvergenceLocalObligation]) async throws -> Void
     private let flushReadyLocalBatch: () async throws -> SyncBatchID?
     private let journalStore: PendingSyncRecoveryJournalStore
     private let now: () -> Date
@@ -23,8 +28,8 @@ final class PendingSyncRecoveryCoordinator {
 
     init(
         queueAdmin: PendingSyncQueueAdministrating,
-        localQueueSnapshot: @escaping () -> FileBackedSyncBatchQueueSnapshot,
-        replaceLocalBatches: @escaping ([SyncBatch]) async throws -> Void,
+        localQueueSnapshot: @escaping () -> FileBackedSyncConvergenceLocalObligationQueueSnapshot,
+        replaceLocalObligations: @escaping ([SyncConvergenceLocalObligation]) async throws -> Void,
         flushReadyLocalBatch: @escaping () async throws -> SyncBatchID?,
         journalStore: PendingSyncRecoveryJournalStore = PendingSyncRecoveryJournalStore(),
         now: @escaping () -> Date = Date.init,
@@ -32,7 +37,7 @@ final class PendingSyncRecoveryCoordinator {
     ) {
         self.queueAdmin = queueAdmin
         self.localQueueSnapshot = localQueueSnapshot
-        self.replaceLocalBatches = replaceLocalBatches
+        self.replaceLocalObligations = replaceLocalObligations
         self.flushReadyLocalBatch = flushReadyLocalBatch
         self.journalStore = journalStore
         self.now = now
@@ -42,7 +47,8 @@ final class PendingSyncRecoveryCoordinator {
     func prepareSnapshots() async throws -> (
         legacy: SyncQueueSnapshot,
         unsent: [SyncBatch],
-        local: [SyncBatch]
+        local: [SyncBatch],
+        localEvidence: [SyncConvergenceLocalObligation]
     ) {
         let capturedBatchID = try await flushReadyLocalBatch()
 
@@ -63,15 +69,175 @@ final class PendingSyncRecoveryCoordinator {
 
         if let capturedBatchID,
            !unsentSnapshot.pendingBatches.contains(where: { $0.id == capturedBatchID }),
-           !localSnapshot.pendingBatches.contains(where: { $0.id == capturedBatchID }) {
+           !localSnapshot.obligations.map(\.batch).contains(where: { $0.id == capturedBatchID }) {
             throw RecoveryError.capturedBatchNotDurable(capturedBatchID)
         }
 
         return (
             legacy: await queueAdmin.legacyQueueSnapshot(),
             unsent: unsentSnapshot.pendingBatches,
-            local: localSnapshot.pendingBatches
+            local: localSnapshot.obligations.map(\.batch),
+            localEvidence: localSnapshot.obligations
         )
+    }
+
+    /// This inspection is meaningful only while all outbound/incoming sync
+    /// admission is suspended. It flushes the in-memory local accumulator via
+    /// the existing recovery owner before inspecting durable queue state.
+    func captureLocalResolutionQueueOwnership(
+        incomingSnapshot: FileBackedSyncBatchQueueSnapshot
+    ) async throws -> NoteLocalDivergenceQueueOwnershipEvidence {
+        guard incomingSnapshot.health.isRecoveryWritable else {
+            throw RecoveryError.unhealthyIncomingBatchQueue
+        }
+        let current = try await prepareSnapshots()
+        // Reuse the established inter-queue ownership validator: identical
+        // duplicated IDs are tolerated, conflicting payload IDs are rejected.
+        let ownership = try SyncPeerBootstrapOwnershipCandidate(
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: current.unsent,
+                health: .healthy
+            ),
+            localObligationSnapshot: FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: current.local,
+                health: .healthy
+            )
+        )
+        // Include inbound work in the same ID integrity check. Otherwise a
+        // conflicting incoming payload could masquerade as a previously
+        // captured outbound obligation during a future resolution.
+        var batchesByID = Dictionary(
+            uniqueKeysWithValues: ownership.canonicalBatches.map { ($0.id, $0) }
+        )
+        for batch in incomingSnapshot.pendingBatches {
+            try SyncBatchAnchoredPayloadPolicy.validateInbound(batch)
+            if let existing = batchesByID[batch.id], existing != batch {
+                throw SyncPeerBootstrapOwnershipError.conflictingDuplicateBatchID(batch.id)
+            }
+            batchesByID[batch.id] = batch
+        }
+        return NoteLocalDivergenceQueueOwnershipEvidence(
+            legacy: current.legacy,
+            unsent: current.unsent,
+            incoming: incomingSnapshot.pendingBatches,
+            localObligations: current.localEvidence
+        )
+    }
+
+    /// Rejects admissions, acknowledgements or ownership transfers that
+    /// happened since the prepared resolution preimage was durably archived.
+    func requireUnchangedLocalResolutionQueueOwnership(
+        _ expected: NoteLocalDivergenceQueueOwnershipEvidence,
+        incomingSnapshot: FileBackedSyncBatchQueueSnapshot
+    ) async throws {
+        let observed = try await captureLocalResolutionQueueOwnership(
+            incomingSnapshot: incomingSnapshot
+        )
+        guard observed == expected else {
+            throw RecoveryError.staleLocalResolutionQueueOwnership
+        }
+    }
+
+    /// A clean-queue choice remains valid. Pending local operations may also
+    /// remain untouched only if the chosen anchored generation already proves
+    /// their exact effects. Never remove, acknowledge or rewrite those batches.
+    func requireNoConflictingWorkForResolvedNote(
+        _ noteID: UUID,
+        expected: NoteLocalDivergenceQueueOwnershipEvidence,
+        incomingSnapshot: FileBackedSyncBatchQueueSnapshot
+    ) async throws {
+        try await requireProtectedLocalResolutionQueueBoundary(
+            noteID, expected: expected, incomingSnapshot: incomingSnapshot
+        )
+        for batch in expected.unsent + expected.localObligations.map(\.batch) {
+            guard !batch.changes.contains(where: { $0.noteID == noteID }) else {
+                throw RecoveryError.unresolvedLocalResolutionQueueWork
+            }
+        }
+    }
+
+    /// Certifies only already-incorporated local obligations. The exact batch
+    /// identities and payload bytes stay in their existing durable queues;
+    /// normal convergence retains acknowledgement/retry ownership after sync
+    /// admission. A missing or merely plausible effect is never sufficient.
+    func requireRepresentedLocalWorkForResolvedNote(
+        _ noteID: UUID,
+        expected: NoteLocalDivergenceQueueOwnershipEvidence,
+        selectedState: SyncTextSequenceState,
+        savedTitle: String,
+        savedModifiedAt: Date,
+        incomingSnapshot: FileBackedSyncBatchQueueSnapshot
+    ) async throws {
+        try await requireProtectedLocalResolutionQueueBoundary(
+            noteID, expected: expected, incomingSnapshot: incomingSnapshot
+        )
+        for obligation in expected.localObligations {
+            _ = try SyncConvergenceLocalEvidenceCapture.validate(obligation: obligation)
+        }
+        for batch in expected.unsent + expected.localObligations.map(\.batch) {
+            for change in batch.changes where change.noteID == noteID {
+                switch change {
+                case .noteBodyTextInsertedAnchored(let inserted):
+                    guard let run = selectedState.runs.first(where: {
+                        $0.operationID == inserted.payload.operationID
+                    }), run.text == inserted.text,
+                          run.origin.leftElementID == inserted.payload.anchor.leftElementID,
+                          run.origin.rightElementID == inserted.payload.anchor.rightElementID else {
+                        throw RecoveryError.unresolvedLocalResolutionQueueWork
+                    }
+                case .noteBodyTextDeletedAnchored(let deleted):
+                    // Identity-targeted deletion is terminal/idempotent. Replay
+                    // must leave every fragment and tombstone byte unchanged.
+                    guard let replayed = try? selectedState.incorporating(
+                        delete: deleted.payload
+                    ), replayed == selectedState else {
+                        throw RecoveryError.unresolvedLocalResolutionQueueWork
+                    }
+                case .noteTitleChanged(let title):
+                    // Metadata can travel unchanged only if its effect is
+                    // already reflected in the owner-approved note snapshot.
+                    guard title.title == savedTitle,
+                          title.modifiedAt <= savedModifiedAt else {
+                        throw RecoveryError.unresolvedLocalResolutionQueueWork
+                    }
+                case .noteCreated, .noteBodyTextInserted,
+                     .noteBodyTextDeleted, .noteBodyReconciled,
+                     .noteLifecycleChanged:
+                    // These may install an obsolete body or change lifecycle
+                    // ownership; they need their own durable reconciliation.
+                    throw RecoveryError.unresolvedLocalResolutionQueueWork
+                }
+            }
+        }
+    }
+
+    private func requireProtectedLocalResolutionQueueBoundary(
+        _ noteID: UUID,
+        expected: NoteLocalDivergenceQueueOwnershipEvidence,
+        incomingSnapshot: FileBackedSyncBatchQueueSnapshot
+    ) async throws {
+        queueAdmin.suspendOutboundForRecovery()
+        try await requireUnchangedLocalResolutionQueueOwnership(
+            expected, incomingSnapshot: incomingSnapshot
+        )
+        // Legacy acknowledgements cannot be attributed to a note. No replay
+        // proof can safely infer their ownership from an empty batch queue.
+        guard expected.legacy.pendingAcknowledgementIDs.isEmpty else {
+            throw RecoveryError.unresolvedLocalResolutionQueueWork
+        }
+        for change in expected.legacy.pendingChanges where change.entityType == .item {
+            guard let changedNoteID = UUID(uuidString: change.entityID),
+                  changedNoteID != noteID else {
+                throw RecoveryError.unresolvedLocalResolutionQueueWork
+            }
+        }
+        // Incoming work has not yet been committed to local history. It must
+        // remain pending until convergence can establish independent authority.
+        for batch in expected.incoming {
+            guard !batch.changes.contains(where: { $0.noteID == noteID }) else {
+                throw RecoveryError.unresolvedLocalResolutionQueueWork
+            }
+        }
     }
 
     func commitReplacement(_ replacement: SyncRecoveryReplacementState) async throws {
@@ -80,7 +246,8 @@ final class PendingSyncRecoveryCoordinator {
         let original: (
             legacy: SyncQueueSnapshot,
             unsent: [SyncBatch],
-            local: [SyncBatch]
+            local: [SyncBatch],
+            localEvidence: [SyncConvergenceLocalObligation]
         )
 
         do {
@@ -100,7 +267,8 @@ final class PendingSyncRecoveryCoordinator {
             originalLocalObligations: original.local,
             replacementLegacySnapshot: replacement.legacySnapshot,
             replacementUnsentBatches: replacement.unsentBatches,
-            replacementLocalObligations: replacement.localConvergenceBatches
+            replacementLocalObligations: replacement.localConvergenceBatches,
+            originalLocalEvidence: original.localEvidence
         )
 
         do {
@@ -109,7 +277,7 @@ final class PendingSyncRecoveryCoordinator {
             _ = try journalStore.updatePhase(.legacyReplaced)
             try await queueAdmin.replaceUnsentBatches(replacement.unsentBatches)
             _ = try journalStore.updatePhase(.unsentBatchesReplaced)
-            try await replaceLocalBatches(replacement.localConvergenceBatches)
+            try await replaceLocalObligations(replacement.localConvergenceBatches.map(SyncConvergenceLocalObligation.init(legacyBatch:)))
             _ = try journalStore.updatePhase(.localObligationsReplaced)
             await queueAdmin.refreshPendingSyncStatus()
             _ = try journalStore.updatePhase(.committed)
@@ -136,7 +304,8 @@ final class PendingSyncRecoveryCoordinator {
         let original: (
             legacy: SyncQueueSnapshot,
             unsent: [SyncBatch],
-            local: [SyncBatch]
+            local: [SyncBatch],
+            localEvidence: [SyncConvergenceLocalObligation]
         )
         let replacement: SyncRecoveryReplacementState
         let recoveryTimestamp: Date
@@ -164,7 +333,8 @@ final class PendingSyncRecoveryCoordinator {
         original: (
             legacy: SyncQueueSnapshot,
             unsent: [SyncBatch],
-            local: [SyncBatch]
+            local: [SyncBatch],
+            localEvidence: [SyncConvergenceLocalObligation]
         ),
         createdAt: Date
     ) async throws {
@@ -178,7 +348,8 @@ final class PendingSyncRecoveryCoordinator {
             originalLocalObligations: original.local,
             replacementLegacySnapshot: replacement.legacySnapshot,
             replacementUnsentBatches: replacement.unsentBatches,
-            replacementLocalObligations: replacement.localConvergenceBatches
+            replacementLocalObligations: replacement.localConvergenceBatches,
+            originalLocalEvidence: original.localEvidence
         )
 
         do {
@@ -187,7 +358,7 @@ final class PendingSyncRecoveryCoordinator {
             _ = try journalStore.updatePhase(.legacyReplaced)
             try await queueAdmin.replaceUnsentBatches(replacement.unsentBatches)
             _ = try journalStore.updatePhase(.unsentBatchesReplaced)
-            try await replaceLocalBatches(replacement.localConvergenceBatches)
+            try await replaceLocalObligations(replacement.localConvergenceBatches.map(SyncConvergenceLocalObligation.init(legacyBatch:)))
             _ = try journalStore.updatePhase(.localObligationsReplaced)
             await queueAdmin.refreshPendingSyncStatus()
             _ = try journalStore.updatePhase(.committed)
@@ -212,9 +383,17 @@ final class PendingSyncRecoveryCoordinator {
 
     private func rollback(journal: PendingSyncRecoveryJournal, resumeOutbound: Bool) async throws {
         do {
-            try await queueAdmin.replaceLegacyQueueSnapshot(journal.originalLegacySnapshot)
-            try await queueAdmin.replaceUnsentBatches(journal.originalUnsentBatches)
-            try await replaceLocalBatches(journal.originalLocalObligations)
+            // Queue owners can admit an edit while an earlier queue's asynchronous
+            // replacement is running. Rebase and durably journal later admissions
+            // immediately before each subsequent queue replacement.
+            var preserved = try await preserveCurrentWork(in: journal)
+            try await queueAdmin.replaceLegacyQueueSnapshot(preserved.originalLegacySnapshot)
+            preserved = try await preserveCurrentWork(in: preserved)
+            try await queueAdmin.replaceUnsentBatches(preserved.originalUnsentBatches)
+            preserved = try await preserveCurrentWork(in: preserved)
+            let localEvidence = preserved.originalLocalEvidence
+                ?? preserved.originalLocalObligations.map(SyncConvergenceLocalObligation.init(legacyBatch:))
+            try await replaceLocalObligations(localEvidence)
             await queueAdmin.refreshPendingSyncStatus()
             try journalStore.delete()
             if resumeOutbound {
@@ -224,6 +403,72 @@ final class PendingSyncRecoveryCoordinator {
             throw RecoveryError.rollbackFailed
         }
     }
+
+    private func preserveCurrentWork(
+        in journal: PendingSyncRecoveryJournal
+    ) async throws -> PendingSyncRecoveryJournal {
+        let current = try await prepareSnapshots()
+        let legacy = SyncQueueSnapshot(
+            pendingChanges: preservingLaterWork(
+                original: journal.originalLegacySnapshot.pendingChanges,
+                replacement: journal.replacementLegacySnapshot.pendingChanges,
+                current: current.legacy.pendingChanges,
+                id: { $0.id }
+            ),
+            appliedChangeIDs: Array(Set(journal.originalLegacySnapshot.appliedChangeIDs + current.legacy.appliedChangeIDs)),
+            pendingAcknowledgementIDs: Array(Set(journal.originalLegacySnapshot.pendingAcknowledgementIDs + current.legacy.pendingAcknowledgementIDs))
+        )
+        let unsent = preservingLaterWork(
+            original: journal.originalUnsentBatches,
+            replacement: journal.replacementUnsentBatches,
+            current: current.unsent,
+            id: { $0.id }
+        )
+        let unsentIDs = Set(unsent.map(\.id))
+        let local = preservingLaterWork(
+            original: journal.originalLocalObligations,
+            replacement: journal.replacementLocalObligations,
+            current: current.local,
+            id: { $0.id }
+        ).filter { !unsentIDs.contains($0.id) }
+        let originalEvidence = Dictionary(
+            (journal.originalLocalEvidence ?? []).map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let currentEvidence = Dictionary(
+            current.localEvidence.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let localEvidence = local.map { batch in
+            originalEvidence[batch.id] ?? currentEvidence[batch.id]
+                ?? SyncConvergenceLocalObligation(legacyBatch: batch)
+        }
+        let preserved = PendingSyncRecoveryJournal(
+            version: journal.version,
+            transactionID: journal.transactionID,
+            createdAt: journal.createdAt,
+            phase: journal.phase,
+            originalLegacySnapshot: legacy,
+            originalUnsentBatches: unsent,
+            originalLocalObligations: local,
+            replacementLegacySnapshot: journal.replacementLegacySnapshot,
+            replacementUnsentBatches: journal.replacementUnsentBatches,
+            replacementLocalObligations: journal.replacementLocalObligations,
+            originalLocalEvidence: localEvidence
+        )
+        // An interrupted replacement must be able to restore every admission
+        // already observed, including transfers from local to unsent ownership.
+        try journalStore.save(preserved)
+        return preserved
+    }
+
+    private func preservingLaterWork<T>(
+        original: [T], replacement: [T], current: [T], id: (T) -> UUID
+    ) -> [T] {
+        let transactionIDs = Set((original + replacement).map(id))
+        return original + current.filter { !transactionIDs.contains(id($0)) }
+    }
+
 }
 
 private extension SyncQueuePersistenceHealth {

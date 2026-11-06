@@ -26,7 +26,8 @@ struct SyncBatchUnsentQueue {
     }
 
     mutating func replacePendingBatches(_ batches: [SyncBatch]) {
-        self.batches = Array(batches.prefix(limit))
+        // Admission limits new work; restoring durable ownership must never truncate it.
+        self.batches = batches
     }
 
     func contains(_ batchID: SyncBatchID) -> Bool {

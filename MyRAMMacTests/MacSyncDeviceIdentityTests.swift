@@ -247,6 +247,39 @@ final class MacSyncDeviceIdentityTests: XCTestCase {
         }
     }
 
+    func testMYR238OfflineRestoreCannotBeActivatedOutsideVerificationIdentity() throws {
+        for identifier in ["com.northsignalstudio.myram", "com.northsignalstudio.myram.dev",
+                           "com.northsignalstudio.myram.mac", "com.northsignalstudio.myram.mac.dev", "unknown"] {
+            XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: identifier, bonjourServices: ["_myram-verify._tcp"],
+                transportOnlyValue: nil, offlineRestoreValue: true
+            ))
+        }
+        for identifier in MyRAMSyncRuntimeConfiguration.verificationBundleIDs {
+            for namespace in [nil, ["_myram-sync._tcp"]] as [[String]?] {
+                XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                    bundleIdentifier: identifier, bonjourServices: namespace,
+                    transportOnlyValue: nil, offlineRestoreValue: true
+                ))
+            }
+            XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: identifier, bonjourServices: ["_myram-verify._tcp"],
+                transportOnlyValue: nil, offlineRestoreValue: "true"
+            ))
+            let enabled = try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: identifier, bonjourServices: ["_myram-verify._tcp"],
+                transportOnlyValue: nil, offlineRestoreValue: true
+            )
+            XCTAssertTrue(enabled.isOfflineRestoreVerification)
+            XCTAssertTrue(enabled.applicationSyncEnabled)
+            let normal = try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: identifier, bonjourServices: ["_myram-verify._tcp"],
+                transportOnlyValue: nil
+            )
+            XCTAssertFalse(normal.isOfflineRestoreVerification)
+        }
+    }
+
     func testVerificationFixtureIdentityPersistsAndRebindsEveryProviderBeforePeerConstruction() throws {
         let defaults = makeDefaults()
         defaults.set(UUID().uuidString, forKey: MacSyncDeviceIdentity.deviceIDKey)

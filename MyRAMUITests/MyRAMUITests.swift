@@ -17,6 +17,24 @@ final class MyRAMUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func testReadOnlyDiagnosticsContainCapturedStateOnFirstPresentation() throws {
+        let app = makeApp()
+        app.launch()
+        let status = findElement("sync-status-indicator", in: app)
+        XCTAssertTrue(status.waitForExistence(timeout: Timeout.standard))
+        status.tap()
+        let diagnostics = app.buttons["ios-sync-readonly-diagnostics"]
+        XCTAssertTrue(diagnostics.waitForExistence(timeout: Timeout.standard))
+        diagnostics.tap()
+        let snapshot = app.staticTexts.matching(NSPredicate(
+            format: "label CONTAINS %@", "schema=myram.iphone.sync-diagnostics.v1"
+        )).firstMatch
+        XCTAssertTrue(snapshot.waitForExistence(timeout: Timeout.standard), "First presentation must show the captured diagnostic snapshot.")
+        XCTAssertTrue(snapshot.label.contains("networking_started="))
+        XCTAssertTrue(snapshot.label.contains("unsent_count="))
+        XCTAssertTrue(app.buttons["ios-sync-copy-diagnostics"].exists)
+    }
+
     /// Opt-in physical acceptance against the preserved Verification fixture.
     /// Uses the installed app and its ordinary restoration flow, without a test store or reset.
     func testMYR233PhysicalRetainedNoteRestoration() throws {
@@ -51,6 +69,98 @@ final class MyRAMUITests: XCTestCase {
             XCTAssertEqual(XCTWaiter.wait(for: [removed], timeout: Timeout.standard), .completed)
         }
         app.buttons["Done"].tap()
+    }
+
+    /// Runs only against an explicitly prepared, synthetic Verification container.
+    func testMYR238VerificationOfflineEditingAndRelaunch() throws {
+        guard ProcessInfo.processInfo.environment["MYR238_VERIFICATION_ACCEPTANCE"] == "1" else {
+            throw XCTSkip("Requires the isolated MYR-238 synthetic journal fixture")
+        }
+        let app = XCUIApplication(bundleIdentifier: "com.northsignalstudio.myram.verification")
+        app.launch()
+        XCTAssertTrue(app.buttons["Retry Sync"].waitForExistence(timeout: Timeout.standard))
+        openNewNote(in: app)
+        app.buttons["edit-note-title"].tap()
+        let titleAlert = app.alerts["Edit Title"]
+        XCTAssertTrue(titleAlert.waitForExistence(timeout: Timeout.standard))
+        replaceText(in: titleAlert.textFields.firstMatch, with: "MYR238 Synthetic Offline", fallbackExistingText: "Untitled")
+        titleAlert.buttons["Save"].tap()
+        let editor = findElement("note-editor-body", in: app)
+        XCTAssertTrue(editor.waitForExistence(timeout: Timeout.standard))
+        editor.tap()
+        editor.typeText("MYR238 synthetic durable offline text")
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        XCTAssertTrue(editor.waitForExistence(timeout: Timeout.standard))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.buttons["Retry Sync"].waitForExistence(timeout: Timeout.standard))
+        // Repeated recovery failure must leave the locally saved note available.
+        app.buttons["Retry Sync"].tap()
+        let row = app.staticTexts["MYR238 Synthetic Offline"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: Timeout.standard))
+        row.tap()
+        XCTAssertTrue(editor.waitForExistence(timeout: Timeout.standard))
+        XCTAssertEqual(editor.value as? String, "MYR238 synthetic durable offline text")
+    }
+
+    func testMYR238VerificationRecoveryPreservesOfflineText() throws {
+        guard ProcessInfo.processInfo.environment["MYR238_VERIFICATION_ACCEPTANCE"] == "1" else {
+            throw XCTSkip("Requires the isolated MYR-238 synthetic recovery fixture")
+        }
+        let app = XCUIApplication(bundleIdentifier: "com.northsignalstudio.myram.verification")
+        app.launch()
+        let row = app.staticTexts["MYR238 Synthetic Offline"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: Timeout.standard))
+        XCTAssertFalse(app.buttons["Retry Sync"].exists)
+        row.tap()
+        let editor = findElement("note-editor-body", in: app)
+        XCTAssertTrue(editor.waitForExistence(timeout: Timeout.standard))
+        XCTAssertEqual(editor.value as? String, "MYR238 synthetic durable offline text")
+    }
+
+    /// The full Verification app opens a copied, nonempty, captured database.
+    /// The caller stages the fixture into a new disposable Simulator first;
+    /// this test must never run against production or an empty test store.
+    func testMYR238CapturedFullAppReadEditSaveAndRelaunch() throws {
+        guard ProcessInfo.processInfo.environment["MYR238_CAPTURED_APP_RESTORE"] == "1" else {
+            throw XCTSkip("Requires the sealed captured restore in a disposable Verification simulator")
+        }
+        let app = XCUIApplication(bundleIdentifier: "com.northsignalstudio.myram.verification")
+        app.launch()
+
+        // A protected note from the 23-note capture must be present. A fresh,
+        // empty Verification store cannot satisfy this gate.
+        let warning = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS %@", "sync history")
+        ).firstMatch
+        XCTAssertTrue(warning.waitForExistence(timeout: 15),
+                      "Captured divergence was not loaded into the full app")
+        let newTitle = "MYR238 Full App Restored Edit"
+        let newBody = "MYR238 verified disposable durable edit"
+        openNewNote(in: app)
+        app.buttons["edit-note-title"].tap()
+        let alert = app.alerts["Edit Title"]
+        XCTAssertTrue(alert.waitForExistence(timeout: Timeout.standard))
+        replaceText(in: alert.textFields.firstMatch, with: newTitle, fallbackExistingText: "Untitled")
+        alert.buttons["Save"].tap()
+        let body = findElement("note-editor-body", in: app)
+        XCTAssertTrue(body.waitForExistence(timeout: Timeout.standard))
+        body.tap()
+        body.typeText(newBody)
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        XCTAssertTrue(body.waitForExistence(timeout: Timeout.standard))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(warning.waitForExistence(timeout: 15))
+        let row = app.staticTexts[newTitle].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 15),
+                      "The new note was not present after relaunch")
+        row.tap()
+        let restoredBody = findElement("note-editor-body", in: app)
+        XCTAssertTrue(restoredBody.waitForExistence(timeout: Timeout.standard))
+        XCTAssertEqual(restoredBody.value as? String, newBody)
     }
 
     func testNewNoteOpensWithoutAttachments() throws {

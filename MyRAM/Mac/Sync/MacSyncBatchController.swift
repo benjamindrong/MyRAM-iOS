@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import CryptoKit
 @preconcurrency import MultipeerConnectivity
 import NearbySyncCore
 import SwiftData
@@ -30,6 +31,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     @Published private(set) var lastErrorMessage: String?
     @Published private(set) var lastSyncAt: Date?
     @Published private(set) var quarantinedWork: SyncConvergenceQuarantinedWork?
+    @Published private(set) var authorizedCapturePeer: MacSyncDiscoveredPeer?
 
     weak var convergenceCoordinator: MacSyncConvergenceCoordinator?
 #if DEBUG
@@ -38,6 +40,8 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 #endif
 
     private let runtimeConfiguration: MyRAMSyncRuntimeConfiguration
+    private let exclusivePeerCaptureMode: Bool
+    var requiresExclusivePeerAuthorization: Bool { exclusivePeerCaptureMode }
     nonisolated private let transportDiagnostics: MyRAMSyncTransportDiagnostics
     var applicationSyncEnabled: Bool { runtimeConfiguration.applicationSyncEnabled }
 
@@ -99,6 +103,8 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         unsentBatchQueueFileURL: URL? = MacSyncBatchController.unsentBatchQueueFileURL(),
         unsentBatchQueue: FileBackedSyncBatchQueue? = nil,
         startsNetworking: Bool = true,
+        exclusivePeerCaptureMode: Bool =
+            ProcessInfo.processInfo.arguments.contains("--myram-exclusive-peer-capture"),
         configurationBundle: Bundle = .main,
         identityProvider: () -> MacSyncDeviceIdentity = {
             MacSyncDeviceIdentityProvider().currentIdentity()
@@ -119,6 +125,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         // Only validated Verification identities may bind the isolated MPC service.
         let effectiveServiceType = configuration.recordsTransportDiagnostics ? "myram-verify" : serviceType
         runtimeConfiguration = configuration
+        self.exclusivePeerCaptureMode = exclusivePeerCaptureMode
         transportDiagnostics = MyRAMSyncTransportDiagnostics(configuration: configuration)
         let identity = identityProvider()
         let retainedPeerID = MyRAMSyncDeviceIdentityStore.currentPeerID(displayName: identity.peerDisplayName)
@@ -211,6 +218,228 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
     var hasConnectedPeers: Bool {
         networkingLifecycle != .stopped && !connectedPeersProvider().isEmpty
+            && (!exclusivePeerCaptureMode || exclusiveCaptureSessionIsReady)
+    }
+
+    private func permitsCapturePeer(_ peer: MCPeerID) -> Bool {
+        !exclusivePeerCaptureMode || authorizedCapturePeer?.peerID == peer
+    }
+
+    private var exclusiveCaptureSessionIsReady: Bool {
+        guard exclusivePeerCaptureMode else { return true }
+        let connected = connectedPeersProvider()
+        return connected.count == 1 && connected.first == authorizedCapturePeer?.peerID
+    }
+
+    /// One explicit operator selection per launch, bound to the discovered MPC identity.
+    /// A different peer can only be selected after terminating this process.
+    @discardableResult
+    func authorizeExclusivePeerForCapture(_ peer: MacSyncDiscoveredPeer) -> Bool {
+        guard exclusivePeerCaptureMode,
+              authorizedCapturePeer == nil,
+              networkingLifecycle != .stopped,
+              connectedPeersProvider().isEmpty,
+              UUID(uuidString: peer.deviceID) != nil,
+              peer.deviceID == MacSyncPeerIdentity(peerID: peer.peerID).deviceID,
+              availablePeers.contains(where: {
+                  $0.peerID == peer.peerID && $0.deviceID == peer.deviceID
+              }) else {
+            return false
+        }
+        authorizedCapturePeer = peer
+        invite(peer)
+        return true
+    }
+
+    /// Captures current in-memory state only. No drain, invite, retry, queue
+    /// writes, identities, note content, or transport mutations are performed.
+    /// A new process cannot reconstruct the previous process's transient state.
+    var readOnlySyncDiagnostics: String {
+        let authorizedPeerHash = authorizedCapturePeer.map {
+            Self.diagnosticHash($0.peerID.displayName)
+        } ?? "none"
+        var lines = [
+            "schema=myram.mac.sync-diagnostics.v1",
+            "networking=\(networkingLifecycle)",
+            "mc_session_connected_count=\(session.connectedPeers.count)",
+            "published_connected_count=\(connectedPeers.count)",
+            "exclusive_capture_mode=\(exclusivePeerCaptureMode)",
+            "exclusive_peer_authorized=\(authorizedCapturePeer != nil)",
+            "exclusive_session_ready=\(exclusiveCaptureSessionIsReady)",
+            "exclusive_authorized_peer_hash=\(authorizedPeerHash)",
+            "pending_incoming_count=\(convergenceCoordinator?.pendingIncomingBatchCount ?? -1)",
+            "pending_local_obligation_count=\(convergenceCoordinator?.pendingLocalObligationCount ?? -1)",
+            "unsent_count=\(unsentBatches.pendingCount)",
+            "pending_incoming_transport_count=\(pendingIncomingBatchWork.count)",
+            "processing_incoming=\(isProcessingIncomingBatchWork)"
+        ]
+
+        let peerIDs = Set(
+            session.connectedPeers.map { MacSyncPeerIdentity(peerID: $0).deviceID }
+        )
+        lines.append("mc_session_peer_hashes=\(peerIDs.map(Self.diagnosticHash).sorted().joined(separator: ","))")
+
+        for (index, item) in (quarantinedWork?.items ?? []).enumerated() {
+            let domain: String
+            switch item.domain {
+            case .incoming: domain = "incoming"
+            case .localObligation: domain = "localObligation"
+            case .postCommit: domain = "postCommit"
+            }
+            let reason: String
+            switch item.reason {
+            case .localEvidenceContinuityViolation: reason = "localEvidenceContinuityViolation"
+            case .localEvidenceIndexMismatch: reason = "localEvidenceIndexMismatch"
+            case .localEvidenceInvalidOperation: reason = "localEvidenceInvalidOperation"
+            case .localEvidenceBaseHashMismatch: reason = "localEvidenceBaseHashMismatch"
+            case .staleAuthoritativeState: reason = "staleAuthoritativeState"
+            case .anchoredTerminalStructuralFailure(let failure):
+                reason = "anchoredTerminalStructuralFailure.\(failure.code.rawValue)"
+            case .anchoredBootstrapConflict(let conflict):
+                reason = "anchoredBootstrapConflict.\(conflict.reason.rawValue)"
+            }
+            lines.append(
+                "quarantine[\(index)]=domain:\(domain),reason:\(reason)," +
+                "batch:\(Self.diagnosticHash(item.batchID.uuidString))," +
+                "origin:\(Self.diagnosticHash(item.originDeviceID.uuidString))," +
+                "affected_notes:\(item.affectedNoteIDs.count)"
+            )
+        }
+        lines.append("quarantine_count=\(quarantinedWork?.items.count ?? 0)")
+
+        for (index, batch) in unsentBatches.pendingBatches.enumerated() {
+            lines.append(
+                "unsent[\(index)]=batch:\(Self.diagnosticHash(batch.id.uuidString))," +
+                "origin:\(Self.diagnosticHash(batch.originDeviceID.uuidString))"
+            )
+        }
+        let ackOwners = acknowledgementOutbox.pendingOwnersForDiagnostics
+            .map {
+                "batch:\(Self.diagnosticHash($0.batchID.uuidString))," +
+                "peer:\(Self.diagnosticHash($0.peerDeviceID))"
+            }.sorted()
+        lines.append("ack_outbox_count=\(ackOwners.count)")
+        lines += ackOwners.enumerated().map { "ack_outbox[\($0.offset)]=\($0.element)" }
+
+        let deliveryOwners = outstandingBatchDeliveries.pendingOwnersForDiagnostics
+            .map {
+                "batch:\(Self.diagnosticHash($0.batchID.uuidString))," +
+                "peer:\(Self.diagnosticHash($0.peerDeviceID))"
+            }.sorted()
+        lines.append("awaiting_delivery_ack_count=\(deliveryOwners.count)")
+        lines += deliveryOwners.enumerated().map { "delivery[\($0.offset)]=\($0.element)" }
+
+        let pendingReceive = pendingBatchReceives.pendingBatchIDsForDiagnostics
+            .map { Self.diagnosticHash($0.uuidString) }.sorted()
+        lines.append("receiving_batch_count=\(pendingReceive.count)")
+        lines.append("receiving_batch_hashes=\(pendingReceive.joined(separator: ","))")
+
+        let remoteACKOwners = acknowledgementPeerByRemoteBatchID.map {
+            "batch:\(Self.diagnosticHash($0.key.uuidString))," +
+            "peer:\(Self.diagnosticHash($0.value))"
+        }.sorted()
+        lines.append("remote_ack_route_count=\(remoteACKOwners.count)")
+        lines += remoteACKOwners.enumerated().map { "remote_ack[\($0.offset)]=\($0.element)" }
+
+        let knownPeers = peerIDs.union(bootstrapStateByPeerDeviceID.keys)
+            .union(bootstrapPreparationPeerDeviceIDs)
+            .union(pendingReceivedBootstrapByPeerDeviceID.keys)
+            .union(acknowledgementPeerByRemoteBatchID.values)
+        for (index, deviceID) in knownPeers.sorted().enumerated() {
+            let bootstrap = bootstrapStateByPeerDeviceID[deviceID]
+            lines.append(
+                "peer[\(index)]=id:\(Self.diagnosticHash(deviceID))," +
+                "capability_resolved:\(peerCapabilityRegistry.isBootstrapCapabilityResolved(forPeerDeviceID: deviceID))," +
+                "current_session_v2:\(peerCapabilityRegistry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: deviceID))," +
+                "bootstrap_preparing:\(bootstrapPreparationPeerDeviceIDs.contains(deviceID))," +
+                "bootstrap_pending:\(bootstrap != nil)," +
+                "bootstrap_ready:\(bootstrap?.ordinarySyncReady == true)," +
+                "baseline_ack:\(bootstrap?.hasSequenceBaselineAcknowledgement == true)," +
+                "bootstrap_retry:\(bootstrap?.retryAttempt ?? -1)," +
+                "withheld_historical_batches:\(bootstrap?.withheldHistoricalBatchIDs.count ?? 0)," +
+                "frozen_unsent_batches:\(bootstrap?.frozenUnsentBatchIDs.count ?? 0)," +
+                "frozen_local_batches:\(bootstrap?.frozenLocalObligationBatchIDs.count ?? 0)"
+            )
+            guard let bootstrap else { continue }
+            let expectedNoteIDs = Set(bootstrap.snapshot.notes.map(\.id))
+            let missingNoteIDs = expectedNoteIDs.subtracting(
+                bootstrap.sequenceBaselineCoveredNoteIDs
+            )
+            let missingHashes = missingNoteIDs.map { Self.diagnosticHash($0.uuidString) }
+                .sorted().joined(separator: ",")
+            let coverageState: String
+            if !bootstrap.hasSequenceBaselineAcknowledgement {
+                coverageState = "awaiting_acknowledgement"
+            } else if !missingNoteIDs.isEmpty {
+                coverageState = "partial_note_baseline"
+            } else if !bootstrap.ordinarySyncReady {
+                coverageState = "post_baseline_incomplete"
+            } else {
+                coverageState = "complete"
+            }
+            lines.append(
+                "peer[\(index)]_bootstrap_coverage=state:\(coverageState)," +
+                "expected_notes:\(expectedNoteIDs.count)," +
+                "acknowledged_notes:\(bootstrap.sequenceBaselineCoveredNoteIDs.count)," +
+                "missing_notes:\(missingNoteIDs.count)," +
+                "missing_note_hashes:\(missingHashes)," +
+                "manifest_batches:\(bootstrap.coveredBatchIDs.count)"
+            )
+            for (batchIndex, batchID) in bootstrap.withheldHistoricalBatchIDs
+                .sorted(by: { $0.uuidString < $1.uuidString }).enumerated() {
+                let manifestEntry = bootstrap.snapshot.historyCoverage.first {
+                    $0.batchID == batchID
+                }
+                let cause: String
+                if let manifestEntry {
+                    if manifestEntry.noteIDs.isEmpty {
+                        cause = "empty_history"
+                    } else if !manifestEntry.noteIDs.isSubset(
+                        of: bootstrap.sequenceBaselineCoveredNoteIDs
+                    ) {
+                        cause = "missing_note_baseline"
+                    } else {
+                        cause = "unclassified"
+                    }
+                } else {
+                    cause = "absent_from_manifest"
+                }
+                let relatedNoteHashes = manifestEntry.map {
+                    $0.noteIDs.intersection(missingNoteIDs)
+                        .map { Self.diagnosticHash($0.uuidString) }
+                        .sorted().joined(separator: ",")
+                } ?? ""
+                // The frozen batch is already owned by this bootstrap. Inspect its
+                // reference IDs without reading or changing either production store.
+                // This distinguishes an omitted missing-note reference from an
+                // empty history entry without disclosing note content or raw IDs.
+                let frozenBatch = bootstrap.frozenBatch(for: batchID)
+                let referencedNoteIDs = Set(frozenBatch?.changes.map(\.noteID) ?? [])
+                let absentReferenceNoteIDs = referencedNoteIDs.subtracting(expectedNoteIDs)
+                let absentReferenceHashes = absentReferenceNoteIDs
+                    .map { Self.diagnosticHash($0.uuidString) }
+                    .sorted().joined(separator: ",")
+                let frozenOriginHash = frozenBatch.map {
+                    Self.diagnosticHash($0.originDeviceID.uuidString)
+                } ?? "unknown"
+                lines.append(
+                    "peer[\(index)]_withheld[\(batchIndex)]=batch:" +
+                    Self.diagnosticHash(batchID.uuidString) +
+                    ",cause:\(cause),missing_note_hashes:\(relatedNoteHashes)," +
+                    "frozen_origin_hash:\(frozenOriginHash)," +
+                    "frozen_changes:\(frozenBatch?.changes.count ?? -1)," +
+                    "referenced_notes:\(referencedNoteIDs.count)," +
+                    "absent_reference_count:\(absentReferenceNoteIDs.count)," +
+                    "absent_note_hashes:\(absentReferenceHashes)"
+                )
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func diagnosticHash(_ raw: String) -> String {
+        let digest = SHA256.hash(data: Data(("myram.mac.sync-diagnostics.v1:" + raw).utf8))
+        return digest.prefix(16).map { String(format: "%02x", $0) }.joined()
     }
 
     var advertisedBatchSchemaDiscoveryInfo: [String: String] {
@@ -342,12 +571,20 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     ) throws {
         try runtimeConfiguration.requireApplicationSync()
         guard networkingLifecycle != .stopped else { throw CancellationError() }
+        if exclusivePeerCaptureMode {
+            guard exclusiveCaptureSessionIsReady,
+                  peers.count == 1,
+                  peers.first == authorizedCapturePeer?.peerID else {
+                throw CancellationError()
+            }
+        }
         transportDiagnostics.record("application.send", session: session, detail: "bytes=\(data.count)")
         try sendBatchDataOperation(data, peers, mode)
     }
 
     func invite(_ peer: MacSyncDiscoveredPeer) {
-        guard networkingLifecycle != .stopped else { return }
+        guard networkingLifecycle != .stopped, permitsCapturePeer(peer.peerID) else { return }
+        guard !exclusivePeerCaptureMode || connectedPeersProvider().isEmpty else { return }
         guard !connectedPeersProvider().contains(peer.peerID) else {
             lastConnectionEvent = "Connected: \(peer.displayName)"
             return
@@ -445,6 +682,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         _ batch: SyncBatch,
         connectedPeers: [MCPeerID]
     ) async -> Bool {
+        guard !exclusivePeerCaptureMode || exclusiveCaptureSessionIsReady else { return false }
         let eligiblePeers = connectedPeers.filter { peerID in
             let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
             guard peerCapabilityRegistry.isBootstrapCapabilityResolved(
@@ -579,6 +817,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
     private func flushUnsentBatches() async {
         guard applicationSyncEnabled else { return }
+        guard !exclusivePeerCaptureMode || exclusiveCaptureSessionIsReady else { return }
         guard !unsentBatches.isEmpty else { return }
         let connectedPeers = connectedPeersProvider()
 
@@ -622,6 +861,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     private func flushBatchAcknowledgements(forPeerDeviceID peerDeviceID: String) {
+        guard !exclusivePeerCaptureMode || exclusiveCaptureSessionIsReady else { return }
         let connectedPeers = connectedPeersProvider()
         guard let peerID = connectedPeers.first(where: {
             MacSyncPeerIdentity(peerID: $0).deviceID == peerDeviceID
@@ -1325,6 +1565,13 @@ extension MacSyncBatchController: MCSessionDelegate {
         transportDiagnostics.record("session.callback", session: session, peer: peerID, detail: "state=\(state.rawValue)")
         Task { @MainActor in
             guard networkingLifecycle != .stopped else { return }
+            if exclusivePeerCaptureMode &&
+                (!permitsCapturePeer(peerID) ||
+                    (state == .connected && !exclusiveCaptureSessionIsReady)) {
+                lastErrorMessage = "Exclusive peer capture encountered an unexpected connection."
+                stopNetworking()
+                return
+            }
             let identity = MacSyncPeerIdentity(peerID: peerID)
             MyRAMSyncBenchmarkTelemetry.shared.record(
                 .peerConnectionState,
@@ -1368,6 +1615,10 @@ extension MacSyncBatchController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         Task { @MainActor in
             guard networkingLifecycle != .stopped else { return }
+            guard !exclusivePeerCaptureMode ||
+                    (exclusiveCaptureSessionIsReady && permitsCapturePeer(peerID)) else {
+                return
+            }
             transportDiagnostics.record("application.received", session: session, peer: peerID, detail: "bytes=\(data.count)")
             guard applicationSyncEnabled else { return }
             guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
@@ -1456,6 +1707,13 @@ extension MacSyncBatchController {
     private func acceptInvitation(
         from peerID: MCPeerID, context: Data?, handler: (Bool, MCSession?) -> Void
     ) {
+        guard permitsCapturePeer(peerID),
+              !exclusivePeerCaptureMode || connectedPeersProvider().allSatisfy({
+                  $0 == peerID
+              }) else {
+            handler(false, nil)
+            return
+        }
         let identity = MacSyncPeerIdentity(peerID: peerID)
         pendingReplacementInvitations.removeValue(forKey: identity.deviceID)?.handler(false, nil)
         peerCapabilityRegistry.recordInvitationContext(context, forPeerDeviceID: identity.deviceID)
@@ -1476,7 +1734,11 @@ extension MacSyncBatchController: MCNearbyServiceAdvertiserDelegate {
     ) {
         transportDiagnostics.record("invitation.incoming.callback", peer: peerID, owner: advertiser, context: context)
         Task { @MainActor in
-            guard networkingLifecycle != .stopped else {
+            guard networkingLifecycle != .stopped,
+                  permitsCapturePeer(peerID),
+                  !exclusivePeerCaptureMode || connectedPeersProvider().allSatisfy({
+                      $0 == peerID
+                  }) else {
                 invitationHandler(false, nil)
                 return
             }
@@ -1527,7 +1789,9 @@ extension MacSyncBatchController: MCNearbyServiceBrowserDelegate {
                 bootstrapCapabilityResolutionTasks.removeValue(forKey: identity.deviceID)?.cancel()
             }
             transportDiagnostics.record("discovery.found", session: session, peer: peerID)
-            if applicationSyncEnabled, connectedPeersProvider().contains(peerID) {
+            if applicationSyncEnabled, connectedPeersProvider().contains(peerID),
+               (!exclusivePeerCaptureMode ||
+                   (exclusiveCaptureSessionIsReady && permitsCapturePeer(peerID))) {
                 if peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
                     forPeerDeviceID: identity.deviceID
                 ) {
