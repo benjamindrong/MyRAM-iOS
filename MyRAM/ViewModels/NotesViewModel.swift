@@ -1643,6 +1643,18 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
+    func syncConflictForCurrentReview(_ conflict: SyncConflictVersion) -> SyncConflictVersion {
+        do {
+            let current = try syncConflictService.conflictForCurrentReviewChecked(conflict)
+            syncConflicts = syncConflictService.activeConflicts()
+            syncConflictResolutionFailureCode = nil
+            return current
+        } catch {
+            syncConflictResolutionFailureCode = Self.redactedConflictResolutionFailureCode(error)
+            return conflict
+        }
+    }
+
     func markSyncConflictReviewed(_ conflict: SyncConflictVersion, completion: @escaping (Bool) -> Void = { _ in }) {
         performCheckedSyncConflictResolution(conflict, action: .keepLocal, completion: completion)
     }

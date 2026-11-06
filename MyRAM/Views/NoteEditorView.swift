@@ -713,7 +713,7 @@ struct NoteEditorView: View {
                 conflictCount: syncConflicts.count,
                 onOpen: {
                     if let firstConflict = syncConflicts.first {
-                        selectedSyncConflict = firstConflict
+                        selectedSyncConflict = vm.syncConflictForCurrentReview(firstConflict)
                     } else {
                         onOpenSyncConflicts()
                     }

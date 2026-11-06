@@ -8,6 +8,168 @@ import XCTest
 
 @MainActor
 final class MYR184SyncConflictResolutionTests: XCTestCase {
+    func testFreshReviewCanReturnToEarlierExactLocalHistory() throws {
+        let fixture = try makeStructuralResolutionFixture()
+        let initial = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(for: fixture.note, in: fixture.context)
+        _ = try NoteSequenceStateFullBodyIntegration.replaceBody(
+            of: fixture.note, with: "Later local edit", in: fixture.context
+        )
+        try fixture.context.save()
+        let service = MyRAMSyncConflictService(
+            context: fixture.context, store: fixture.store,
+            bootstrapStructuralConflictFileURL: fixture.sidecarURL
+        )
+        let second = try service.conflictForCurrentReviewChecked(fixture.conflict)
+        let edited = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(for: fixture.note, in: fixture.context)
+        _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateAndStructuralFormattingMutation(
+            of: fixture.note, expected: edited, newBody: initial.body,
+            finalState: initial.state, finalMarkState: initial.markState, in: fixture.context
+        )
+        try fixture.context.save()
+        let third = try service.conflictForCurrentReviewChecked(second)
+        XCTAssertNotEqual(third.id, fixture.conflict.id)
+        XCTAssertNotEqual(third.id, second.id)
+        XCTAssertEqual(third.localText, "Local")
+        XCTAssertEqual(try service.conflictForCurrentReviewChecked(third), third)
+        XCTAssertEqual(fixture.store.activeConflicts(), [third])
+        XCTAssertEqual(try fixture.store.bootstrapStructuralConflictRecordChecked(
+            id: second.id, sidecarFileURL: fixture.sidecarURL
+        )?.supersededByConflictID, third.id)
+    }
+
+    func testFreshReviewResumesAfterSidecarCommitBeforeVisibleReplacement() throws {
+        let fixture = try makeStructuralResolutionFixture()
+        _ = try NoteSequenceStateFullBodyIntegration.replaceBody(
+            of: fixture.note, with: "Later local edit", in: fixture.context
+        )
+        try fixture.context.save()
+        var fileIO = SyncBootstrapStructuralConflictFileIO.live
+        fileIO.writeData = { data, url in
+            try data.write(to: url, options: .atomic)
+            throw CocoaError(.fileWriteUnknown)
+        }
+        let interrupted = MyRAMSyncConflictService(
+            context: fixture.context, store: fixture.store,
+            bootstrapStructuralConflictFileURL: fixture.sidecarURL,
+            bootstrapStructuralConflictFileIO: fileIO
+        )
+        XCTAssertThrowsError(try interrupted.conflictForCurrentReviewChecked(fixture.conflict))
+        XCTAssertEqual(fixture.store.activeConflicts(), [fixture.conflict])
+        let prepared = try XCTUnwrap(fixture.store.bootstrapStructuralConflictRecordChecked(
+            noteID: fixture.note.id, sidecarFileURL: fixture.sidecarURL
+        ))
+        XCTAssertEqual(prepared.lifecycle, .preparing)
+        let reopened = MyRAMSyncConflictService(
+            context: fixture.context, store: fixture.store,
+            bootstrapStructuralConflictFileURL: fixture.sidecarURL
+        )
+        let refreshed = try reopened.conflictForCurrentReviewChecked(fixture.conflict)
+        XCTAssertEqual(refreshed.id, prepared.conflictID)
+        XCTAssertEqual(fixture.store.activeConflicts(), [refreshed])
+        XCTAssertEqual(fixture.note.content, "Later local edit")
+    }
+
+    func testFreshReviewResumesAfterVisibleReplacementBeforeActivation() throws {
+        let fixture = try makeStructuralResolutionFixture()
+        _ = try NoteSequenceStateFullBodyIntegration.replaceBody(
+            of: fixture.note, with: "Later local edit", in: fixture.context
+        )
+        try fixture.context.save()
+        var writes = 0
+        var fileIO = SyncBootstrapStructuralConflictFileIO.live
+        fileIO.writeData = { data, url in
+            writes += 1
+            if writes == 2 { throw CocoaError(.fileWriteUnknown) }
+            try data.write(to: url, options: .atomic)
+        }
+        let interrupted = MyRAMSyncConflictService(
+            context: fixture.context, store: fixture.store,
+            bootstrapStructuralConflictFileURL: fixture.sidecarURL,
+            bootstrapStructuralConflictFileIO: fileIO
+        )
+        XCTAssertThrowsError(try interrupted.conflictForCurrentReviewChecked(fixture.conflict))
+        let prepared = try XCTUnwrap(fixture.store.bootstrapStructuralConflictRecordChecked(
+            noteID: fixture.note.id, sidecarFileURL: fixture.sidecarURL
+        ))
+        XCTAssertEqual(prepared.lifecycle, .preparing)
+        let reopened = MyRAMSyncConflictService(
+            context: fixture.context, store: fixture.store,
+            bootstrapStructuralConflictFileURL: fixture.sidecarURL
+        )
+        let refreshed = try reopened.conflictForCurrentReviewChecked(fixture.conflict)
+        XCTAssertEqual(refreshed.id, prepared.conflictID)
+        XCTAssertEqual(fixture.store.activeConflicts(), [refreshed])
+        XCTAssertEqual(fixture.note.content, "Later local edit")
+        XCTAssertNil(try fixture.store.bootstrapStructuralResolutionReceiptChecked(
+            conflictID: refreshed.id, sidecarFileURL: fixture.sidecarURL
+        ))
+    }
+
+    func testFreshReviewDoesNotSupersedePendingResolutionIntent() throws {
+        let fixture = try makeStructuralResolutionFixture()
+        let old = try XCTUnwrap(fixture.store.bootstrapStructuralConflictRecordChecked(
+            id: fixture.conflict.id, sidecarFileURL: fixture.sidecarURL
+        ))
+        try fixture.store.prepareBootstrapStructuralResolutionChecked(
+            conflictID: fixture.conflict.id, choice: .acceptIncoming,
+            chosenFingerprint: old.remoteStructuralFingerprint, sidecarFileURL: fixture.sidecarURL
+        )
+        _ = try NoteSequenceStateFullBodyIntegration.replaceBody(
+            of: fixture.note, with: "Later local edit", in: fixture.context
+        )
+        try fixture.context.save()
+        let before = try Data(contentsOf: fixture.sidecarURL)
+        let service = MyRAMSyncConflictService(
+            context: fixture.context, store: fixture.store,
+            bootstrapStructuralConflictFileURL: fixture.sidecarURL
+        )
+        XCTAssertThrowsError(try service.conflictForCurrentReviewChecked(fixture.conflict))
+        XCTAssertEqual(try Data(contentsOf: fixture.sidecarURL), before)
+        XCTAssertEqual(fixture.store.activeConflicts(), [fixture.conflict])
+        XCTAssertEqual(fixture.note.content, "Later local edit")
+    }
+
+    func testFreshReviewPreservesStaleEpisodeAndRequiresSuccessorChoice() async throws {
+        let fixture = try makeStructuralResolutionFixture()
+        _ = try NoteSequenceStateFullBodyIntegration.replaceBody(
+            of: fixture.note, with: "Later local edit", in: fixture.context
+        )
+        try fixture.context.save()
+        let service = MyRAMSyncConflictService(
+            context: fixture.context, store: fixture.store,
+            bootstrapStructuralConflictFileURL: fixture.sidecarURL
+        )
+        let refreshed = try service.conflictForCurrentReviewChecked(fixture.conflict)
+        XCTAssertNotEqual(refreshed.id, fixture.conflict.id)
+        XCTAssertEqual(refreshed.localText, "Later local edit")
+        XCTAssertEqual(fixture.note.content, "Later local edit", "Opening review cannot choose authority.")
+        let predecessor = try XCTUnwrap(fixture.store.bootstrapStructuralConflictRecordChecked(
+            id: fixture.conflict.id, sidecarFileURL: fixture.sidecarURL
+        ))
+        XCTAssertEqual(predecessor.lifecycle, .supersededReview)
+        XCTAssertEqual(predecessor.localText, "Local")
+        XCTAssertEqual(predecessor.supersededByConflictID, refreshed.id)
+        let current = try XCTUnwrap(fixture.store.bootstrapStructuralConflictRecordChecked(
+            noteID: fixture.note.id, sidecarFileURL: fixture.sidecarURL
+        ))
+        XCTAssertNotNil(current.localStatePayloadData)
+        XCTAssertNil(try fixture.store.bootstrapStructuralResolutionReceiptChecked(
+            conflictID: refreshed.id, sidecarFileURL: fixture.sidecarURL
+        ))
+        do {
+            _ = try await service.acceptIncomingChecked(fixture.conflict, activeNoteID: nil)
+            XCTFail("An old review cannot authorize the successor.")
+        } catch {}
+        XCTAssertEqual(fixture.note.content, "Later local edit")
+        XCTAssertEqual(try service.conflictForCurrentReviewChecked(refreshed), refreshed)
+        _ = try await service.acceptIncomingChecked(refreshed, activeNoteID: nil)
+        XCTAssertEqual(fixture.note.content, "Remote")
+        XCTAssertTrue(fixture.store.activeConflicts().isEmpty)
+        XCTAssertEqual(try fixture.store.bootstrapStructuralResolutionReceiptChecked(
+            conflictID: refreshed.id, sidecarFileURL: fixture.sidecarURL
+        )?.rejectedFingerprint, current.localStructuralFingerprint)
+    }
+
     func testResolutionDiagnosticNeverIncludesAssociatedNoteText() {
         XCTAssertEqual(
             NotesViewModel.redactedConflictResolutionFailureCode(
