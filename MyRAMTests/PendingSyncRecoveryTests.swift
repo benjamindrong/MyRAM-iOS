@@ -1913,6 +1913,11 @@ final class NotesListStateBootstrapTests: XCTestCase {
         XCTAssertNotNil(state.syncRecoveryMessage)
         XCTAssertTrue(state.vm.notes.contains { $0.id == healthyNote.id })
         XCTAssertTrue(state.vm.notes.contains { $0.id == protectedID })
+        // Recovery must remain reachable when the normal folder/search projection
+        // does not contain the affected note.
+        state.vm.notes = [healthyNote]
+        XCTAssertEqual(state.protectedNotes.map(\.id), [protectedID])
+        XCTAssertEqual(state.protectedNotes.first?.content, "Newer saved text")
 
         state.vm.renameNote(healthyNote, to: "Edited safely")
         XCTAssertEqual(healthyNote.title, "Edited safely")

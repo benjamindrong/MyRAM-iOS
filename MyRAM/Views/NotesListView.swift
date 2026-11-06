@@ -127,6 +127,12 @@ final class NotesListState: ObservableObject {
         }
     }
 
+    // Resolve from the authoritative IDs, independent of folder/search visibility.
+    var protectedNotes: [Note] {
+        divergentNoteIDs.sorted { $0.uuidString < $1.uuidString }
+            .compactMap { vm.refreshedNote(withID: $0) }
+    }
+
     func didCompleteProtectedNoteResolution(_ noteID: UUID) async {
         divergentNoteIDs.remove(noteID)
         vm.isolateDivergentNoteIDs(divergentNoteIDs)
@@ -280,6 +286,7 @@ struct NotesListView: View {
     @State private var rootTitleUndoHistory: [String] = []
     @State private var rootTitleRedoHistory: [String] = []
     @State private var showingListUndoRedoActions = false
+    @State private var showingProtectedNotes = false
     @State private var showingNearbySync = false
     @State private var searchText = ""
     @State private var searchScope: NotesSearchScope = .allNotes
@@ -322,10 +329,17 @@ struct NotesListView: View {
                     if let message = state.syncRecoveryMessage {
                         HStack {
                             Text(message).font(.footnote)
-                            Button("Retry Sync") {
-                                Task { @MainActor in await state.bootstrapAfterRecovery() }
+                            if !state.divergentNoteIDs.isEmpty {
+                                Button("Review protected notes") {
+                                    showingProtectedNotes = true
+                                }
+                                .accessibilityIdentifier("startup-review-protected-notes")
+                            } else {
+                                Button("Retry Sync") {
+                                    Task { @MainActor in await state.bootstrapAfterRecovery() }
+                                }
+                                .accessibilityIdentifier("startup-retry-sync")
                             }
-                            .accessibilityIdentifier("startup-retry-sync")
                         }
                         .padding()
                         .accessibilityIdentifier("startup-sync-paused")
@@ -333,6 +347,31 @@ struct NotesListView: View {
                     readyContent
                 }
                 .disabled(state.isBootstrapping)
+            }
+        }
+        .sheet(isPresented: $showingProtectedNotes) {
+            NavigationStack {
+                List(state.protectedNotes) { note in
+                    NavigationLink {
+                        DivergentNoteReadOnlyView(
+                            note: note, vm: vm, syncController: syncController,
+                            onCompleted: { noteID in
+                                await state.didCompleteProtectedNoteResolution(noteID)
+                                if state.divergentNoteIDs.isEmpty {
+                                    showingProtectedNotes = false
+                                }
+                            }
+                        )
+                    } label: {
+                        Text(note.title.isEmpty ? "Untitled" : note.title)
+                    }
+                }
+                .navigationTitle("Protected Notes")
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showingProtectedNotes = false }
+                    }
+                }
             }
         }
         .fileImporter(
