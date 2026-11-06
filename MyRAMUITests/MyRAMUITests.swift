@@ -17,6 +17,24 @@ final class MyRAMUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func testReadOnlyDiagnosticsContainCapturedStateOnFirstPresentation() throws {
+        let app = makeApp()
+        app.launch()
+        let status = findElement("sync-status-indicator", in: app)
+        XCTAssertTrue(status.waitForExistence(timeout: Timeout.standard))
+        status.tap()
+        let diagnostics = app.buttons["ios-sync-readonly-diagnostics"]
+        XCTAssertTrue(diagnostics.waitForExistence(timeout: Timeout.standard))
+        diagnostics.tap()
+        let snapshot = app.staticTexts.matching(NSPredicate(
+            format: "label CONTAINS %@", "schema=myram.iphone.sync-diagnostics.v1"
+        )).firstMatch
+        XCTAssertTrue(snapshot.waitForExistence(timeout: Timeout.standard), "First presentation must show the captured diagnostic snapshot.")
+        XCTAssertTrue(snapshot.label.contains("networking_started="))
+        XCTAssertTrue(snapshot.label.contains("unsent_count="))
+        XCTAssertTrue(app.buttons["ios-sync-copy-diagnostics"].exists)
+    }
+
     /// Opt-in physical acceptance against the preserved Verification fixture.
     /// Uses the installed app and its ordinary restoration flow, without a test store or reset.
     func testMYR233PhysicalRetainedNoteRestoration() throws {

@@ -2,6 +2,10 @@ import SwiftUI
 import UIKit
 
 struct NearbySyncView: View {
+    private struct DiagnosticsCapture: Identifiable {
+        let id = UUID()
+        let text: String
+    }
     struct ResetAvailability: Equatable {
         let isAvailable: Bool
         let unavailableReason: String?
@@ -15,8 +19,7 @@ struct NearbySyncView: View {
     let resetAvailability: ResetAvailability
     let prepareEditorState: () async throws -> Void
     @State private var showingResetConfirmation = false
-    @State private var showingSyncDiagnostics = false
-    @State private var capturedSyncDiagnostics = ""
+    @State private var capturedSyncDiagnostics: DiagnosticsCapture?
 
     var body: some View {
         ScrollView {
@@ -39,8 +42,7 @@ struct NearbySyncView: View {
 
                 section("Advanced") {
                     Button("Sync diagnostics (read only)") {
-                        capturedSyncDiagnostics = syncController.readOnlySyncDiagnostics
-                        showingSyncDiagnostics = true
+                        capturedSyncDiagnostics = DiagnosticsCapture(text: syncController.readOnlySyncDiagnostics)
                     }
                     .buttonStyle(.bordered)
                     .accessibilityIdentifier("ios-sync-readonly-diagnostics")
@@ -109,10 +111,10 @@ struct NearbySyncView: View {
             .padding(16)
         }
         .background(style.appBackgroundColor.ignoresSafeArea())
-        .sheet(isPresented: $showingSyncDiagnostics) {
+        .sheet(item: $capturedSyncDiagnostics) { capture in
             NavigationStack {
                 ScrollView {
-                    Text(capturedSyncDiagnostics)
+                    Text(capture.text)
                         .font(.system(.caption, design: .monospaced))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -122,12 +124,12 @@ struct NearbySyncView: View {
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
                         Button("Close") {
-                            showingSyncDiagnostics = false
+                            capturedSyncDiagnostics = nil
                         }
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Copy diagnostics") {
-                            UIPasteboard.general.string = capturedSyncDiagnostics
+                            UIPasteboard.general.string = capture.text
                         }
                         .accessibilityIdentifier("ios-sync-copy-diagnostics")
                     }
