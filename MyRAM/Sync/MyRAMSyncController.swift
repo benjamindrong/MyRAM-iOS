@@ -247,7 +247,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     @Published private(set) var pendingSyncStatus = PendingSyncStatus.empty
     @Published private(set) var lastSyncAt: Date?
     @Published private(set) var lastErrorMessage: String?
-    @Published private(set) var lastConnectionEvent = "Browsing for nearby MyRAM devices"
+    @Published private(set) var lastConnectionEvent = "Networking has not started"
 
     let localPeerName: String
     var onChangesReceived: (([SyncChange]) async -> [LegacyIncomingChangeResult])?
@@ -371,6 +371,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         guard !runtimeConfiguration.isOfflineRestoreVerification else { return }
         guard !hasStartedNetworking else { return }
         hasStartedNetworking = true
+        lastConnectionEvent = "Browsing for nearby MyRAM devices"
         transportDiagnostics.record("networking.start", session: session)
         advertiser.startAdvertisingPeer()
         browser.startBrowsingForPeers()
@@ -404,6 +405,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     var readOnlySyncDiagnostics: String {
         var lines = [
             "schema=myram.iphone.sync-diagnostics.v1",
+            "networking_started=\(hasStartedNetworking)",
+            "available_peer_count=\(availablePeers.count)",
             "session_connected_count=\(session.connectedPeers.count)",
             "published_connected_count=\(connectedPeers.count)",
             "unsent_count=\(unsentBatches.pendingCount)",

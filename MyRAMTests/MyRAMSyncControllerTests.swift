@@ -6,6 +6,15 @@ import XCTest
 
 @MainActor
 final class MyRAMSyncControllerTests: XCTestCase {
+    func testMYR238DeferredNetworkingDoesNotClaimDiscoveryStarted() throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        XCTAssertEqual(controller.lastConnectionEvent, "Networking has not started")
+        XCTAssertTrue(controller.readOnlySyncDiagnostics.contains("networking_started=false"))
+        XCTAssertTrue(controller.readOnlySyncDiagnostics.contains("available_peer_count=0"))
+        XCTAssertTrue(transport.invitedPeerIDs.isEmpty)
+    }
+
     func testMYR233ReplacementInvitationWaitsForOutstandingAttemptToFinish() throws {
         var tracker = TrustedPeerReconnectTracker()
         let oldPeer = MCPeerID(displayName: "Remote|same-device")
