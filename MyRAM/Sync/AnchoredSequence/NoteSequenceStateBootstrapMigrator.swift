@@ -309,7 +309,7 @@ final class NoteLocalDivergenceEvidenceStore {
         expectedPreviousIntent: NoteLocalDivergenceResolutionIntent?,
         choice: NoteLocalDivergenceResolutionChoice,
         checkedBy migrator: NoteSequenceStateBootstrapMigrator
-    ) throws -> Bool {
+    ) throws -> (inserted: Bool, intent: NoteLocalDivergenceResolutionIntent) {
         guard try migrator.revalidateDivergenceSnapshot(snapshot) else {
             throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
         }
@@ -336,7 +336,7 @@ final class NoteLocalDivergenceEvidenceStore {
                 guard existing == proposed else {
                     throw NoteLocalDivergenceEvidenceStoreError.conflictingResolution
                 }
-                return false
+                return (false, existing)
             }
         }
         envelope.resolutionIntents = (envelope.resolutionIntents ?? []) + [proposed]
@@ -346,7 +346,7 @@ final class NoteLocalDivergenceEvidenceStore {
         guard try migrator.revalidateDivergenceSnapshot(snapshot) else {
             throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
         }
-        return true
+        return (true, proposed)
     }
 
     func preparedResolution(for noteID: UUID) throws -> NoteLocalDivergenceResolutionIntent? {

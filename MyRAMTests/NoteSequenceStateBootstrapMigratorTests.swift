@@ -373,13 +373,14 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
             choice: .keepSavedBody,
             checkedBy: migrator
         )
-        XCTAssertTrue(prepared)
+        XCTAssertTrue(prepared.inserted)
         let repeated = try await store.prepareOwnerSelectedResolution(
             snapshot: snapshot, expectedPreviousIntent: try await store.preparedResolution(for: snapshot.noteID),
             choice: .keepSavedBody,
             checkedBy: migrator
         )
-        XCTAssertFalse(repeated)
+        XCTAssertFalse(repeated.inserted)
+        XCTAssertEqual(repeated.intent, prepared.intent)
         let restarted = await NoteLocalDivergenceEvidenceStore(fileURL: url)
         let stillUnfinished = try await restarted.hasUnfinishedResolutionIntents()
         XCTAssertTrue(stillUnfinished)
@@ -426,7 +427,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
             choice: .keepAnchoredHistory,
             checkedBy: migrator
         )
-        XCTAssertTrue(firstPrepared)
+        XCTAssertTrue(firstPrepared.inserted)
         do {
             _ = try await store.prepareOwnerSelectedResolution(
                 snapshot: snapshot, expectedPreviousIntent: try await store.preparedResolution(for: snapshot.noteID),

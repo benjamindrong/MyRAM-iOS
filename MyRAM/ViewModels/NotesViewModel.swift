@@ -523,10 +523,10 @@ final class NotesViewModel: ObservableObject {
         )
         // Only make an immutable owner choice after every queue has passed
         // its health, admission and duplicate-identity checks.
-        _ = try await evidenceStore.prepareOwnerSelectedResolution(
+        let preparation = try await evidenceStore.prepareOwnerSelectedResolution(
             snapshot: snapshot, expectedPreviousIntent: expectedIntent, choice: choice, checkedBy: migrator
         )
-        let preparedIntent = try await evidenceStore.preparedResolution(for: noteID)
+        let preparedIntent = preparation.intent
         _ = try await evidenceStore.prepareQueueOwnership(
             for: snapshot, intent: preparedIntent, ownership: ownership, checkedBy: migrator
         )
@@ -640,8 +640,10 @@ final class NotesViewModel: ObservableObject {
             throw PendingSyncRecoveryCoordinator.RecoveryError.pendingLocalEditsNotDurable
         }
         context.rollback()
-        guard let fresh = fetchNote(withID: noteID),
-              let prepared = try await evidenceStore.preparedCommit(for: noteID),
+        let completed = try await evidenceStore.preparedInspection(for: noteID)
+        guard completed?.intent == intent, completed?.completed == true,
+              let fresh = fetchNote(withID: noteID),
+              prepared.intent == intent,
               fresh.content == prepared.finalBody,
               fresh.richTextContentData == nil else {
             throw NoteSequenceStateStoreError.verificationFailure
