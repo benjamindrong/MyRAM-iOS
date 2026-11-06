@@ -189,6 +189,8 @@ final class NotesViewModel: ObservableObject {
     @Published var currentNote: Note? = nil
     @Published var currentFolder: Folder? = nil
     @Published private(set) var syncConflicts: [SyncConflictVersion] = []
+    @Published private(set) var syncConflictResolutionFailureCode: String?
+    @Published private(set) var isResolvingSyncConflict = false
     @Published private(set) var activeEditorSyncUpdate: ActiveEditorSyncUpdate?
     @Published private(set) var syncBatchErrorMessage: String?
     @Published private(set) var pendingSyncRecoveryStatus: PendingSyncRecoveryStatus = .idle
@@ -258,6 +260,7 @@ final class NotesViewModel: ObservableObject {
         context: ModelContext,
         syncController: MyRAMSyncControlling? = nil,
         syncConflictStore: SyncConflictStore = SyncConflictStore(),
+        bootstrapStructuralConflictFileURL: URL = SyncConflictStore.defaultBootstrapStructuralConflictFileURL(),
         pendingIncomingBatchQueueFileURL: URL? = NotesViewModel.pendingIncomingBatchQueueFileURL(),
         pendingIncomingBatchQueueLimit: Int = 100,
         anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore? = nil,
@@ -299,6 +302,7 @@ final class NotesViewModel: ObservableObject {
         syncConflictService = MyRAMSyncConflictService(
             context: context,
             store: syncConflictStore,
+            bootstrapStructuralConflictFileURL: bootstrapStructuralConflictFileURL,
             saveOperation: { _ in try resolvedSaveContext() }
         )
         self.syncController?.onChangesReceived = { [weak self] changes in
@@ -1639,16 +1643,16 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    func markSyncConflictReviewed(_ conflict: SyncConflictVersion) {
-        performCheckedSyncConflictResolution(conflict, action: .keepLocal)
+    func markSyncConflictReviewed(_ conflict: SyncConflictVersion, completion: @escaping (Bool) -> Void = { _ in }) {
+        performCheckedSyncConflictResolution(conflict, action: .keepLocal, completion: completion)
     }
 
-    func restoreSyncConflict(_ conflict: SyncConflictVersion) {
-        performCheckedSyncConflictResolution(conflict, action: .acceptIncoming)
+    func restoreSyncConflict(_ conflict: SyncConflictVersion, completion: @escaping (Bool) -> Void = { _ in }) {
+        performCheckedSyncConflictResolution(conflict, action: .acceptIncoming, completion: completion)
     }
 
-    func saveMergedSyncConflict(_ conflict: SyncConflictVersion, mergedText: String) {
-        performCheckedSyncConflictResolution(conflict, action: .merged(mergedText))
+    func saveMergedSyncConflict(_ conflict: SyncConflictVersion, mergedText: String, completion: @escaping (Bool) -> Void = { _ in }) {
+        performCheckedSyncConflictResolution(conflict, action: .merged(mergedText), completion: completion)
     }
 
     func discardSyncConflict(_ conflict: SyncConflictVersion) {
@@ -1663,10 +1667,18 @@ final class NotesViewModel: ObservableObject {
 
     private func performCheckedSyncConflictResolution(
         _ conflict: SyncConflictVersion,
-        action: CheckedSyncConflictAction
+        action: CheckedSyncConflictAction,
+        completion: @escaping (Bool) -> Void = { _ in }
     ) {
+        guard !isResolvingSyncConflict else {
+            completion(false)
+            return
+        }
+        isResolvingSyncConflict = true
         Task { @MainActor [weak self] in
             guard let self else { return }
+            defer { isResolvingSyncConflict = false }
+            syncConflictResolutionFailureCode = nil
             let publisher: ((MyRAMSyncConflictPayload) async throws -> Void)? = syncController.map { controller in
                 { payload in try await controller.publishConflictResolutionChecked(payload) }
             }
@@ -1695,6 +1707,8 @@ final class NotesViewModel: ObservableObject {
                 }
             } catch {
                 syncConflicts = syncConflictService.activeConflicts()
+                syncConflictResolutionFailureCode = Self.redactedConflictResolutionFailureCode(error)
+                completion(false)
                 return
             }
             syncConflicts = result.conflicts
@@ -1706,7 +1720,35 @@ final class NotesViewModel: ObservableObject {
                 await bootstrapController.resumeBootstrapAfterConflictResolution()
             }
             resumePendingConvergencePresentationIfNeeded()
+            syncConflictResolutionFailureCode = nil
+            completion(true)
         }
+    }
+
+    func clearSyncConflictResolutionFailure() {
+        syncConflictResolutionFailureCode = nil
+    }
+
+    static func redactedConflictResolutionFailureCode(_ error: Error) -> String {
+        if let failure = error as? MyRAMSyncConflictResolutionError {
+            return String(describing: failure)
+        }
+        if let failure = error as? SyncBootstrapStructuralConflictStoreError {
+            return "structuralStore." + String(describing: failure)
+        }
+        if let failure = error as? NoteSequenceStateStoreError {
+            // Associated values can contain entire note bodies or identities.
+            switch failure {
+            case .visibleBodyChanged: return "localHistory.visibleBodyChanged"
+            case .corruptState: return "localHistory.corruptState"
+            case .corruptMarkState: return "localHistory.corruptMarkState"
+            case .expectedRowButRowIsMissing: return "localHistory.missingRow"
+            case .staleRevision: return "localHistory.staleRevision"
+            case .staleMarkRevision: return "localHistory.staleMarkRevision"
+            default: return "localHistory.validationFailed"
+            }
+        }
+        return "resolutionFailed"
     }
 
     func addPhotoAttachment(to note: Note, imageData: Data) {

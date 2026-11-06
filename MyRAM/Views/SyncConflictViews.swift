@@ -133,6 +133,7 @@ struct SyncConflictReviewList: View {
 struct SyncConflictDetailView: View {
     let conflict: SyncConflictVersion
     let localText: String
+    var isResolving = false
     let onClose: () -> Void
     let onCopy: () -> Void
     let onRestore: () -> Void
@@ -289,6 +290,7 @@ struct SyncConflictDetailView: View {
 #endif
         }
         .controlSize(.regular)
+        .disabled(isResolving)
         .padding(.top, 4)
     }
 

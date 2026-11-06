@@ -381,6 +381,7 @@ struct NoteEditorView: View {
         SyncConflictDetailView(
             conflict: conflict,
             localText: vm.localText(forSyncConflict: conflict),
+            isResolving: vm.isResolvingSyncConflict,
             onClose: {
                 selectedSyncConflict = nil
             },
@@ -388,19 +389,30 @@ struct NoteEditorView: View {
                 copySyncConflict(conflict)
             },
             onRestore: {
-                selectedSyncConflict = nil
-                vm.restoreSyncConflict(conflict)
+                vm.restoreSyncConflict(conflict) { succeeded in
+                    if succeeded { selectedSyncConflict = nil }
+                }
             },
             onReview: {
-                selectedSyncConflict = nil
-                vm.markSyncConflictReviewed(conflict)
+                vm.markSyncConflictReviewed(conflict) { succeeded in
+                    if succeeded { selectedSyncConflict = nil }
+                }
             },
             onSaveMerged: { mergedText in
-                selectedSyncConflict = nil
-                vm.saveMergedSyncConflict(conflict, mergedText: mergedText)
+                vm.saveMergedSyncConflict(conflict, mergedText: mergedText) { succeeded in
+                    if succeeded { selectedSyncConflict = nil }
+                }
             }
         )
         .syncConflictPresentationSizing()
+        .alert("Unable to Resolve Version", isPresented: Binding(
+            get: { vm.syncConflictResolutionFailureCode != nil },
+            set: { if !$0 { vm.clearSyncConflictResolutionFailure() } }
+        )) {
+            Button("OK", role: .cancel) { vm.clearSyncConflictResolutionFailure() }
+        } message: {
+            Text("The conflict remains preserved. Recovery could not complete: \(vm.syncConflictResolutionFailureCode ?? "resolutionFailed").")
+        }
     }
 
     private var editorContent: some View {

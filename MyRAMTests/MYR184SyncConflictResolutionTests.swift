@@ -8,6 +8,72 @@ import XCTest
 
 @MainActor
 final class MYR184SyncConflictResolutionTests: XCTestCase {
+    func testResolutionDiagnosticNeverIncludesAssociatedNoteText() {
+        XCTAssertEqual(
+            NotesViewModel.redactedConflictResolutionFailureCode(
+                NoteSequenceStateStoreError.visibleBodyChanged(expected: "private original", actual: "private edit")
+            ),
+            "localHistory.visibleBodyChanged"
+        )
+    }
+
+    func testResolutionReportsSuccessOnlyAfterDurableReceipt() async throws {
+        let fixture = try makeStructuralResolutionFixture()
+        let vm = NotesViewModel(
+            context: fixture.context,
+            syncConflictStore: fixture.store,
+            bootstrapStructuralConflictFileURL: fixture.sidecarURL,
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false
+        )
+        let finished = expectation(description: "durable resolution completed")
+        vm.restoreSyncConflict(fixture.conflict) { succeeded in
+            XCTAssertTrue(succeeded)
+            XCTAssertNotNil(try? fixture.store.bootstrapStructuralResolutionReceiptChecked(
+                conflictID: fixture.conflict.id, sidecarFileURL: fixture.sidecarURL
+            ))
+            finished.fulfill()
+        }
+        XCTAssertTrue(vm.isResolvingSyncConflict)
+        vm.restoreSyncConflict(fixture.conflict) { succeeded in
+            XCTAssertFalse(succeeded, "A repeated tap must not start another operation or replace its outcome.")
+        }
+        await fulfillment(of: [finished], timeout: 5)
+        XCTAssertFalse(vm.isResolvingSyncConflict)
+        XCTAssertNil(vm.syncConflictResolutionFailureCode)
+        XCTAssertTrue(fixture.store.activeConflicts().isEmpty)
+        XCTAssertEqual(fixture.note.content, "Remote")
+    }
+
+    func testResolutionFailureRemainsVisibleWithoutSuccessfulCompletion() async throws {
+        let fixture = try makeStructuralResolutionFixture()
+        _ = try NoteSequenceStateFullBodyIntegration.replaceBody(
+            of: fixture.note, with: "Later local edit", in: fixture.context
+        )
+        try fixture.context.save()
+        let vm = NotesViewModel(
+            context: fixture.context,
+            syncConflictStore: fixture.store,
+            bootstrapStructuralConflictFileURL: fixture.sidecarURL,
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false
+        )
+        let finished = expectation(description: "checked resolution completed")
+        vm.restoreSyncConflict(fixture.conflict) { succeeded in
+            XCTAssertFalse(succeeded, "The review must not dismiss as successful after a failed resolution.")
+            finished.fulfill()
+        }
+        await fulfillment(of: [finished], timeout: 5)
+        XCTAssertEqual(vm.syncConflictResolutionFailureCode, "staleStructuralConflict")
+        XCTAssertEqual(fixture.note.content, "Later local edit")
+        XCTAssertEqual(fixture.store.activeConflicts(), [fixture.conflict])
+        XCTAssertNil(try fixture.store.bootstrapStructuralResolutionReceiptChecked(
+            conflictID: fixture.conflict.id, sidecarFileURL: fixture.sidecarURL
+        ))
+    }
+
     func testMYR222NonMergeableBootstrapRequiresDurableStructuralConflict() throws {
         let schema = Schema(MyRAMModelRegistry.models)
         let configuration = ModelConfiguration(
