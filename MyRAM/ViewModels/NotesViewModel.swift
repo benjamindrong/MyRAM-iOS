@@ -432,28 +432,28 @@ final class NotesViewModel: ObservableObject {
         evidenceStore: NoteLocalDivergenceEvidenceStore
     ) async throws -> (
         snapshot: NoteLocalDivergenceSnapshot,
-        selected: NoteLocalDivergenceResolutionChoice?
+        selected: NoteLocalDivergenceResolutionChoice?,
+        intent: NoteLocalDivergenceResolutionIntent?
     ) {
         guard startupQuarantinedNoteIDs.contains(noteID) else {
             throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
         }
-        let chosen = try await evidenceStore.preparedResolution(for: noteID)
-        let snapshots = try await evidenceStore.snapshots(for: noteID)
-        let snapshot: NoteLocalDivergenceSnapshot
-        if let chosen, snapshots.indices.contains(chosen.evidenceIndex) {
-            snapshot = snapshots[chosen.evidenceIndex]
-        } else if let current = try await NoteSequenceStateBootstrapMigrator(
+        let inspection = try await evidenceStore.preparedInspection(for: noteID)
+        if inspection?.completed == true, let current = try await NoteSequenceStateBootstrapMigrator(
             container: context.container
         ).validatedDivergenceSnapshot(noteID: noteID) {
-            snapshot = current
-        } else if let retained = snapshots.last {
-            // A partially committed body can now agree with its history; the
-            // frozen evidence remains readable without pretending completion.
-            snapshot = retained
-        } else {
-            throw NoteLocalDivergenceEvidenceStoreError.snapshotNotPreserved
+            // A historical receipt cannot choose authority for a later incident.
+            return (current, nil, inspection?.intent)
         }
-        return (snapshot, chosen?.choice)
+        if let inspection {
+            return (inspection.snapshot, inspection.intent.choice, inspection.intent)
+        }
+        if let current = try await NoteSequenceStateBootstrapMigrator(
+            container: context.container
+        ).validatedDivergenceSnapshot(noteID: noteID) {
+            return (current, nil, nil)
+        }
+        throw NoteLocalDivergenceEvidenceStoreError.snapshotNotPreserved
     }
 
     private func localResolutionCoordinator(
@@ -488,6 +488,8 @@ final class NotesViewModel: ObservableObject {
     /// suspended until a separate complete recovery protocol is verified.
     func prepareProtectedLocalDivergenceChoice(
         noteID: UUID,
+        expectedSnapshot: NoteLocalDivergenceSnapshot,
+        expectedIntent: NoteLocalDivergenceResolutionIntent?,
         choice: NoteLocalDivergenceResolutionChoice,
         queueAdmin: PendingSyncQueueAdministrating,
         evidenceStore: NoteLocalDivergenceEvidenceStore
@@ -505,6 +507,11 @@ final class NotesViewModel: ObservableObject {
             throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
         }
 
+        guard snapshot == expectedSnapshot,
+              try await evidenceStore.preparedResolution(for: noteID) == expectedIntent else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+
         // Persist the immutable note/formatting/CRDT preimage first. A failed
         // subsequent step leaves it retained, never replaced or discarded.
         _ = try await evidenceStore.preserve(snapshot, checkedBy: migrator)
@@ -517,12 +524,13 @@ final class NotesViewModel: ObservableObject {
         // Only make an immutable owner choice after every queue has passed
         // its health, admission and duplicate-identity checks.
         _ = try await evidenceStore.prepareOwnerSelectedResolution(
-            snapshot: snapshot, choice: choice, checkedBy: migrator
+            snapshot: snapshot, expectedPreviousIntent: expectedIntent, choice: choice, checkedBy: migrator
         )
+        let preparedIntent = try await evidenceStore.preparedResolution(for: noteID)
         _ = try await evidenceStore.prepareQueueOwnership(
-            for: snapshot, ownership: ownership, checkedBy: migrator
+            for: snapshot, intent: preparedIntent, ownership: ownership, checkedBy: migrator
         )
-        _ = try await evidenceStore.prepareCommit(for: snapshot, checkedBy: migrator)
+        _ = try await evidenceStore.prepareCommit(for: snapshot, intent: preparedIntent, checkedBy: migrator)
         try await coordinator.requireUnchangedLocalResolutionQueueOwnership(
             ownership, incomingSnapshot: pendingIncomingBatches.snapshot()
         )
@@ -536,6 +544,7 @@ final class NotesViewModel: ObservableObject {
     /// unresolved saved-body operations remain protected across restart.
     func completeProtectedLocalDivergence(
         noteID: UUID,
+        expectedIntent: NoteLocalDivergenceResolutionIntent?,
         queueAdmin: PendingSyncQueueAdministrating,
         evidenceStore: NoteLocalDivergenceEvidenceStore
     ) async throws {
@@ -556,6 +565,9 @@ final class NotesViewModel: ObservableObject {
 
         guard let intent = try await evidenceStore.preparedResolution(for: noteID) else {
             throw NoteLocalDivergenceEvidenceStoreError.unresolvedResolutionIntent
+        }
+        guard intent == expectedIntent else {
+            throw NoteLocalDivergenceEvidenceStoreError.conflictingResolution
         }
         guard let queue = try await evidenceStore.preparedQueueOwnership(for: noteID),
               queue.intent == intent,
@@ -592,7 +604,7 @@ final class NotesViewModel: ObservableObject {
             incomingSnapshot: pendingIncomingBatches.snapshot()
         )
         _ = try await evidenceStore.commitPreparedNote(
-            for: snapshot,
+            for: snapshot, intent: intent,
             checkedBy: migrator,
             recaptureQueueOwnership: { [weak self] in
                 guard let self else {
@@ -604,7 +616,7 @@ final class NotesViewModel: ObservableObject {
             }
         )
         _ = try await evidenceStore.finalizePreparedQueuePreservingResolution(
-            for: snapshot,
+            for: snapshot, intent: intent,
             checkedBy: migrator,
             verifyQueueOwnership: { [weak self] in
                 guard let self else {

@@ -861,7 +861,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
         )
         do {
             try await vm.prepareProtectedLocalDivergenceChoice(
-                noteID: noteID, choice: .keepAnchoredHistory,
+                noteID: noteID, expectedSnapshot: (try await vm.inspectProtectedLocalDivergence(noteID: noteID, evidenceStore: store)).snapshot, expectedIntent: try await store.preparedResolution(for: noteID), choice: .keepAnchoredHistory,
                 queueAdmin: admin, evidenceStore: store
             )
             XCTFail("Unreadable queue must not freeze an owner decision")
@@ -874,7 +874,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
             pendingBatches: [], health: .healthy
         )
         try await vm.prepareProtectedLocalDivergenceChoice(
-            noteID: noteID, choice: .keepAnchoredHistory,
+            noteID: noteID, expectedSnapshot: (try await vm.inspectProtectedLocalDivergence(noteID: noteID, evidenceStore: store)).snapshot, expectedIntent: try await store.preparedResolution(for: noteID), choice: .keepAnchoredHistory,
             queueAdmin: admin, evidenceStore: store
         )
         let inspection = try await vm.inspectProtectedLocalDivergence(
@@ -900,12 +900,12 @@ final class PendingSyncRecoveryTests: XCTestCase {
         ).first { $0.id == noteID }).content, "Saved owner text")
 
         try await vm.prepareProtectedLocalDivergenceChoice(
-            noteID: noteID, choice: .keepAnchoredHistory,
+            noteID: noteID, expectedSnapshot: (try await vm.inspectProtectedLocalDivergence(noteID: noteID, evidenceStore: store)).snapshot, expectedIntent: try await store.preparedResolution(for: noteID), choice: .keepAnchoredHistory,
             queueAdmin: admin, evidenceStore: store
         )
         do {
             try await vm.prepareProtectedLocalDivergenceChoice(
-                noteID: noteID, choice: .keepSavedBody,
+                noteID: noteID, expectedSnapshot: (try await vm.inspectProtectedLocalDivergence(noteID: noteID, evidenceStore: store)).snapshot, expectedIntent: try await store.preparedResolution(for: noteID), choice: .keepSavedBody,
                 queueAdmin: admin, evidenceStore: store
             )
             XCTFail("An explicit owner choice must not be silently replaced")
@@ -921,7 +921,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
         )
         do {
             try await vm.completeProtectedLocalDivergence(
-                noteID: noteID, queueAdmin: admin, evidenceStore: store
+                noteID: noteID, expectedIntent: try await store.preparedResolution(for: noteID), queueAdmin: admin, evidenceStore: store
             )
             XCTFail("Changed queue ownership must block final resolution")
         } catch let error as PendingSyncRecoveryCoordinator.RecoveryError {
@@ -935,11 +935,44 @@ final class PendingSyncRecoveryTests: XCTestCase {
             pendingBatches: [], health: .healthy
         )
         try await vm.completeProtectedLocalDivergence(
-            noteID: noteID, queueAdmin: admin, evidenceStore: store
+            noteID: noteID, expectedIntent: try await store.preparedResolution(for: noteID), queueAdmin: admin, evidenceStore: store
         )
         let stillUnfinished = try await store.hasUnfinishedResolutionIntents()
         XCTAssertFalse(stillUnfinished)
         XCTAssertEqual(vm.refreshedNote(withID: noteID)?.content, "Original anchored text")
+        let oldIntent = try await store.preparedResolution(for: noteID)
+        let laterContext = ModelContext(container)
+        let laterNote = try XCTUnwrap(laterContext.fetch(FetchDescriptor<Note>())
+            .first { $0.id == noteID })
+        laterNote.content = "A later saved divergence"
+        try laterContext.save()
+        vm.isolateDivergentNoteIDs([noteID])
+        let laterInspection = try await vm.inspectProtectedLocalDivergence(
+            noteID: noteID, evidenceStore: store
+        )
+        XCTAssertNil(laterInspection.selected, "A prior receipt must not choose for a new incident")
+        XCTAssertEqual(laterInspection.intent, oldIntent)
+        XCTAssertEqual(laterInspection.snapshot.savedBody, "A later saved divergence")
+        do {
+            try await vm.prepareProtectedLocalDivergenceChoice(
+                noteID: noteID, expectedSnapshot: inspection.snapshot,
+                expectedIntent: oldIntent, choice: .keepAnchoredHistory,
+                queueAdmin: admin, evidenceStore: store
+            )
+            XCTFail("An old review screen cannot approve fresh content")
+        } catch let error as NoteLocalDivergenceEvidenceStoreError {
+            XCTAssertEqual(error, .staleSnapshot)
+        }
+        try await vm.prepareProtectedLocalDivergenceChoice(
+            noteID: noteID, expectedSnapshot: laterInspection.snapshot,
+            expectedIntent: laterInspection.intent, choice: .keepAnchoredHistory,
+            queueAdmin: admin, evidenceStore: store
+        )
+        try await vm.completeProtectedLocalDivergence(
+            noteID: noteID, expectedIntent: try await store.preparedResolution(for: noteID), queueAdmin: admin, evidenceStore: store
+        )
+        let unfinishedSuccessor = try await store.hasUnfinishedResolutionIntents()
+        XCTAssertFalse(unfinishedSuccessor)
         XCTAssertTrue(admin.isSuspended, "Only startup owns outbound resumption")
         XCTAssertFalse(admin.didFlushAllOutboundWork)
         XCTAssertTrue(admin.unsentSnapshot.pendingBatches.isEmpty)
@@ -1032,11 +1065,11 @@ final class PendingSyncRecoveryTests: XCTestCase {
         )
 
         try await vm.prepareProtectedLocalDivergenceChoice(
-            noteID: noteID, choice: .keepAnchoredHistory,
+            noteID: noteID, expectedSnapshot: (try await vm.inspectProtectedLocalDivergence(noteID: noteID, evidenceStore: store)).snapshot, expectedIntent: try await store.preparedResolution(for: noteID), choice: .keepAnchoredHistory,
             queueAdmin: admin, evidenceStore: store
         )
         try await vm.completeProtectedLocalDivergence(
-            noteID: noteID, queueAdmin: admin, evidenceStore: store
+            noteID: noteID, expectedIntent: try await store.preparedResolution(for: noteID), queueAdmin: admin, evidenceStore: store
         )
         XCTAssertEqual(vm.refreshedNote(withID: noteID)?.content, "AB")
         let durable = try XCTUnwrap(ModelContext(container).fetch(
@@ -1102,7 +1135,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
             )
         )
         try await vm.prepareProtectedLocalDivergenceChoice(
-            noteID: noteID, choice: .keepSavedBody,
+            noteID: noteID, expectedSnapshot: (try await vm.inspectProtectedLocalDivergence(noteID: noteID, evidenceStore: store)).snapshot, expectedIntent: try await store.preparedResolution(for: noteID), choice: .keepSavedBody,
             queueAdmin: admin, evidenceStore: store
         )
         let candidate = try await store.preparedCommit(for: noteID)
@@ -1110,7 +1143,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
         XCTAssertFalse(prepared.capturedChanges.isEmpty)
         do {
             try await vm.completeProtectedLocalDivergence(
-                noteID: noteID, queueAdmin: admin, evidenceStore: store
+                noteID: noteID, expectedIntent: try await store.preparedResolution(for: noteID), queueAdmin: admin, evidenceStore: store
             )
             XCTFail("An unpublished anchored edit must block before note commit")
         } catch let error as NoteLocalDivergenceEvidenceStoreError {

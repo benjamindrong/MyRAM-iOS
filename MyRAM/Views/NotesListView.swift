@@ -2155,6 +2155,7 @@ private struct DivergentNoteReadOnlyView: View {
 
     @State private var snapshot: NoteLocalDivergenceSnapshot?
     @State private var selectedChoice: NoteLocalDivergenceResolutionChoice?
+    @State private var inspectedIntent: NoteLocalDivergenceResolutionIntent?
     @State private var pendingChoice: NoteLocalDivergenceResolutionChoice?
     @State private var showingConfirmation = false
     @State private var isPreparing = false
@@ -2269,6 +2270,7 @@ private struct DivergentNoteReadOnlyView: View {
             )
             snapshot = result.snapshot
             selectedChoice = result.selected
+            inspectedIntent = result.intent
             errorMessage = nil
         } catch {
             errorMessage = "Unable to inspect preserved versions: \(error)"
@@ -2283,7 +2285,7 @@ private struct DivergentNoteReadOnlyView: View {
         do {
             let store = await NoteLocalDivergenceEvidenceStore()
             try await vm.completeProtectedLocalDivergence(
-                noteID: note.id,
+                noteID: note.id, expectedIntent: inspectedIntent,
                 queueAdmin: syncController,
                 evidenceStore: store
             )
@@ -2298,7 +2300,7 @@ private struct DivergentNoteReadOnlyView: View {
 
     @MainActor
     private func prepare(_ choice: NoteLocalDivergenceResolutionChoice) async {
-        guard !isPreparing, selectedChoice == nil else { return }
+        guard !isPreparing, selectedChoice == nil, let displayedSnapshot = snapshot else { return }
         isPreparing = true
         defer {
             isPreparing = false
@@ -2307,7 +2309,8 @@ private struct DivergentNoteReadOnlyView: View {
         do {
             let store = await NoteLocalDivergenceEvidenceStore()
             try await vm.prepareProtectedLocalDivergenceChoice(
-                noteID: note.id, choice: choice,
+                noteID: note.id, expectedSnapshot: displayedSnapshot,
+                expectedIntent: inspectedIntent, choice: choice,
                 queueAdmin: syncController, evidenceStore: store
             )
             let result = try await vm.inspectProtectedLocalDivergence(
@@ -2315,6 +2318,7 @@ private struct DivergentNoteReadOnlyView: View {
             )
             snapshot = result.snapshot
             selectedChoice = result.selected
+            inspectedIntent = result.intent
             errorMessage = nil
         } catch {
             let detail = String(describing: error)

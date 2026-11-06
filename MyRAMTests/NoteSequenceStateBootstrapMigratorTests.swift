@@ -369,13 +369,13 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         let preserved = try await store.preserve(snapshot, checkedBy: migrator)
         XCTAssertTrue(preserved)
         let prepared = try await store.prepareOwnerSelectedResolution(
-            snapshot: snapshot,
+            snapshot: snapshot, expectedPreviousIntent: try await store.preparedResolution(for: snapshot.noteID),
             choice: .keepSavedBody,
             checkedBy: migrator
         )
         XCTAssertTrue(prepared)
         let repeated = try await store.prepareOwnerSelectedResolution(
-            snapshot: snapshot,
+            snapshot: snapshot, expectedPreviousIntent: try await store.preparedResolution(for: snapshot.noteID),
             choice: .keepSavedBody,
             checkedBy: migrator
         )
@@ -412,7 +412,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         )
         do {
             _ = try await store.prepareOwnerSelectedResolution(
-                snapshot: snapshot,
+                snapshot: snapshot, expectedPreviousIntent: try await store.preparedResolution(for: snapshot.noteID),
                 choice: .keepAnchoredHistory,
                 checkedBy: migrator
             )
@@ -422,14 +422,14 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         }
         _ = try await store.preserve(snapshot, checkedBy: migrator)
         let firstPrepared = try await store.prepareOwnerSelectedResolution(
-            snapshot: snapshot,
+            snapshot: snapshot, expectedPreviousIntent: try await store.preparedResolution(for: snapshot.noteID),
             choice: .keepAnchoredHistory,
             checkedBy: migrator
         )
         XCTAssertTrue(firstPrepared)
         do {
             _ = try await store.prepareOwnerSelectedResolution(
-                snapshot: snapshot,
+                snapshot: snapshot, expectedPreviousIntent: try await store.preparedResolution(for: snapshot.noteID),
                 choice: .keepSavedBody,
                 checkedBy: migrator
             )
@@ -440,7 +440,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         try updateNote(noteID: noteID, body: "Saved updated again", in: container)
         do {
             _ = try await store.prepareOwnerSelectedResolution(
-                snapshot: snapshot,
+                snapshot: snapshot, expectedPreviousIntent: try await store.preparedResolution(for: snapshot.noteID),
                 choice: .keepAnchoredHistory,
                 checkedBy: migrator
             )
@@ -505,7 +505,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         )
         do {
             _ = try await store.prepareQueueOwnership(
-                for: snapshot, ownership: ownership, checkedBy: migrator
+                for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), ownership: ownership, checkedBy: migrator
             )
             XCTFail("Queue preimage requires explicit preserved user intent")
         } catch let error as NoteLocalDivergenceEvidenceStoreError {
@@ -513,14 +513,14 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         }
         _ = try await store.preserve(snapshot, checkedBy: migrator)
         _ = try await store.prepareOwnerSelectedResolution(
-            snapshot: snapshot, choice: .keepSavedBody, checkedBy: migrator
+            snapshot: snapshot, expectedPreviousIntent: try await store.preparedResolution(for: snapshot.noteID), choice: .keepSavedBody, checkedBy: migrator
         )
         let prepared = try await store.prepareQueueOwnership(
-            for: snapshot, ownership: ownership, checkedBy: migrator
+            for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), ownership: ownership, checkedBy: migrator
         )
         XCTAssertTrue(prepared)
         let repeated = try await store.prepareQueueOwnership(
-            for: snapshot, ownership: ownership, checkedBy: migrator
+            for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), ownership: ownership, checkedBy: migrator
         )
         XCTAssertFalse(repeated)
         let restarted = await NoteLocalDivergenceEvidenceStore(fileURL: url)
@@ -539,7 +539,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         )
         do {
             _ = try await restarted.prepareQueueOwnership(
-                for: snapshot, ownership: changed, checkedBy: migrator
+                for: snapshot, intent: try await restarted.preparedResolution(for: snapshot.noteID), ownership: changed, checkedBy: migrator
             )
             XCTFail("Cannot silently replace captured pending queue work")
         } catch let error as NoteLocalDivergenceEvidenceStoreError {
@@ -570,16 +570,16 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         _ = try await store.preserve(snapshot, checkedBy: migrator)
 
         do {
-            _ = try await store.prepareCommit(for: snapshot, checkedBy: migrator)
+            _ = try await store.prepareCommit(for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: migrator)
             XCTFail("No automatic resolution without explicit intent")
         } catch let error as NoteLocalDivergenceEvidenceStoreError {
             XCTAssertEqual(error, .conflictingQueueOwnership)
         }
         _ = try await store.prepareOwnerSelectedResolution(
-            snapshot: snapshot, choice: .keepSavedBody, checkedBy: migrator
+            snapshot: snapshot, expectedPreviousIntent: try await store.preparedResolution(for: snapshot.noteID), choice: .keepSavedBody, checkedBy: migrator
         )
         do {
-            _ = try await store.prepareCommit(for: snapshot, checkedBy: migrator)
+            _ = try await store.prepareCommit(for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: migrator)
             XCTFail("An owner choice alone cannot bypass durable queue ownership")
         } catch let error as NoteLocalDivergenceEvidenceStoreError {
             XCTAssertEqual(error, .conflictingQueueOwnership)
@@ -608,13 +608,13 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
             )
             _ = try await store.preserve(snapshot, checkedBy: migrator)
             _ = try await store.prepareOwnerSelectedResolution(
-                snapshot: snapshot, choice: choice, checkedBy: migrator
+                snapshot: snapshot, expectedPreviousIntent: try await store.preparedResolution(for: snapshot.noteID), choice: choice, checkedBy: migrator
             )
             _ = try await store.prepareQueueOwnership(
-                for: snapshot, ownership: queue, checkedBy: migrator
+                for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), ownership: queue, checkedBy: migrator
             )
             let prepared = try await store.prepareCommit(
-                for: snapshot, checkedBy: migrator
+                for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: migrator
             )
             XCTAssertEqual(prepared.intent.choice, choice)
             XCTAssertEqual(prepared.finalBody, choice == .keepSavedBody
@@ -631,7 +631,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
             let recovered = try await restarted.preparedCommit(for: noteID)
             XCTAssertEqual(recovered, prepared)
             let repeated = try await restarted.prepareCommit(
-                for: snapshot, checkedBy: migrator
+                for: snapshot, intent: try await restarted.preparedResolution(for: snapshot.noteID), checkedBy: migrator
             )
             XCTAssertEqual(repeated, prepared)
             XCTAssertEqual(try Data(contentsOf: url), bytes)
@@ -645,7 +645,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
             XCTAssertEqual(notes.first { $0.id == noteID }?.content, snapshot.savedBody)
             try updateNote(noteID: noteID, body: "Newer unsaved reconciliation", in: container)
             do {
-                _ = try await restarted.prepareCommit(for: snapshot, checkedBy: migrator)
+                _ = try await restarted.prepareCommit(for: snapshot, intent: try await restarted.preparedResolution(for: snapshot.noteID), checkedBy: migrator)
                 XCTFail("A stale plan cannot be reported valid after a note edit")
             } catch let error as NoteLocalDivergenceEvidenceStoreError {
                 XCTAssertEqual(error, .staleSnapshot)
@@ -668,10 +668,10 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         let store = await NoteLocalDivergenceEvidenceStore(fileURL: url)
         _ = try await store.preserve(snapshot, checkedBy: migrator)
         _ = try await store.prepareOwnerSelectedResolution(
-            snapshot: snapshot, choice: .keepSavedBody, checkedBy: migrator
+            snapshot: snapshot, expectedPreviousIntent: try await store.preparedResolution(for: snapshot.noteID), choice: .keepSavedBody, checkedBy: migrator
         )
         _ = try await store.prepareQueueOwnership(
-            for: snapshot,
+            for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID),
             ownership: NoteLocalDivergenceQueueOwnershipEvidence(
                 legacy: SyncQueueSnapshot(pendingChanges: []),
                 unsent: [], incoming: [], localObligations: []
@@ -685,7 +685,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         }
         let failingStore = await NoteLocalDivergenceEvidenceStore(fileURL: url, fileIO: failedIO)
         do {
-            _ = try await failingStore.prepareCommit(for: snapshot, checkedBy: migrator)
+            _ = try await failingStore.prepareCommit(for: snapshot, intent: try await failingStore.preparedResolution(for: snapshot.noteID), checkedBy: migrator)
             XCTFail("A failed write-ahead plan must not certify durability")
         } catch let error as NoteLocalDivergenceEvidenceStoreError {
             XCTAssertEqual(error, .persistenceFailed)
@@ -718,16 +718,16 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
             )
             _ = try await store.preserve(snapshot, checkedBy: migrator)
             _ = try await store.prepareOwnerSelectedResolution(
-                snapshot: snapshot, choice: choice, checkedBy: migrator
+                snapshot: snapshot, expectedPreviousIntent: try await store.preparedResolution(for: snapshot.noteID), choice: choice, checkedBy: migrator
             )
             _ = try await store.prepareQueueOwnership(
-                for: snapshot, ownership: originalQueues, checkedBy: migrator
+                for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), ownership: originalQueues, checkedBy: migrator
             )
-            let frozen = try await store.prepareCommit(for: snapshot, checkedBy: migrator)
+            let frozen = try await store.prepareCommit(for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: migrator)
             let beforePhase = try await store.noteCommitPhase(for: noteID)
             XCTAssertNil(beforePhase)
             let first = try await store.commitPreparedNote(
-                for: snapshot, checkedBy: migrator,
+                for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: migrator,
                 recaptureQueueOwnership: { originalQueues }
             )
             XCTAssertTrue(first)
@@ -748,7 +748,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
                 fileURL: archive.appendingPathComponent("ledger.json")
             )
             let replayed = try await restarted.commitPreparedNote(
-                for: snapshot, checkedBy: migrator,
+                for: snapshot, intent: try await restarted.preparedResolution(for: snapshot.noteID), checkedBy: migrator,
                 recaptureQueueOwnership: { originalQueues }
             )
             XCTAssertFalse(replayed)
@@ -779,21 +779,22 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         )
         _ = try await store.preserve(snapshot, checkedBy: migrator)
         _ = try await store.prepareOwnerSelectedResolution(
-            snapshot: snapshot, choice: .keepAnchoredHistory, checkedBy: migrator
+            snapshot: snapshot, expectedPreviousIntent: try await store.preparedResolution(for: snapshot.noteID), choice: .keepAnchoredHistory, checkedBy: migrator
         )
+        let originalIntent = try await store.preparedResolution(for: noteID)
         _ = try await store.prepareQueueOwnership(
-            for: snapshot, ownership: queues, checkedBy: migrator
+            for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), ownership: queues, checkedBy: migrator
         )
-        _ = try await store.prepareCommit(for: snapshot, checkedBy: migrator)
+        _ = try await store.prepareCommit(for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: migrator)
         _ = try await store.commitPreparedNote(
-            for: snapshot, checkedBy: migrator,
+            for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: migrator,
             recaptureQueueOwnership: { queues }
         )
         let before = try await store.hasUnfinishedResolutionIntents()
         XCTAssertTrue(before, "Note saved is not a completion receipt")
         do {
             _ = try await store.finalizePreparedQueuePreservingResolution(
-                for: snapshot, checkedBy: migrator,
+                for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: migrator,
                 verifyQueueOwnership: {
                     throw MigratorTestFailure.queueOwnershipChanged
                 }
@@ -805,7 +806,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         let blocked = try await store.hasUnfinishedResolutionIntents()
         XCTAssertTrue(blocked)
         let finalized = try await store.finalizePreparedQueuePreservingResolution(
-            for: snapshot, checkedBy: migrator,
+            for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: migrator,
             verifyQueueOwnership: {}
         )
         XCTAssertTrue(finalized)
@@ -813,7 +814,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         let unfinished = try await restarted.hasUnfinishedResolutionIntents()
         XCTAssertFalse(unfinished)
         let repeated = try await restarted.finalizePreparedQueuePreservingResolution(
-            for: snapshot, checkedBy: migrator,
+            for: snapshot, intent: try await restarted.preparedResolution(for: snapshot.noteID), checkedBy: migrator,
             verifyQueueOwnership: {}
         )
         XCTAssertFalse(repeated)
@@ -823,6 +824,104 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
             FetchDescriptor<Note>(predicate: #Predicate { $0.id == noteID })
         ).first)
         XCTAssertEqual(note.content, "Anchored history")
+
+        // A later incident is a new transaction; a historical completion must
+        // neither freeze recovery forever nor complete the new intent.
+        try updateNote(noteID: noteID, body: "Later saved divergence", in: container)
+        let nextCaptured = try await migrator.validatedDivergenceSnapshot(noteID: noteID)
+        let next = try XCTUnwrap(nextCaptured)
+        _ = try await restarted.preserve(next, checkedBy: migrator)
+        _ = try await restarted.prepareOwnerSelectedResolution(
+            snapshot: next, expectedPreviousIntent: try await restarted.preparedResolution(for: next.noteID), choice: .keepAnchoredHistory, checkedBy: migrator
+        )
+        let nextIntent = try await restarted.preparedResolution(for: noteID)
+        XCTAssertEqual(nextIntent?.evidenceIndex, 1)
+        let pendingNext = try await restarted.hasUnfinishedResolutionIntents()
+        XCTAssertTrue(pendingNext)
+        do {
+            _ = try await restarted.prepareOwnerSelectedResolution(
+                snapshot: next, expectedPreviousIntent: try await restarted.preparedResolution(for: next.noteID), choice: .keepSavedBody, checkedBy: migrator
+            )
+            XCTFail("An unfinished generation must keep its immutable choice")
+        } catch let error as NoteLocalDivergenceEvidenceStoreError {
+            XCTAssertEqual(error, .conflictingResolution)
+        }
+        var missingPredecessorReceipt = try JSONDecoder().decode(
+            NoteLocalDivergenceEvidenceEnvelope.self, from: Data(contentsOf: url)
+        )
+        missingPredecessorReceipt.completionReceipts = []
+        XCTAssertThrowsError(try missingPredecessorReceipt.validate())
+        _ = try await restarted.prepareQueueOwnership(
+            for: next, intent: try await restarted.preparedResolution(for: next.noteID), ownership: queues, checkedBy: migrator
+        )
+        _ = try await restarted.prepareCommit(for: next, intent: try await restarted.preparedResolution(for: next.noteID), checkedBy: migrator)
+        _ = try await restarted.commitPreparedNote(
+            for: next, intent: try await restarted.preparedResolution(for: next.noteID), checkedBy: migrator, recaptureQueueOwnership: { queues }
+        )
+        _ = try await restarted.finalizePreparedQueuePreservingResolution(
+            for: next, intent: try await restarted.preparedResolution(for: next.noteID), checkedBy: migrator, verifyQueueOwnership: {}
+        )
+        let finalStore = await NoteLocalDivergenceEvidenceStore(fileURL: url)
+        let finalPending = try await finalStore.hasUnfinishedResolutionIntents()
+        XCTAssertFalse(finalPending)
+        let retainedGenerations = try await finalStore.snapshots(for: noteID)
+        XCTAssertEqual(retainedGenerations, [snapshot, next])
+
+        // The identical old preimage can recur; snapshot deduplication must not
+        // make the old completion receipt qualify this new transaction.
+        try updateNote(noteID: noteID, body: snapshot.savedBody, in: container)
+        let recurringCaptured = try await migrator.validatedDivergenceSnapshot(noteID: noteID)
+        XCTAssertEqual(recurringCaptured, snapshot)
+        _ = try await finalStore.prepareOwnerSelectedResolution(
+            snapshot: snapshot, expectedPreviousIntent: try await finalStore.preparedResolution(for: snapshot.noteID), choice: .keepAnchoredHistory, checkedBy: migrator
+        )
+        let recurring = try await finalStore.preparedResolution(for: noteID)
+        XCTAssertEqual(recurring?.generation, 2)
+        XCTAssertEqual(recurring?.evidenceIndex, 0)
+        let recurringPending = try await finalStore.hasUnfinishedResolutionIntents()
+        XCTAssertTrue(recurringPending)
+        let staleCalls: [() async throws -> Void] = [
+            { _ = try await finalStore.prepareQueueOwnership(
+                for: snapshot, intent: originalIntent, ownership: queues, checkedBy: migrator
+            ) },
+            { _ = try await finalStore.prepareCommit(
+                for: snapshot, intent: originalIntent, checkedBy: migrator
+            ) },
+            { _ = try await finalStore.commitPreparedNote(
+                for: snapshot, intent: originalIntent, checkedBy: migrator,
+                recaptureQueueOwnership: { queues }
+            ) },
+            { _ = try await finalStore.finalizePreparedQueuePreservingResolution(
+                for: snapshot, intent: originalIntent, checkedBy: migrator,
+                verifyQueueOwnership: {}
+            ) }
+        ]
+        for staleCall in staleCalls {
+            do {
+                try await staleCall()
+                XCTFail("A stale generation must not advance its identical-snapshot successor")
+            } catch let error as NoteLocalDivergenceEvidenceStoreError {
+                XCTAssertEqual(error, .conflictingResolution)
+            }
+        }
+        let oldPreparation = try await finalStore.preparedQueueOwnership(for: noteID)
+        XCTAssertNil(oldPreparation, "A historical queue preimage is not current authority")
+        _ = try await finalStore.prepareQueueOwnership(
+            for: snapshot, intent: try await finalStore.preparedResolution(for: snapshot.noteID), ownership: queues, checkedBy: migrator
+        )
+        _ = try await finalStore.prepareCommit(for: snapshot, intent: try await finalStore.preparedResolution(for: snapshot.noteID), checkedBy: migrator)
+        _ = try await finalStore.commitPreparedNote(
+            for: snapshot, intent: try await finalStore.preparedResolution(for: snapshot.noteID), checkedBy: migrator, recaptureQueueOwnership: { queues }
+        )
+        _ = try await finalStore.finalizePreparedQueuePreservingResolution(
+            for: snapshot, intent: try await finalStore.preparedResolution(for: snapshot.noteID), checkedBy: migrator, verifyQueueOwnership: {}
+        )
+        let finalEnvelope = try JSONDecoder().decode(
+            NoteLocalDivergenceEvidenceEnvelope.self, from: Data(contentsOf: url)
+        )
+        XCTAssertEqual(finalEnvelope.snapshots, [snapshot, next])
+        XCTAssertEqual(finalEnvelope.resolutionIntents?.count, 3)
+        XCTAssertEqual(finalEnvelope.completionReceipts?.count, 3)
     }
 
     func testMYR238SavedTextResolutionCannotCompleteWithoutPublishingCapturedWork() async throws {
@@ -844,22 +943,22 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         )
         _ = try await store.preserve(snapshot, checkedBy: migrator)
         _ = try await store.prepareOwnerSelectedResolution(
-            snapshot: snapshot, choice: .keepSavedBody, checkedBy: migrator
+            snapshot: snapshot, expectedPreviousIntent: try await store.preparedResolution(for: snapshot.noteID), choice: .keepSavedBody, checkedBy: migrator
         )
         _ = try await store.prepareQueueOwnership(
-            for: snapshot, ownership: queues, checkedBy: migrator
+            for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), ownership: queues, checkedBy: migrator
         )
         let prepared = try await store.prepareCommit(
-            for: snapshot, checkedBy: migrator
+            for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: migrator
         )
         XCTAssertFalse(prepared.capturedChanges.isEmpty)
         _ = try await store.commitPreparedNote(
-            for: snapshot, checkedBy: migrator,
+            for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: migrator,
             recaptureQueueOwnership: { queues }
         )
         do {
             _ = try await store.finalizePreparedQueuePreservingResolution(
-                for: snapshot, checkedBy: migrator,
+                for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: migrator,
                 verifyQueueOwnership: {}
             )
             XCTFail("An unpublished edit cannot be treated as converged")
@@ -890,14 +989,14 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         )
         _ = try await store.preserve(snapshot, checkedBy: migrator)
         _ = try await store.prepareOwnerSelectedResolution(
-            snapshot: snapshot, choice: .keepAnchoredHistory, checkedBy: migrator
+            snapshot: snapshot, expectedPreviousIntent: try await store.preparedResolution(for: snapshot.noteID), choice: .keepAnchoredHistory, checkedBy: migrator
         )
         _ = try await store.prepareQueueOwnership(
-            for: snapshot, ownership: queues, checkedBy: migrator
+            for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), ownership: queues, checkedBy: migrator
         )
-        _ = try await store.prepareCommit(for: snapshot, checkedBy: migrator)
+        _ = try await store.prepareCommit(for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: migrator)
         _ = try await store.commitPreparedNote(
-            for: snapshot, checkedBy: migrator,
+            for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: migrator,
             recaptureQueueOwnership: { queues }
         )
         let before = try Data(contentsOf: archive)
@@ -910,7 +1009,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         )
         do {
             _ = try await failing.finalizePreparedQueuePreservingResolution(
-                for: snapshot, checkedBy: migrator,
+                for: snapshot, intent: try await failing.preparedResolution(for: snapshot.noteID), checkedBy: migrator,
                 verifyQueueOwnership: {}
             )
             XCTFail("A failed completion receipt cannot release the note")
@@ -924,7 +1023,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         let phase = try await restarted.noteCommitPhase(for: noteID)
         XCTAssertEqual(phase, .noteSaved)
         let repaired = try await restarted.finalizePreparedQueuePreservingResolution(
-            for: snapshot, checkedBy: migrator,
+            for: snapshot, intent: try await restarted.preparedResolution(for: snapshot.noteID), checkedBy: migrator,
             verifyQueueOwnership: {}
         )
         XCTAssertTrue(repaired)
@@ -953,7 +1052,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         _ = try await store.preserve(first, checkedBy: migrator)
         _ = try await store.preserve(selected, checkedBy: migrator)
         _ = try await store.prepareOwnerSelectedResolution(
-            snapshot: selected, choice: .keepAnchoredHistory, checkedBy: migrator
+            snapshot: selected, expectedPreviousIntent: try await store.preparedResolution(for: selected.noteID), choice: .keepAnchoredHistory, checkedBy: migrator
         )
         let recovered = try await store.snapshotForPreparedResolution(noteID: selectedID)
         XCTAssertEqual(recovered, selected)
@@ -981,16 +1080,16 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         )
         _ = try await store.preserve(snapshot, checkedBy: migrator)
         _ = try await store.prepareOwnerSelectedResolution(
-            snapshot: snapshot, choice: .keepSavedBody, checkedBy: migrator
+            snapshot: snapshot, expectedPreviousIntent: try await store.preparedResolution(for: snapshot.noteID), choice: .keepSavedBody, checkedBy: migrator
         )
         _ = try await store.prepareQueueOwnership(
-            for: snapshot, ownership: queued, checkedBy: migrator
+            for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), ownership: queued, checkedBy: migrator
         )
-        _ = try await store.prepareCommit(for: snapshot, checkedBy: migrator)
+        _ = try await store.prepareCommit(for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: migrator)
         let oldBytes = try Data(contentsOf: archive.appendingPathComponent("ledger.json"))
         do {
             _ = try await store.commitPreparedNote(
-                for: snapshot, checkedBy: migrator,
+                for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: migrator,
                 recaptureQueueOwnership: {
                     NoteLocalDivergenceQueueOwnershipEvidence(
                         legacy: SyncQueueSnapshot(
@@ -1031,19 +1130,19 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         )
         _ = try await store.preserve(snapshot, checkedBy: migrator)
         _ = try await store.prepareOwnerSelectedResolution(
-            snapshot: snapshot, choice: .keepSavedBody, checkedBy: migrator
+            snapshot: snapshot, expectedPreviousIntent: try await store.preparedResolution(for: snapshot.noteID), choice: .keepSavedBody, checkedBy: migrator
         )
         _ = try await store.prepareQueueOwnership(
-            for: snapshot, ownership: ownership, checkedBy: migrator
+            for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), ownership: ownership, checkedBy: migrator
         )
-        _ = try await store.prepareCommit(for: snapshot, checkedBy: migrator)
+        _ = try await store.prepareCommit(for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: migrator)
         let failingMigrator = await makeMigrator(
             container, allowsExistingStateReplacement: false,
             saveOperation: { _ in throw NSError(domain: "MYR238.injectedSaveFailure", code: 1) }
         )
         do {
             _ = try await store.commitPreparedNote(
-                for: snapshot, checkedBy: failingMigrator,
+                for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: failingMigrator,
                 recaptureQueueOwnership: { ownership }
             )
             XCTFail("SwiftData save failure must be surfaced")
@@ -1059,7 +1158,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
             fileURL: archive.appendingPathComponent("ledger.json")
         )
         let changed = try await restarted.commitPreparedNote(
-            for: snapshot, checkedBy: migrator,
+            for: snapshot, intent: try await restarted.preparedResolution(for: snapshot.noteID), checkedBy: migrator,
             recaptureQueueOwnership: { ownership }
         )
         XCTAssertTrue(changed)
@@ -1088,12 +1187,12 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         )
         _ = try await store.preserve(snapshot, checkedBy: migrator)
         _ = try await store.prepareOwnerSelectedResolution(
-            snapshot: snapshot, choice: .keepSavedBody, checkedBy: migrator
+            snapshot: snapshot, expectedPreviousIntent: try await store.preparedResolution(for: snapshot.noteID), choice: .keepSavedBody, checkedBy: migrator
         )
         _ = try await store.prepareQueueOwnership(
-            for: snapshot, ownership: ownership, checkedBy: migrator
+            for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), ownership: ownership, checkedBy: migrator
         )
-        let prepared = try await store.prepareCommit(for: snapshot, checkedBy: migrator)
+        let prepared = try await store.prepareCommit(for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: migrator)
         var failedReceiptIO = NoteLocalDivergenceEvidenceFileIO.live
         failedReceiptIO.writeData = { bytes, url in
             if bytes.range(of: Data(#""noteSaved""#.utf8)) != nil {
@@ -1106,7 +1205,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         )
         do {
             _ = try await interruptedStore.commitPreparedNote(
-                for: snapshot, checkedBy: migrator,
+                for: snapshot, intent: try await interruptedStore.preparedResolution(for: snapshot.noteID), checkedBy: migrator,
                 recaptureQueueOwnership: { ownership }
             )
             XCTFail("Receipt failure must not be reported as a finished resolution")
@@ -1120,7 +1219,7 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
 
         let restarted = await NoteLocalDivergenceEvidenceStore(fileURL: url)
         let replayed = try await restarted.commitPreparedNote(
-            for: snapshot, checkedBy: migrator,
+            for: snapshot, intent: try await restarted.preparedResolution(for: snapshot.noteID), checkedBy: migrator,
             recaptureQueueOwnership: { ownership }
         )
         XCTAssertFalse(replayed, "The previously committed note must not be staged again")
@@ -1163,14 +1262,14 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         )
         _ = try await store.preserve(snapshot, checkedBy: migrator)
         _ = try await store.prepareOwnerSelectedResolution(
-            snapshot: snapshot, choice: .keepAnchoredHistory, checkedBy: migrator
+            snapshot: snapshot, expectedPreviousIntent: try await store.preparedResolution(for: snapshot.noteID), choice: .keepAnchoredHistory, checkedBy: migrator
         )
         _ = try await store.prepareQueueOwnership(
-            for: snapshot, ownership: ownership, checkedBy: migrator
+            for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), ownership: ownership, checkedBy: migrator
         )
-        _ = try await store.prepareCommit(for: snapshot, checkedBy: migrator)
+        _ = try await store.prepareCommit(for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: migrator)
         _ = try await store.commitPreparedNote(
-            for: snapshot, checkedBy: migrator,
+            for: snapshot, intent: try await store.preparedResolution(for: snapshot.noteID), checkedBy: migrator,
             recaptureQueueOwnership: { ownership }
         )
 
