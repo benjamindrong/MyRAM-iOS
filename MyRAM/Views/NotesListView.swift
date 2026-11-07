@@ -2191,23 +2191,29 @@ private struct DivergentNoteReadOnlyView: View {
                              ? "Saved-text choice recorded."
                              : "Synchronization-history choice recorded.")
                             .font(.headline)
-                        Text("The choice is preserved. Completion verifies the note commit and pending queue ownership without discarding work.")
-                            .font(.subheadline)
-                            .accessibilityIdentifier("divergence-choice-pending-reconciliation")
-                        Button("Complete recovery") {
-                            Task { await complete() }
+                        if selectedChoice == .keepAnchoredHistory {
+                            Text("The choice is preserved. Completion verifies the note commit and pending queue ownership without discarding work.")
+                                .font(.subheadline)
+                                .accessibilityIdentifier("divergence-choice-pending-reconciliation")
+                            Button("Complete recovery") {
+                                Task { await complete() }
+                            }
+                            .disabled(isPreparing || isCompleting)
+                            .accessibilityIdentifier("divergence-complete-recovery")
+                        } else {
+                            // Prior releases could record a saved-body choice whose
+                            // anchored operations cannot be published. Preserve both
+                            // versions without offering a retry that cannot succeed.
+                            Text("This previously recorded saved-text choice cannot be completed in this version. Both versions are preserved; you can still copy the saved text above.")
+                                .font(.subheadline)
+                                .accessibilityIdentifier("divergence-saved-choice-unavailable")
                         }
-                        .disabled(isPreparing || isCompleting)
-                        .accessibilityIdentifier("divergence-complete-recovery")
                     } else {
-                        Text("Choose which version to keep. This records an irreversible choice for this recovery attempt; it does not immediately modify the note or resume syncing.")
+                        Text("Saved text remains available above to select and copy. Saved-text recovery is unavailable until its pending operations can be published safely.")
                             .font(.subheadline)
-                        Button("Choose saved text") {
-                            pendingChoice = .keepSavedBody
-                            showingConfirmation = true
-                        }
-                        .disabled(isPreparing)
-                        .accessibilityIdentifier("divergence-choose-saved")
+                            .accessibilityIdentifier("divergence-saved-choice-unavailable")
+                        Text("Choosing synchronization history records an irreversible recovery choice; it does not immediately modify the note or resume syncing.")
+                            .font(.subheadline)
                         Button("Choose synchronization history") {
                             pendingChoice = .keepAnchoredHistory
                             showingConfirmation = true

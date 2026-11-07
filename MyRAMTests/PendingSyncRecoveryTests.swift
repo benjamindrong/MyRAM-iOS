@@ -908,10 +908,12 @@ final class PendingSyncRecoveryTests: XCTestCase {
                 noteID: noteID, expectedSnapshot: (try await vm.inspectProtectedLocalDivergence(noteID: noteID, evidenceStore: store)).snapshot, expectedIntent: try await store.preparedResolution(for: noteID), choice: .keepSavedBody,
                 queueAdmin: admin, evidenceStore: store
             )
-            XCTFail("An explicit owner choice must not be silently replaced")
+            XCTFail("An unsupported saved-text choice must not replace selected history")
         } catch let error as NoteLocalDivergenceEvidenceStoreError {
-            XCTAssertEqual(error, .conflictingResolution)
+            XCTAssertEqual(error, .unsupportedResolutionChoice)
         }
+        let retainedChoice = try await store.preparedResolution(for: noteID)
+        XCTAssertEqual(retainedChoice?.choice, .keepAnchoredHistory)
 
         // A changed queue must fail *before* the SwiftData note pair is
         // committed. A later clean retry must recover the actual editor
@@ -1086,7 +1088,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
         XCTAssertFalse(unfinished)
     }
 
-    func testMYR238SavedBodyCompletionCannotCommitWithoutDurableOperationQueue() async throws {
+    func testMYR238SavedBodyChoiceRejectedBeforeAnyDurableIntent() async throws {
         let container = try makeContainer()
         let initial = ModelContext(container)
         let note = Note(content: "Anchored historical text")
@@ -1134,21 +1136,25 @@ final class PendingSyncRecoveryTests: XCTestCase {
                 pendingBatches: [], health: .healthy
             )
         )
-        try await vm.prepareProtectedLocalDivergenceChoice(
-            noteID: noteID, expectedSnapshot: (try await vm.inspectProtectedLocalDivergence(noteID: noteID, evidenceStore: store)).snapshot, expectedIntent: try await store.preparedResolution(for: noteID), choice: .keepSavedBody,
-            queueAdmin: admin, evidenceStore: store
+        let inspection = try await vm.inspectProtectedLocalDivergence(
+            noteID: noteID, evidenceStore: store
         )
-        let candidate = try await store.preparedCommit(for: noteID)
-        let prepared = try XCTUnwrap(candidate)
-        XCTAssertFalse(prepared.capturedChanges.isEmpty)
         do {
-            try await vm.completeProtectedLocalDivergence(
-                noteID: noteID, expectedIntent: try await store.preparedResolution(for: noteID), queueAdmin: admin, evidenceStore: store
+            try await vm.prepareProtectedLocalDivergenceChoice(
+                noteID: noteID, expectedSnapshot: inspection.snapshot,
+                expectedIntent: inspection.intent, choice: .keepSavedBody,
+                queueAdmin: admin, evidenceStore: store
             )
-            XCTFail("An unpublished anchored edit must block before note commit")
+            XCTFail("Unsupported saved-text choice must fail before any durable intent")
         } catch let error as NoteLocalDivergenceEvidenceStoreError {
-            XCTAssertEqual(error, .unresolvedCapturedResolutionChanges)
+            XCTAssertEqual(error, .unsupportedResolutionChoice)
         }
+        let persistedIntent = try await store.preparedResolution(for: noteID)
+        let persistedQueue = try await store.preparedQueueOwnership(for: noteID)
+        let persistedCommit = try await store.preparedCommit(for: noteID)
+        XCTAssertNil(persistedIntent)
+        XCTAssertNil(persistedQueue)
+        XCTAssertNil(persistedCommit)
         let persisted = try XCTUnwrap(ModelContext(container).fetch(
             FetchDescriptor<Note>()
         ).first { $0.id == noteID })
@@ -1163,8 +1169,8 @@ final class PendingSyncRecoveryTests: XCTestCase {
             fileURL: directory.appendingPathComponent("ledger.json")
         )
         let unfinished = try await restarted.hasUnfinishedResolutionIntents()
-        XCTAssertTrue(unfinished)
-        XCTAssertTrue(admin.isSuspended)
+        XCTAssertFalse(unfinished)
+        XCTAssertFalse(admin.isSuspended)
         XCTAssertTrue(admin.unsentSnapshot.pendingBatches.isEmpty)
         XCTAssertFalse(admin.didFlushAllOutboundWork)
     }

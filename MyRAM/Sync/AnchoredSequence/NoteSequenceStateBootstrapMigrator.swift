@@ -239,6 +239,7 @@ enum NoteLocalDivergenceEvidenceStoreError: Error, Equatable {
     case conflictingResolution
     case unresolvedResolutionIntent
     case conflictingQueueOwnership
+    case unsupportedResolutionChoice
     case unresolvedCapturedResolutionChanges
     case persistenceFailed
 }

@@ -501,6 +501,11 @@ final class NotesViewModel: ObservableObject {
         guard startupQuarantinedNoteIDs.contains(noteID) else {
             throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
         }
+        // Saved-text selection creates unpublished anchored operations.
+        // Reject before suspending sync or persisting an irreversible choice.
+        guard choice == .keepAnchoredHistory else {
+            throw NoteLocalDivergenceEvidenceStoreError.unsupportedResolutionChoice
+        }
         queueAdmin.suspendOutboundForRecovery()
         guard await editorLifecyclePersistence.awaitAllDurableCompletion() else {
             throw PendingSyncRecoveryCoordinator.RecoveryError.pendingLocalEditsNotDurable
