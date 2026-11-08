@@ -18,20 +18,38 @@ final class MacSyncIncomingLocalBoundaryTests: XCTestCase {
         }
     }
 
-    func testLocalObligationSurfaceMapsToSharedLocalObligationPreparation() async throws {
+    func testLocalObligationSurfaceRequiresDurableAdmissionBeforeSharedPreparation() async throws {
+        let obligation = try makeCapturedObligation(noteID: Self.noteID(2))
+        let adapter = MacSyncIncomingLocalBoundaryAdapter(
+            surface: MacSyncIncomingLocalBoundarySurface(prepareForIncomingBodyMutation: { _ in
+                .localObligations(SyncPreparedLocalObligationCollection([obligation])!)
+            }, admitPreparedLocalObligations: { collection in
+                XCTAssertEqual(collection.obligations, [obligation])
+                return .admitted
+            })
+        )
+
+        let result = await adapter.prepareForIncomingBodyMutation(affecting: [Self.noteID(2)])
+
+        guard case .durablyAdmittedLocalObligations(let noteIDs) = result else {
+            return XCTFail("Expected durable local admission")
+        }
+        XCTAssertEqual(noteIDs, [Self.noteID(2)])
+    }
+
+    func testMissingDurableAdmissionCallbackCannotClaimLocalOwnership() async throws {
         let obligation = try makeCapturedObligation(noteID: Self.noteID(2))
         let adapter = MacSyncIncomingLocalBoundaryAdapter(
             surface: MacSyncIncomingLocalBoundarySurface(prepareForIncomingBodyMutation: { _ in
                 .localObligations(SyncPreparedLocalObligationCollection([obligation])!)
             })
         )
-
         let result = await adapter.prepareForIncomingBodyMutation(affecting: [Self.noteID(2)])
-
-        guard case .localObligations(let returnedObligations) = result else {
-            return XCTFail("Expected local obligation preparation")
+        guard case .cannotProceed(.blocked(let failure)) = result else {
+            return XCTFail("An absent durable admission owner must fail closed")
         }
-        XCTAssertEqual(returnedObligations.obligations, [obligation])
+        XCTAssertEqual(failure.batchID, obligation.id)
+        XCTAssertEqual(failure.kind, .queuePersistence)
     }
 
     func testCaptureFailureMapsToSharedLocalCaptureFailure() async {
@@ -275,7 +293,7 @@ final class MacSyncIncomingLocalBoundaryTests: XCTestCase {
         guard case .completed(_, _, .boundaryExtracted(let returnedObligation)) = completion else {
             return XCTFail("Expected the boundary extraction to remain on the shared completion")
         }
-        XCTAssertEqual(returnedObligation, obligation)
+        XCTAssertEqual(returnedObligation?.obligations, [obligation])
     }
 
     func testOrdinarySaveCompletionDoesNotClearNewerUnsavedRevision() {

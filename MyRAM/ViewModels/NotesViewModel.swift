@@ -124,6 +124,16 @@ final class NoteEditorLifecyclePersistenceCore {
         }
     }
 
+    func awaitAllDurableCompletion() async -> Bool {
+        let noteIDs = Array(pendingByNoteID.keys)
+        retryAll()
+        var durable = true
+        for noteID in noteIDs {
+            if await !awaitDurableCompletion(noteID: noteID) { durable = false }
+        }
+        return durable && pendingByNoteID.isEmpty
+    }
+
     func awaitDurableCompletion(noteID: UUID) async -> Bool {
         if !drainingNoteIDs.contains(noteID) {
             return pendingByNoteID[noteID] == nil
@@ -182,6 +192,8 @@ final class NotesViewModel: ObservableObject {
     @Published var currentNote: Note? = nil
     @Published var currentFolder: Folder? = nil
     @Published private(set) var syncConflicts: [SyncConflictVersion] = []
+    @Published private(set) var syncConflictResolutionFailureCode: String?
+    @Published private(set) var isResolvingSyncConflict = false
     @Published private(set) var activeEditorSyncUpdate: ActiveEditorSyncUpdate?
     @Published private(set) var syncBatchErrorMessage: String?
     @Published private(set) var pendingSyncRecoveryStatus: PendingSyncRecoveryStatus = .idle
@@ -251,6 +263,7 @@ final class NotesViewModel: ObservableObject {
         context: ModelContext,
         syncController: MyRAMSyncControlling? = nil,
         syncConflictStore: SyncConflictStore = SyncConflictStore(),
+        bootstrapStructuralConflictFileURL: URL = SyncConflictStore.defaultBootstrapStructuralConflictFileURL(),
         pendingIncomingBatchQueueFileURL: URL? = NotesViewModel.pendingIncomingBatchQueueFileURL(),
         pendingIncomingBatchQueueLimit: Int = 100,
         anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore? = nil,
@@ -266,6 +279,7 @@ final class NotesViewModel: ObservableObject {
     ) {
         let resolvedSaveContext = saveContext ?? { try context.save() }
         self.context = context
+        isStartupSyncRecoveryPending = defersModelInitializationUntilMigration
         self.syncController = syncController
         self.syncConflictStore = syncConflictStore
         self.saveContext = resolvedSaveContext
@@ -291,6 +305,7 @@ final class NotesViewModel: ObservableObject {
         syncConflictService = MyRAMSyncConflictService(
             context: context,
             store: syncConflictStore,
+            bootstrapStructuralConflictFileURL: bootstrapStructuralConflictFileURL,
             saveOperation: { _ in try resolvedSaveContext() }
         )
         self.syncController?.onChangesReceived = { [weak self] changes in
@@ -319,8 +334,28 @@ final class NotesViewModel: ObservableObject {
             }
         }
         if let bootstrapController = syncController as? MyRAMSyncBootstrapConfiguring {
+            bootstrapController.bootstrapConflictLifecycleForReadOnlyDiagnostics = {
+                [syncConflictStore] noteID in
+                try syncConflictStore.bootstrapStructuralConflictRecordChecked(
+                    noteID: noteID
+                )?.lifecycle
+            }
             bootstrapController.onPrepareLocalOwnershipForBootstrap = { [weak self] in
-                await self?.prepareLocalOwnershipForBootstrap()
+                guard let self else { return .retryablePending }
+                return await self.prepareLocalOwnershipForBootstrap()
+            }
+            bootstrapController.localBootstrapOwnershipSnapshotProvider = { [weak self] in
+                self?.pendingLocalConvergenceBatches.snapshot()
+                    ?? FileBackedSyncBatchQueueSnapshot(
+                        pendingBatches: [],
+                        health: .readFailed("Local bootstrap ownership unavailable")
+                    )
+            }
+            bootstrapController.removeLocalBootstrapOwnership = { [weak self] batchIDs in
+                guard let self else {
+                    throw FileBackedSyncConvergenceLocalObligationQueue.QueueError.unhealthyPersistence
+                }
+                try pendingLocalConvergenceBatches.removeObligationsForBootstrapAcknowledgement(withIDs: batchIDs)
             }
             bootstrapController.buildBootstrapSnapshot = { [context] in
                 try SyncPeerBootstrapSnapshotPersistence.build(from: context)
@@ -379,10 +414,264 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
+    private var isStartupSyncRecoveryPending = false
+
+    // An unresolved local body/CRDT divergence must not be modified by editor,
+    // list, attachment, folder, or undo actions. Both versions stay in place.
+    private var startupQuarantinedNoteIDs: Set<UUID> = []
+
+    func isolateDivergentNoteIDs(_ noteIDs: Set<UUID>) {
+        startupQuarantinedNoteIDs = noteIDs
+    }
+
+    private func mayMutateNote(_ note: Note?) -> Bool {
+        guard let note, startupQuarantinedNoteIDs.contains(note.id) else {
+            return true
+        }
+        syncBatchErrorMessage = "This note is protected because its saved text and sync history disagree."
+        return false
+    }
+
+    /// Offers read-only evidence; merely viewing an unresolved note cannot
+    /// authorize a winner. An earlier immutable choice remains visible after
+    /// relaunch and cannot silently be replaced.
+    func inspectProtectedLocalDivergence(
+        noteID: UUID,
+        evidenceStore: NoteLocalDivergenceEvidenceStore
+    ) async throws -> (
+        snapshot: NoteLocalDivergenceSnapshot,
+        selected: NoteLocalDivergenceResolutionChoice?,
+        intent: NoteLocalDivergenceResolutionIntent?
+    ) {
+        guard startupQuarantinedNoteIDs.contains(noteID) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+        let inspection = try await evidenceStore.preparedInspection(for: noteID)
+        if inspection?.completed == true, let current = try await NoteSequenceStateBootstrapMigrator(
+            container: context.container
+        ).validatedDivergenceSnapshot(noteID: noteID) {
+            // A historical receipt cannot choose authority for a later incident.
+            return (current, nil, inspection?.intent)
+        }
+        if let inspection {
+            return (inspection.snapshot, inspection.intent.choice, inspection.intent)
+        }
+        if let current = try await NoteSequenceStateBootstrapMigrator(
+            container: context.container
+        ).validatedDivergenceSnapshot(noteID: noteID) {
+            return (current, nil, nil)
+        }
+        throw NoteLocalDivergenceEvidenceStoreError.snapshotNotPreserved
+    }
+
+    private func localResolutionCoordinator(
+        queueAdmin: PendingSyncQueueAdministrating
+    ) -> PendingSyncRecoveryCoordinator {
+        PendingSyncRecoveryCoordinator(
+            queueAdmin: queueAdmin,
+            localQueueSnapshot: { [weak self] in
+                guard let self else {
+                    return FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                        obligations: [],
+                        health: .readFailed("Local queue owner unavailable")
+                    )
+                }
+                return FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: self.pendingLocalConvergenceBatches.pendingObligations,
+                    health: self.pendingLocalConvergenceBatches.snapshot().health
+                )
+            },
+            replaceLocalObligations: { [weak self] obligations in
+                guard let self else {
+                    throw PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed
+                }
+                try self.pendingLocalConvergenceBatches.replacePendingObligations(obligations)
+            },
+            flushReadyLocalBatches: { [] }
+        )
+    }
+
+    /// Owner approval is durable, but it is not a note/queue commit. Even after
+    /// successful preparation both versions remain untouched and sync stays
+    /// suspended until a separate complete recovery protocol is verified.
+    func prepareProtectedLocalDivergenceChoice(
+        noteID: UUID,
+        expectedSnapshot: NoteLocalDivergenceSnapshot,
+        expectedIntent: NoteLocalDivergenceResolutionIntent?,
+        choice: NoteLocalDivergenceResolutionChoice,
+        queueAdmin: PendingSyncQueueAdministrating,
+        evidenceStore: NoteLocalDivergenceEvidenceStore
+    ) async throws {
+        guard startupQuarantinedNoteIDs.contains(noteID) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+        // Saved-text selection creates unpublished anchored operations.
+        // Reject before suspending sync or persisting an irreversible choice.
+        guard choice == .keepAnchoredHistory else {
+            throw NoteLocalDivergenceEvidenceStoreError.unsupportedResolutionChoice
+        }
+        queueAdmin.suspendOutboundForRecovery()
+        guard await editorLifecyclePersistence.awaitAllDurableCompletion() else {
+            throw PendingSyncRecoveryCoordinator.RecoveryError.pendingLocalEditsNotDurable
+        }
+        _ = try await capturePendingLocalBatchesForRecovery()
+        let migrator = await NoteSequenceStateBootstrapMigrator(container: context.container)
+        guard let snapshot = try await migrator.validatedDivergenceSnapshot(noteID: noteID) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+
+        guard snapshot == expectedSnapshot,
+              try await evidenceStore.preparedResolution(for: noteID) == expectedIntent else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+
+        // Persist the immutable note/formatting/CRDT preimage first. A failed
+        // subsequent step leaves it retained, never replaced or discarded.
+        _ = try await evidenceStore.preserve(snapshot, checkedBy: migrator)
+
+        let coordinator = localResolutionCoordinator(queueAdmin: queueAdmin)
+        let incoming = pendingIncomingBatches.snapshot()
+        let ownership = try await coordinator.captureLocalResolutionQueueOwnership(
+            incomingSnapshot: incoming
+        )
+        // Only make an immutable owner choice after every queue has passed
+        // its health, admission and duplicate-identity checks.
+        let preparation = try await evidenceStore.prepareOwnerSelectedResolution(
+            snapshot: snapshot, expectedPreviousIntent: expectedIntent, choice: choice, checkedBy: migrator
+        )
+        let preparedIntent = preparation.intent
+        _ = try await evidenceStore.prepareQueueOwnership(
+            for: snapshot, intent: preparedIntent, ownership: ownership, checkedBy: migrator
+        )
+        _ = try await evidenceStore.prepareCommit(for: snapshot, intent: preparedIntent, checkedBy: migrator)
+        try await coordinator.requireUnchangedLocalResolutionQueueOwnership(
+            ownership, incomingSnapshot: pendingIncomingBatches.snapshot()
+        )
+        // No applyPreparedNoteCommit, queue replacement, journal cleanup or
+        // resumeOutboundAfterRecovery: preparation never implies completion.
+    }
+
+    /// Complete only an anchored-history choice whose pending local effects
+    /// are proven already represented in that exact history. Preserve all
+    /// queue identities and acknowledgement ownership; remote, legacy and
+    /// unresolved saved-body operations remain protected across restart.
+    func completeProtectedLocalDivergence(
+        noteID: UUID,
+        expectedIntent: NoteLocalDivergenceResolutionIntent?,
+        queueAdmin: PendingSyncQueueAdministrating,
+        evidenceStore: NoteLocalDivergenceEvidenceStore
+    ) async throws {
+        guard startupQuarantinedNoteIDs.contains(noteID) else {
+            throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
+        }
+        queueAdmin.suspendOutboundForRecovery()
+        guard await editorLifecyclePersistence.awaitAllDurableCompletion() else {
+            throw PendingSyncRecoveryCoordinator.RecoveryError.pendingLocalEditsNotDurable
+        }
+        _ = try await capturePendingLocalBatchesForRecovery()
+        // An isolated SwiftData resolution cannot invalidate uncommitted
+        // main-context changes. Flushes must be owned by their normal editor
+        // lifecycle rather than silently rolled back by recovery.
+        guard !context.hasChanges else {
+            throw PendingSyncRecoveryCoordinator.RecoveryError.pendingLocalEditsNotDurable
+        }
+
+        guard let intent = try await evidenceStore.preparedResolution(for: noteID) else {
+            throw NoteLocalDivergenceEvidenceStoreError.unresolvedResolutionIntent
+        }
+        guard intent == expectedIntent else {
+            throw NoteLocalDivergenceEvidenceStoreError.conflictingResolution
+        }
+        guard let queue = try await evidenceStore.preparedQueueOwnership(for: noteID),
+              queue.intent == intent,
+              let snapshot = try await evidenceStore.snapshotForPreparedResolution(
+                  noteID: noteID
+              ) else {
+            throw NoteLocalDivergenceEvidenceStoreError.unresolvedResolutionIntent
+        }
+        // An owner choice that creates new anchored operations cannot complete
+        // through the no-write queue path. Reject it before even recording a
+        // started note commit; otherwise SwiftData can advance while its
+        // prepared operations remain unpublished across restart.
+        guard let prepared = try await evidenceStore.preparedCommit(for: noteID),
+              prepared.intent == intent else {
+            throw NoteLocalDivergenceEvidenceStoreError.unresolvedResolutionIntent
+        }
+        guard intent.choice == .keepAnchoredHistory,
+              prepared.capturedChanges.isEmpty else {
+            throw NoteLocalDivergenceEvidenceStoreError.unresolvedCapturedResolutionChanges
+        }
+        let migrator = await NoteSequenceStateBootstrapMigrator(
+            container: context.container
+        )
+        let selectedState = try await migrator.anchoredHistoryForPreparedResolution(
+            snapshot
+        )
+        let coordinator = localResolutionCoordinator(queueAdmin: queueAdmin)
+        try await coordinator.requireRepresentedLocalWorkForResolvedNote(
+            noteID,
+            expected: queue.ownership,
+            selectedState: selectedState,
+            savedTitle: snapshot.savedTitle,
+            savedModifiedAt: snapshot.savedModifiedAt,
+            incomingSnapshot: pendingIncomingBatches.snapshot()
+        )
+        _ = try await evidenceStore.commitPreparedNote(
+            for: snapshot, intent: intent,
+            checkedBy: migrator,
+            recaptureQueueOwnership: { [weak self] in
+                guard let self else {
+                    throw PendingSyncRecoveryCoordinator.RecoveryError.staleLocalResolutionQueueOwnership
+                }
+                return try await coordinator.captureLocalResolutionQueueOwnership(
+                    incomingSnapshot: self.pendingIncomingBatches.snapshot()
+                )
+            }
+        )
+        _ = try await evidenceStore.finalizePreparedQueuePreservingResolution(
+            for: snapshot, intent: intent,
+            checkedBy: migrator,
+            verifyQueueOwnership: { [weak self] in
+                guard let self else {
+                    throw PendingSyncRecoveryCoordinator.RecoveryError.staleLocalResolutionQueueOwnership
+                }
+                try await coordinator.requireRepresentedLocalWorkForResolvedNote(
+                    noteID,
+                    expected: queue.ownership,
+                    selectedState: selectedState,
+                    savedTitle: snapshot.savedTitle,
+                    savedModifiedAt: snapshot.savedModifiedAt,
+                    incomingSnapshot: self.pendingIncomingBatches.snapshot()
+                )
+            }
+        )
+        // The note and structural pair were saved in a separate ModelContext.
+        // Discard *only clean* main-context object registrations before using
+        // them again; otherwise a stale cached Note could immediately recreate
+        // the saved-body/CRDT mismatch on the next editor commit.
+        guard !context.hasChanges else {
+            throw PendingSyncRecoveryCoordinator.RecoveryError.pendingLocalEditsNotDurable
+        }
+        context.rollback()
+        let completed = try await evidenceStore.preparedInspection(for: noteID)
+        guard completed?.intent == intent, completed?.completed == true,
+              let fresh = fetchNote(withID: noteID),
+              prepared.intent == intent,
+              fresh.content == prepared.finalBody,
+              fresh.richTextContentData == nil else {
+            throw NoteSequenceStateStoreError.verificationFailure
+        }
+        startupQuarantinedNoteIDs.remove(noteID)
+        refreshCurrentFolderContent()
+    }
+
+    func completeStartupSyncRecovery() {
+        isStartupSyncRecoveryPending = false
+    }
+
     func completeStartupInitializationAfterMigration() {
         guard !didCompleteStartupModelInitialization else { return }
         didCompleteStartupModelInitialization = true
-        purgeExpiredDeletedNotes()
         refreshCurrentFolderContent()
         loadLastNote()
     }
@@ -501,13 +790,23 @@ final class NotesViewModel: ObservableObject {
             + regularNotes.map(NotesListItem.note)
     }
 
-    func fetchRecentlyDeletedNotes() -> [Note] {
-        purgeExpiredDeletedNotes()
+    func fetchRecentlyDeletedNotes(
+        now: Date = .now,
+        includeRetainedExpired: Bool = false,
+        configuration: MyRAMSyncRuntimeConfiguration = .current()
+    ) -> [Note] {
+        let cutoff = now.addingTimeInterval(-Self.recentlyDeletedRetention)
+        // UI expiry cannot authorize destroying shared deletion/sequence state.
+        // Retain the tombstone and its children until sync has a safe GC owner.
         let descriptor = FetchDescriptor<Note>(
             predicate: #Predicate { $0.deletedAt != nil },
             sortBy: [SortDescriptor(\.deletedAt, order: .reverse)]
         )
-        return (try? context.fetch(descriptor)) ?? []
+        return ((try? context.fetch(descriptor)) ?? []).filter {
+            guard let deletedAt = $0.deletedAt else { return false }
+            return deletedAt >= cutoff
+                || (includeRetainedExpired && configuration.allowsRetainedDeletedNoteInspection)
+        }
     }
 
     func fetchSearchableNotes() -> [Note] {
@@ -518,10 +817,6 @@ final class NotesViewModel: ObservableObject {
             sortBy: [SortDescriptor(\.modifiedAt, order: .reverse)]
         )
         return ((try? context.fetch(descriptor)) ?? []).sorted(by: sortNotes)
-    }
-
-    func refreshRecentlyDeletedNotes() {
-        purgeExpiredDeletedNotes()
     }
 
     private func loadLastNote() {
@@ -659,9 +954,10 @@ final class NotesViewModel: ObservableObject {
     }
 
     func renameNote(_ note: Note, to newTitle: String) {
-        guard note.deletedAt == nil else { return }
+        guard note.deletedAt == nil, mayMutateNote(note) else { return }
         let oldTitle = note.title
         let trimmedTitle = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedTitle != oldTitle else { return }
         note.title = trimmedTitle
         note.modifiedAt = .now
         note.folder?.modifiedAt = .now
@@ -681,7 +977,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func setNotePinned(_ note: Note, isPinned: Bool) {
-        guard note.deletedAt == nil else { return }
+        guard note.deletedAt == nil, mayMutateNote(note) else { return }
         let currentPinned = note.isPinned ?? false
         guard currentPinned != isPinned else { return }
         note.isPinned = isPinned
@@ -736,6 +1032,8 @@ final class NotesViewModel: ObservableObject {
     }
 
     func deleteFolder(_ folder: Folder, preserveNotes: Bool = false) {
+        let affected = allFoldersInSubtree(of: folder).flatMap(\.notes)
+        guard affected.allSatisfy({ mayMutateNote($0) }) else { return }
         let activeFolder = currentFolder
         let shouldNavigateToParent = activeFolder.map { isDescendantOrSame($0, of: folder) } ?? false
         let targetFolder = shouldNavigateToParent ? folder.parentFolder : currentFolder
@@ -900,11 +1198,22 @@ final class NotesViewModel: ObservableObject {
         content: String,
         richTextContentData: Data? = nil
     ) -> Bool {
+        guard mayMutateNote(note) else { return false }
+        // Activated notes must commit body + anchored sequence in one transaction.
+        // No caller is authorized to bypass this mode gate for legacy persistence.
+        guard !SyncBatchAnchoredPayloadCapability.isEnabled else {
+            syncBatchErrorMessage = "Unable to save the latest edit through the legacy editor path."
+            return false
+        }
         guard note.deletedAt == nil else { return false }
         let oldTitle = note.title
         let oldContent = note.content
         let oldRichTextContentData = note.richTextContentData
         let oldModifiedAt = note.modifiedAt
+        let hasTitleOrBodyMutation = oldTitle != title
+            || !NoteSequenceStateExactText.matches(oldContent, content)
+        let hasPresentationCacheMutation = oldRichTextContentData != richTextContentData
+        guard hasTitleOrBodyMutation || hasPresentationCacheMutation else { return true }
         let modifiedAt = Date.now
         let preparedEdit: PreparedLocalNoteEdit
         do {
@@ -923,7 +1232,7 @@ final class NotesViewModel: ObservableObject {
         note.title = title
         note.content = content
         note.richTextContentData = richTextContentData
-        note.modifiedAt = modifiedAt
+        note.modifiedAt = hasTitleOrBodyMutation ? modifiedAt : oldModifiedAt
         do {
             try saveContext()
         } catch {
@@ -970,6 +1279,7 @@ final class NotesViewModel: ObservableObject {
         structuralFormattingProjection: NoteStructuralFormattingProjection? = nil,
         generation: UUID
     ) -> Bool {
+        guard mayMutateNote(note) else { return false }
         let snapshot = NoteEditorLifecycleSnapshot(
             noteID: note.id,
             title: title,
@@ -1018,6 +1328,7 @@ final class NotesViewModel: ObservableObject {
         activationEnabled: Bool,
         operationIDReserver: any SyncOperationIDReserving
     ) async -> Bool {
+        guard mayMutateNote(note) else { return false }
         guard activationEnabled else {
             return commitNoteEdit(
                 note,
@@ -1032,6 +1343,11 @@ final class NotesViewModel: ObservableObject {
         let oldRichTextContentData = note.richTextContentData
         let oldModifiedAt = note.modifiedAt
         let modifiedAt = Date.now
+        var stagedStructuralMutation: (
+            snapshot: NoteSequenceStateMutationSnapshot,
+            finalState: SyncTextSequenceState,
+            finalMarkState: SyncTextMarkState
+        )?
         let prepared: PreparedLocalNoteEdit
         do {
             prepared = try await prepareAnchoredLocalNoteEdit(
@@ -1042,8 +1358,21 @@ final class NotesViewModel: ObservableObject {
                 structuralFormattingProjection: structuralFormattingProjection,
                 operationIDReserver: operationIDReserver
             )
+            let hasTitleOrBodyMutation = !prepared.capturedChanges.isEmpty
+            let hasStructuralFormattingMutation =
+                prepared.structuralSnapshot?.markState != prepared.finalStructuralMarkState
+            let hasPresentationCacheMutation = structuralFormattingProjection != nil
+                && oldRichTextContentData != richTextContentData
+            guard hasTitleOrBodyMutation || hasStructuralFormattingMutation
+                || hasPresentationCacheMutation else {
+                // The editor can flush an identical snapshot after a prior successful
+                // save. With no authoritative mutation there is no sync operation
+                // to carry a new modifiedAt, so keep the committed timestamp.
+                return true
+            }
             note.title = title
-            note.modifiedAt = modifiedAt
+            note.modifiedAt = (hasTitleOrBodyMutation || hasStructuralFormattingMutation)
+                ? modifiedAt : oldModifiedAt
             if let snapshot = prepared.structuralSnapshot,
                let finalState = prepared.finalStructuralState,
                let finalMarkState = prepared.finalStructuralMarkState {
@@ -1056,6 +1385,9 @@ final class NotesViewModel: ObservableObject {
                         finalMarkState: finalMarkState,
                         in: context
                     )
+                if staged.textChanged || staged.markChanged {
+                    stagedStructuralMutation = (snapshot, finalState, finalMarkState)
+                }
                 if structuralFormattingProjection != nil {
                     // The editor produced this cache from its canonical structural
                     // projection; unsupported attributed input has already been stripped.
@@ -1070,7 +1402,27 @@ final class NotesViewModel: ObservableObject {
             }
             try saveContext()
         } catch {
-            context.rollback()
+            // A global context rollback would erase unrelated pending changes.
+            // Restore only this editor's staged authority, as the macOS editor does.
+            if let stagedStructuralMutation {
+                do {
+                    try NoteSequenceStateFullBodyIntegration
+                        .restoreSuppliedStateAndStructuralFormattingMutationAfterFailedSave(
+                            of: note,
+                            expected: stagedStructuralMutation.snapshot,
+                            failedFinalState: stagedStructuralMutation.finalState,
+                            failedFinalMarkState: stagedStructuralMutation.finalMarkState,
+                            in: context
+                        )
+                } catch {
+                    // An unprovable restore cannot be allowed into a later save.
+                    // In this exceptional case, discard the entire context transaction.
+                    context.rollback()
+                    startupQuarantinedNoteIDs.insert(note.id)
+                    syncBatchErrorMessage = "The failed edit could not be safely restored. Reopen MyRAM before editing this note."
+                    return false
+                }
+            }
             note.title = oldTitle
             note.content = oldContent
             note.richTextContentData = oldRichTextContentData
@@ -1086,22 +1438,8 @@ final class NotesViewModel: ObservableObject {
         return true
     }
 
-    func updateNote(
-        _ note: Note,
-        title: String,
-        content: String,
-        richTextContentData: Data? = nil
-    ) {
-        commitNoteEdit(
-            note,
-            title: title,
-            content: content,
-            richTextContentData: richTextContentData
-        )
-    }
-
     func addPinnedThought(to note: Note, text: String = "") -> PinnedThought? {
-        guard note.deletedAt == nil else { return nil }
+        guard note.deletedAt == nil, mayMutateNote(note) else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextOrder = ((note.pinnedThoughts.map(\.order).max()) ?? -1) + 1
         let thought = PinnedThought(text: trimmed, order: nextOrder, note: note)
@@ -1120,6 +1458,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func updatePinnedThought(_ thought: PinnedThought, text: String) {
+        guard mayMutateNote(thought.note) else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard thought.text != trimmed else { return }
         thought.text = trimmed
@@ -1138,6 +1477,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func setPinnedThoughtCollapsed(_ thought: PinnedThought, isCollapsed: Bool) {
+        guard mayMutateNote(thought.note) else { return }
         guard thought.isCollapsed != isCollapsed else { return }
         thought.isCollapsed = isCollapsed
         thought.modifiedAt = .now
@@ -1159,7 +1499,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func movePinnedThought(_ thought: PinnedThought, direction: PinnedThoughtMoveDirection) {
-        guard let note = thought.note else { return }
+        guard let note = thought.note, mayMutateNote(note) else { return }
         var orderedThoughts = sortedPinnedThoughts(for: note)
         guard let currentIndex = orderedThoughts.firstIndex(where: { $0.id == thought.id }) else { return }
         let targetIndex: Int
@@ -1190,6 +1530,7 @@ final class NotesViewModel: ObservableObject {
 
     func movePinnedThought(_ thought: PinnedThought, before targetThought: PinnedThought) {
         guard let note = thought.note,
+              mayMutateNote(note),
               targetThought.note?.id == note.id,
               thought.id != targetThought.id else { return }
         var orderedThoughts = sortedPinnedThoughts(for: note)
@@ -1216,7 +1557,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func movePinnedThought(_ thought: PinnedThought, toIndex targetIndex: Int) {
-        guard let note = thought.note else { return }
+        guard let note = thought.note, mayMutateNote(note) else { return }
         var orderedThoughts = sortedPinnedThoughts(for: note)
         guard let currentIndex = orderedThoughts.firstIndex(where: { $0.id == thought.id }) else { return }
         let clampedTargetIndex = min(max(targetIndex, 0), orderedThoughts.count)
@@ -1252,20 +1593,54 @@ final class NotesViewModel: ObservableObject {
 
     func deletePinnedParagraph(_ thought: PinnedThought) {
         let note = thought.note
-        let deletionPayload = MyRAMPinnedThoughtSyncPayload(thought: thought, isDeleted: true)
+        guard mayMutateNote(note) else { return }
+        let originalModifiedAt = thought.modifiedAt
+        var snapshot: SyncConflictStoreSnapshot?
+        let deletionPayload: MyRAMPinnedThoughtSyncPayload
+        do {
+            try saveContext()
+            snapshot = try syncConflictStore.snapshot()
+            thought.modifiedAt = .now
+            deletionPayload = MyRAMPinnedThoughtSyncPayload(thought: thought, isDeleted: true)
+            if !hasActivePinnedTextConflict(thought) {
+                try syncConflictStore.saveRemoteBaselineChecked(SyncRemoteTextBaseline(
+                    entityType: .pinnedThought, entityID: thought.id, field: .pinnedText,
+                    text: thought.text, richTextContentData: nil,
+                    modifiedAt: thought.modifiedAt, originDeviceID: nil, isDeleted: true
+                ))
+            }
+        } catch {
+            thought.modifiedAt = originalModifiedAt
+            if let snapshot {
+                do { try syncConflictStore.restore(snapshot) } catch {
+                    syncBatchErrorMessage = "Unable to restore pinned text deletion metadata."
+                    return
+                }
+            }
+            syncBatchErrorMessage = "Unable to preserve the pinned text deletion."
+            return
+        }
         note?.pinnedThoughts.removeAll { $0.id == thought.id }
         context.delete(thought)
         reorderPinnedThoughts(for: note)
         note?.modifiedAt = .now
         note?.folder?.modifiedAt = .now
-        try? context.save()
+        do {
+            try saveContext()
+        } catch {
+            context.rollback()
+            if let snapshot {
+                do { try syncConflictStore.restore(snapshot) } catch {
+                    syncBatchErrorMessage = "Unable to restore pinned text deletion metadata."
+                    return
+                }
+            }
+            syncBatchErrorMessage = "Unable to delete the pinned text."
+            return
+        }
         recordPinnedThoughtSyncDeletion(deletionPayload)
-        if let note {
-            recordNoteSyncChange(note)
-        }
-        if let folder = note?.folder {
-            recordFolderSyncChange(folder)
-        }
+        if let note { recordNoteSyncChange(note) }
+        if let folder = note?.folder { recordFolderSyncChange(folder) }
         refreshCurrentFolderContent()
     }
 
@@ -1295,16 +1670,28 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    func markSyncConflictReviewed(_ conflict: SyncConflictVersion) {
-        performCheckedSyncConflictResolution(conflict, action: .keepLocal)
+    func syncConflictForCurrentReview(_ conflict: SyncConflictVersion) -> SyncConflictVersion {
+        do {
+            let current = try syncConflictService.conflictForCurrentReviewChecked(conflict)
+            syncConflicts = syncConflictService.activeConflicts()
+            syncConflictResolutionFailureCode = nil
+            return current
+        } catch {
+            syncConflictResolutionFailureCode = Self.redactedConflictResolutionFailureCode(error)
+            return conflict
+        }
     }
 
-    func restoreSyncConflict(_ conflict: SyncConflictVersion) {
-        performCheckedSyncConflictResolution(conflict, action: .acceptIncoming)
+    func markSyncConflictReviewed(_ conflict: SyncConflictVersion, completion: @escaping (Bool) -> Void = { _ in }) {
+        performCheckedSyncConflictResolution(conflict, action: .keepLocal, completion: completion)
     }
 
-    func saveMergedSyncConflict(_ conflict: SyncConflictVersion, mergedText: String) {
-        performCheckedSyncConflictResolution(conflict, action: .merged(mergedText))
+    func restoreSyncConflict(_ conflict: SyncConflictVersion, completion: @escaping (Bool) -> Void = { _ in }) {
+        performCheckedSyncConflictResolution(conflict, action: .acceptIncoming, completion: completion)
+    }
+
+    func saveMergedSyncConflict(_ conflict: SyncConflictVersion, mergedText: String, completion: @escaping (Bool) -> Void = { _ in }) {
+        performCheckedSyncConflictResolution(conflict, action: .merged(mergedText), completion: completion)
     }
 
     func discardSyncConflict(_ conflict: SyncConflictVersion) {
@@ -1319,10 +1706,18 @@ final class NotesViewModel: ObservableObject {
 
     private func performCheckedSyncConflictResolution(
         _ conflict: SyncConflictVersion,
-        action: CheckedSyncConflictAction
+        action: CheckedSyncConflictAction,
+        completion: @escaping (Bool) -> Void = { _ in }
     ) {
+        guard !isResolvingSyncConflict else {
+            completion(false)
+            return
+        }
+        isResolvingSyncConflict = true
         Task { @MainActor [weak self] in
             guard let self else { return }
+            defer { isResolvingSyncConflict = false }
+            syncConflictResolutionFailureCode = nil
             let publisher: ((MyRAMSyncConflictPayload) async throws -> Void)? = syncController.map { controller in
                 { payload in try await controller.publishConflictResolutionChecked(payload) }
             }
@@ -1351,6 +1746,8 @@ final class NotesViewModel: ObservableObject {
                 }
             } catch {
                 syncConflicts = syncConflictService.activeConflicts()
+                syncConflictResolutionFailureCode = Self.redactedConflictResolutionFailureCode(error)
+                completion(false)
                 return
             }
             syncConflicts = result.conflicts
@@ -1358,12 +1755,43 @@ final class NotesViewModel: ObservableObject {
                 publishActiveEditorReload(noteID: conflict.entityID, reason: .unsupportedIntegratedChange)
             }
             refreshCurrentFolderContent()
+            if let bootstrapController = syncController as? MyRAMSyncBootstrapConfiguring {
+                await bootstrapController.resumeBootstrapAfterConflictResolution()
+            }
             resumePendingConvergencePresentationIfNeeded()
+            syncConflictResolutionFailureCode = nil
+            completion(true)
         }
     }
 
+    func clearSyncConflictResolutionFailure() {
+        syncConflictResolutionFailureCode = nil
+    }
+
+    static func redactedConflictResolutionFailureCode(_ error: Error) -> String {
+        if let failure = error as? MyRAMSyncConflictResolutionError {
+            return String(describing: failure)
+        }
+        if let failure = error as? SyncBootstrapStructuralConflictStoreError {
+            return "structuralStore." + String(describing: failure)
+        }
+        if let failure = error as? NoteSequenceStateStoreError {
+            // Associated values can contain entire note bodies or identities.
+            switch failure {
+            case .visibleBodyChanged: return "localHistory.visibleBodyChanged"
+            case .corruptState: return "localHistory.corruptState"
+            case .corruptMarkState: return "localHistory.corruptMarkState"
+            case .expectedRowButRowIsMissing: return "localHistory.missingRow"
+            case .staleRevision: return "localHistory.staleRevision"
+            case .staleMarkRevision: return "localHistory.staleMarkRevision"
+            default: return "localHistory.validationFailed"
+            }
+        }
+        return "resolutionFailed"
+    }
+
     func addPhotoAttachment(to note: Note, imageData: Data) {
-        guard note.deletedAt == nil else { return }
+        guard note.deletedAt == nil, mayMutateNote(note) else { return }
         let attachment = NotePhotoAttachment(imageData: imageData, note: note)
         context.insert(attachment)
         note.photoAttachments.append(attachment)
@@ -1387,7 +1815,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func removePhotoAttachment(_ attachment: NotePhotoAttachment, from note: Note) {
-        guard note.deletedAt == nil else { return }
+        guard note.deletedAt == nil, mayMutateNote(note) else { return }
         let deletionPayload = MyRAMPhotoAttachmentSyncPayload(attachment: attachment, isDeleted: true)
         note.photoAttachments.removeAll { $0.id == attachment.id }
         context.delete(attachment)
@@ -1403,6 +1831,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func deleteNote(_ note: Note) {
+        guard mayMutateNote(note) else { return }
         let snapshot = NoteDeletionUndoSnapshot(
             noteID: note.id,
             previousDeletedAt: note.deletedAt,
@@ -1428,7 +1857,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func moveNote(_ note: Note, to destinationFolder: Folder?) {
-        guard note.deletedAt == nil else { return }
+        guard note.deletedAt == nil, mayMutateNote(note) else { return }
         if note.folder?.id == destinationFolder?.id { return }
         let previousFolderID = note.folder?.id
         let destinationFolderID = destinationFolder?.id
@@ -1454,6 +1883,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func restoreNote(_ note: Note) {
+        guard mayMutateNote(note) else { return }
         do {
             _ = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
                 for: note,
@@ -1472,6 +1902,12 @@ final class NotesViewModel: ObservableObject {
             change: IPhoneSyncBatchCaptureHook.lifecycleChanged(note),
             evidence: nil
         ))
+        // Restoration changes the parent's lifecycle, not the retained children's
+        // edit identities or timestamps. Send each child through its existing
+        // ordinary sync owner so a peer missing that retained state can recover it.
+        for pinnedText in sortedPinnedThoughts(for: note) {
+            recordPinnedThoughtSyncChange(pinnedText)
+        }
         if let folder = note.folder {
             recordFolderSyncChange(folder)
         }
@@ -1501,6 +1937,7 @@ final class NotesViewModel: ObservableObject {
 #endif
 
     func permanentlyDeleteNote(_ note: Note) {
+        guard mayMutateNote(note) else { return }
         let noteID = note.id
         do {
             try NoteSequenceStateFullBodyIntegration
@@ -1547,7 +1984,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func undoNoteCreation(using snapshot: NoteCreationUndoSnapshot) {
-        guard let note = fetchNote(withID: snapshot.noteID) else {
+        guard let note = fetchNote(withID: snapshot.noteID), mayMutateNote(note) else {
             refreshCurrentFolderContent()
             return
         }
@@ -1648,7 +2085,8 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func applyNoteMove(noteID: UUID, destinationFolderID: UUID?) {
-        guard let note = fetchNote(withID: noteID), note.deletedAt == nil else {
+        guard let note = fetchNote(withID: noteID),
+              note.deletedAt == nil, mayMutateNote(note) else {
             refreshCurrentFolderContent()
             return
         }
@@ -1688,7 +2126,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func redoNoteDeletion(using snapshot: NoteDeletionUndoSnapshot) {
-        guard let note = fetchNote(withID: snapshot.noteID) else {
+        guard let note = fetchNote(withID: snapshot.noteID), mayMutateNote(note) else {
             refreshCurrentFolderContent()
             return
         }
@@ -1708,6 +2146,7 @@ final class NotesViewModel: ObservableObject {
         let notesToRestore = snapshot.noteMoves.compactMap {
             fetchNote(withID: $0.noteID)
         }
+        guard notesToRestore.allSatisfy({ mayMutateNote($0) }) else { return false }
         do {
             for note in notesToRestore {
                 _ = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
@@ -1755,6 +2194,12 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func redoFolderDeletion(using snapshot: FolderDeletionUndoSnapshot) {
+        guard !snapshot.noteMoves.contains(where: {
+            startupQuarantinedNoteIDs.contains($0.noteID)
+        }) else {
+            syncBatchErrorMessage = "A protected note prevents this folder action."
+            return
+        }
         let deletedAt = Date()
         let folderIDs = Set(snapshot.folders.map(\.id))
         let rootFolderRecord = snapshot.folders.min { $0.depth < $1.depth }
@@ -2725,18 +3170,30 @@ final class NotesViewModel: ObservableObject {
     }
 
     func capturePendingLocalBatchesForRecovery() async throws -> Set<SyncBatchID> {
-        guard let collection = await syncBatchAccumulator.takePendingCollectionNow() else {
-            return []
+        var capturedBatchIDs: Set<SyncBatchID> = []
+        // Recovery needs durable capture ownership, independently of whether
+        // suspended transport can drain. Never route work just to inspect it.
+        for _ in 0..<3 {
+            let captureBoundary = nextSyncBatchCaptureID
+            let tasks = syncBatchCaptureTasks
+                .filter { $0.key <= captureBoundary }
+                .sorted { $0.key < $1.key }
+                .map(\.value)
+            for task in tasks { await task.value }
+            if let collection = await syncBatchAccumulator.takePendingCollectionNow() {
+                switch await durablyAdmitPreparedLocalCollection(collection) {
+                case .admitted:
+                    capturedBatchIDs.formUnion(collection.batchIDs)
+                case .retryableCapacity, .retryablePersistenceFailure:
+                    throw PreparedLocalAdmissionError.retryable
+                case .terminal(let outcome):
+                    await handleConvergenceRuntimeOutcome(outcome)
+                    throw PreparedLocalAdmissionError.terminal
+                }
+            }
+            if captureBoundary == nextSyncBatchCaptureID { return capturedBatchIDs }
         }
-        switch await durablyAdmitPreparedLocalCollection(collection) {
-        case .admitted:
-            return collection.batchIDs
-        case .retryableCapacity, .retryablePersistenceFailure:
-            throw PreparedLocalAdmissionError.retryable
-        case .terminal(let outcome):
-            await handleConvergenceRuntimeOutcome(outcome)
-            throw PreparedLocalAdmissionError.terminal
-        }
+        throw PendingSyncRecoveryCoordinator.RecoveryError.pendingLocalEditsNotDurable
     }
 
     private func prepareLocalOwnershipForBootstrap()
@@ -2766,16 +3223,19 @@ final class NotesViewModel: ObservableObject {
         let outcome = await syncConvergenceRuntime.resumePendingWork()
         await handleConvergenceRuntimeOutcome(outcome)
         switch outcome {
+        case .blocked(let failure) where failure.kind == .queueCapacity:
+            // The bootstrap snapshot freezes both queues, including local
+            // obligations waiting for unsent capacity or a peer baseline.
+            break
         case .blocked, .quarantined:
             return .terminal(outcome)
-        case .pending, .deferred, .alreadyDraining:
+        case .pending, .alreadyDraining:
             return .retryablePending
-        case .drained:
+        case .drained, .deferred:
             break
         }
 
         guard captureBoundary == nextSyncBatchCaptureID,
-              pendingLocalConvergenceBatches.pendingCount == 0,
               await syncBatchAccumulator.takePendingCollectionNow() == nil else {
             return .retryablePending
         }
@@ -2799,14 +3259,23 @@ final class NotesViewModel: ObservableObject {
         let coordinator = PendingSyncRecoveryCoordinator(
             queueAdmin: syncController,
             localQueueSnapshot: { [weak self] in
-                self?.localConvergenceQueueSnapshot()
-                    ?? FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .fileMissing)
+                self.map { FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: $0.pendingLocalConvergenceBatches.pendingObligations,
+                    health: $0.pendingLocalConvergenceBatches.snapshot().health
+                ) } ?? FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: [], health: .readFailed("Local queue owner unavailable")
+                )
             },
-            replaceLocalBatches: { [weak self] batches in
-                try await self?.replaceLocalConvergenceBatches(batches)
+            replaceLocalObligations: { [weak self] obligations in
+                guard let self else { throw PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed }
+                try self.pendingLocalConvergenceBatches.replacePendingObligations(obligations)
+                await self.refreshPendingSyncStatusForLocalConvergenceMutation?()
             },
             flushReadyLocalBatches: { [weak self] in
-                try await self?.capturePendingLocalBatchesForRecovery() ?? []
+                guard let self else {
+                    throw PendingSyncRecoveryCoordinator.RecoveryError.pendingLocalEditsNotDurable
+                }
+                return try await self.capturePendingLocalBatchesForRecovery()
             }
         )
 
@@ -2834,17 +3303,33 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    func rollbackIfNeededOnLaunch(syncController: MyRAMSyncController) async throws {
+    func rollbackIfNeededOnLaunch(
+        syncController: MyRAMSyncController,
+        journalStore: PendingSyncRecoveryJournalStore = PendingSyncRecoveryJournalStore()
+    ) async throws {
+        // Finish captures before queue rollback; the mounted editor is disabled
+        // for this transaction, and incoming presentation remains suspended.
+        guard await editorLifecyclePersistence.awaitAllDurableCompletion() else {
+            throw PendingSyncRecoveryCoordinator.RecoveryError.pendingLocalEditsNotDurable
+        }
+        _ = try await capturePendingLocalBatchesForRecovery()
         let coordinator = PendingSyncRecoveryCoordinator(
             queueAdmin: syncController,
             localQueueSnapshot: { [weak self] in
-                self?.localConvergenceQueueSnapshot()
-                    ?? FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .fileMissing)
+                self.map { FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: $0.pendingLocalConvergenceBatches.pendingObligations,
+                    health: $0.pendingLocalConvergenceBatches.snapshot().health
+                ) } ?? FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: [], health: .readFailed("Local queue owner unavailable")
+                )
             },
-            replaceLocalBatches: { [weak self] batches in
-                try await self?.replaceLocalConvergenceBatches(batches)
+            replaceLocalObligations: { [weak self] obligations in
+                guard let self else { throw PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed }
+                try self.pendingLocalConvergenceBatches.replacePendingObligations(obligations)
+                await self.refreshPendingSyncStatusForLocalConvergenceMutation?()
             },
-            flushReadyLocalBatches: { [] }
+            flushReadyLocalBatches: { [] },
+            journalStore: journalStore
         )
         try await coordinator.rollbackIfNeededOnLaunch()
     }
@@ -2879,6 +3364,7 @@ final class NotesViewModel: ObservableObject {
     private func handleReadyLocalObligations(
         _ collection: SyncPreparedLocalObligationCollection
     ) async {
+        guard syncController?.applicationSyncEnabled != false else { return }
         switch await durablyAdmitPreparedLocalCollection(collection) {
         case .admitted:
             let outcome = await syncConvergenceRuntime.resumePendingWork()
@@ -2893,6 +3379,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func resumePendingConvergencePresentationIfNeeded() {
+        guard syncController?.applicationSyncEnabled != false else { return }
         guard pendingConvergenceResumeTask == nil else { return }
         pendingConvergenceResumeTask = Task { [weak self] in
             await self?.resumePendingConvergencePresentation()
@@ -2903,6 +3390,8 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func resumePendingConvergencePresentation() async {
+        guard !isStartupSyncRecoveryPending else { return }
+        guard syncController?.applicationSyncEnabled != false else { return }
         let outcome = await syncConvergenceRuntime.resumePendingWork()
         await handleConvergenceRuntimeOutcome(outcome)
     }
@@ -2941,7 +3430,8 @@ final class NotesViewModel: ObservableObject {
                 return SyncBatchDrainFailureClassifier.userMessage(
                     for: SyncBatchDrainFailure(batchID: item.batchID, kind: .mismatchedBase)
                 )
-            case .unsupportedReconciliation, .historyPressure, .missingFolderDependency:
+            case .unsupportedReconciliation, .historyPressure, .missingFolderDependency,
+                 .structuralMarkDependency:
                 continue
                 }
             case .anchoredDependency(_), .legacyLocalEvidenceStale,
@@ -3128,51 +3618,6 @@ final class NotesViewModel: ObservableObject {
         }
 
         return result
-    }
-
-    private func purgeExpiredDeletedNotes() {
-        let cutoff = Date().addingTimeInterval(-Self.recentlyDeletedRetention)
-        let descriptor = FetchDescriptor<Note>(
-            predicate: #Predicate { $0.deletedAt != nil }
-        )
-        let deletedNotes = (try? context.fetch(descriptor)) ?? []
-        let expiredNotes = deletedNotes.filter {
-            guard let deletedAt = $0.deletedAt else { return false }
-            return deletedAt < cutoff
-        }
-
-        var structurallyAbsentNoteIDs: Set<UUID> = []
-        do {
-            structurallyAbsentNoteIDs.formUnion(
-                try NoteSequenceStateFullBodyIntegration
-                    .stageOrphanedStructuralAuthorityCleanup(in: context)
-            )
-            for note in expiredNotes {
-                structurallyAbsentNoteIDs.insert(note.id)
-                try NoteSequenceStateFullBodyIntegration
-                    .stagePermanentDeletion(of: note, in: context)
-            }
-            if context.hasChanges {
-                try context.save()
-            }
-        } catch {
-            context.rollback()
-            syncBatchErrorMessage =
-                "Unable to purge expired notes and structural state."
-            return
-        }
-
-        do {
-            for noteID in structurallyAbsentNoteIDs.sorted(
-                by: { $0.uuidString < $1.uuidString }
-            ) {
-                try pendingLocalConvergenceBatches
-                    .removeTerminalStructuralMarkObligations(for: noteID)
-            }
-        } catch {
-            syncBatchErrorMessage =
-                "Purged notes are waiting for pending formatting cleanup."
-        }
     }
 
     func exportNotesForSharing(

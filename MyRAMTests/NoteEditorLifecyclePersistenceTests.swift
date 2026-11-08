@@ -6,6 +6,84 @@ import UIKit
 
 @MainActor
 final class NoteEditorLifecyclePersistenceTests: XCTestCase {
+    func testActivatedLegacySaveCannotDesynchronizeNoteBodyAndPersistedSequence() throws {
+        XCTAssertTrue(SyncBatchAnchoredPayloadCapability.isEnabled)
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR238-LegacySaveGuard-\(UUID().uuidString)",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        let container = try ModelContainer(for: schema, configurations: configuration)
+        let context = container.mainContext
+        let note = Note(title: "Original", content: "Original body")
+        context.insert(note)
+        try context.save()
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
+        let record = try XCTUnwrap(
+            context.fetch(FetchDescriptor<NoteSequenceStateRecord>()).first
+        )
+        let originalPayload = record.statePayloadData
+        let originalRevision = record.revision
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR238-LegacyGuard-\(UUID().uuidString)")
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: SyncConflictStore(fileURL: root.appendingPathComponent("conflicts.json")),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false
+        )
+
+        XCTAssertFalse(vm.commitNoteEdit(note, title: "Changed", content: "Unpaired body"))
+        XCTAssertEqual(note.title, "Original")
+        XCTAssertEqual(note.content, "Original body")
+        XCTAssertEqual(record.revision, originalRevision)
+        XCTAssertEqual(record.statePayloadData, originalPayload)
+        let persisted = try XCTUnwrap(
+            ModelContext(container).fetch(FetchDescriptor<Note>()).first
+        )
+        XCTAssertEqual(persisted.content, "Original body")
+        XCTAssertFalse(context.hasChanges)
+    }
+
+    func testMYR233ExpiredDeletionRetainsPinnedTextAcrossStartupAndBootstrap() throws {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let container = try ModelContainer(for: schema, configurations:
+            ModelConfiguration(schema: schema, isStoredInMemoryOnly: true))
+        let context = container.mainContext
+        let note = Note(title: "Expired deletion", content: "Retained body")
+        note.id = try XCTUnwrap(UUID(uuidString: "1B323F1E-F216-4AA3-B92D-B5E97050DDAD"))
+        note.deletedAt = Date(timeIntervalSinceReferenceDate: 811687093.866592)
+        let pin = PinnedThought(text: "Retained pinned text", order: 0, note: note)
+        pin.id = try XCTUnwrap(UUID(uuidString: "2846A922-529C-4901-8B3E-F5FAEA0A32CD"))
+        context.insert(note)
+        context.insert(pin)
+        try context.save()
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
+        let peerSnapshot = try SyncPeerBootstrapSnapshotPersistence.build(from: context)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let vm = NotesViewModel(context: context,
+            syncConflictStore: SyncConflictStore(fileURL: root.appendingPathComponent("conflicts.json")),
+            pendingIncomingBatchQueueFileURL: nil,
+            anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore(fileURL: root.appendingPathComponent("recovery.json")),
+            pendingLocalConvergenceBatchQueueFileURL: nil, resumesPendingConvergenceOnInit: false)
+
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Note>()).map(\.id), [note.id])
+        XCTAssertEqual(try context.fetch(FetchDescriptor<PinnedThought>()).map(\.id), [pin.id])
+        let applied = try SyncPeerBootstrapSnapshotPersistence.apply(peerSnapshot, to: context)
+        XCTAssertFalse(applied.presentationRefreshRequired)
+        let retained = try XCTUnwrap(context.fetch(FetchDescriptor<Note>()).first)
+        XCTAssertEqual(retained.deletedAt, note.deletedAt)
+        XCTAssertEqual(retained.pinnedThoughts.map(\.id), [pin.id])
+        XCTAssertEqual(retained.pinnedThoughts.map(\.text), ["Retained pinned text"])
+        XCTAssertFalse(vm.notes.contains { $0.id == note.id })
+        XCTAssertTrue(vm.fetchRecentlyDeletedNotes(now: Date(timeIntervalSinceReferenceDate: 813283200)).isEmpty)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<PinnedThought>()).count, 1)
+    }
+
     func testActivationOnLifecycleBoundaryCommitsThroughAsynchronousDurability() async throws {
         XCTAssertTrue(SyncBatchAnchoredPayloadCapability.isEnabled)
         let schema = Schema(MyRAMModelRegistry.models)
@@ -180,6 +258,115 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         XCTAssertTrue(durableAfterRedundantRetry)
         XCTAssertEqual(note.title, "Newer")
         XCTAssertEqual(note.content, "Newer")
+    }
+
+    func testMYR235RepeatedIdenticalLifecycleFlushPreservesAuthoritativeModifiedAt() async throws {
+        XCTAssertTrue(SyncBatchAnchoredPayloadCapability.isEnabled)
+        let schema = Schema(MyRAMModelRegistry.models)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: ModelConfiguration(
+                "MYR235NoOpLifecycle-\(UUID().uuidString)",
+                schema: schema,
+                isStoredInMemoryOnly: true
+            )
+        )
+        let context = container.mainContext
+        let note = Note(title: "iPhone title", content: "iPhone body")
+        let committedModifiedAt = Date(timeIntervalSinceReferenceDate: 814291498.222997)
+        context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: note,
+            in: context
+        )
+        note.modifiedAt = committedModifiedAt
+        try context.save()
+
+        var saveCalls = 0
+        let viewModel = NotesViewModel(
+            context: context,
+            syncConflictStore: SyncConflictStore(
+                fileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathComponent("conflicts.json")
+            ),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false,
+            saveContext: {
+                saveCalls += 1
+                try context.save()
+            }
+        )
+        let priorSaveCalls = saveCalls
+        XCTAssertTrue(viewModel.acceptEditorLifecycleSnapshot(
+            note,
+            title: "iPhone title",
+            content: "iPhone body",
+            richTextContentData: nil,
+            generation: UUID()
+        ))
+        let durable = await viewModel.awaitEditorLifecyclePersistence(noteID: note.id)
+        XCTAssertTrue(durable)
+        XCTAssertEqual(saveCalls, priorSaveCalls)
+        XCTAssertEqual(note.modifiedAt, committedModifiedAt)
+        XCTAssertFalse(viewModel.hasRecentTextEditForTesting(noteID: note.id))
+
+        let persisted = try XCTUnwrap(ModelContext(container)
+            .fetch(FetchDescriptor<Note>()).first)
+        XCTAssertEqual(persisted.id, note.id)
+        XCTAssertEqual(persisted.title, "iPhone title")
+        XCTAssertEqual(persisted.content, "iPhone body")
+        XCTAssertEqual(persisted.modifiedAt, committedModifiedAt)
+        XCTAssertEqual(persisted.isPinned, false)
+        XCTAssertNil(persisted.deletedAt)
+    }
+
+    func testMYR235LegacyPresentationCacheAndUnchangedRenameDoNotAdvanceTimestamp() throws {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let container = try ModelContainer(
+            for: schema,
+            configurations: ModelConfiguration(
+                "MYR235NoOpLegacy-\(UUID().uuidString)",
+                schema: schema,
+                isStoredInMemoryOnly: true
+            )
+        )
+        let context = container.mainContext
+        let note = Note(title: "Same title", content: "Same body")
+        let committedModifiedAt = Date(timeIntervalSinceReferenceDate: 814291498.222997)
+        note.modifiedAt = committedModifiedAt
+        context.insert(note)
+        try context.save()
+
+        let viewModel = NotesViewModel(
+            context: context,
+            syncConflictStore: SyncConflictStore(
+                fileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathComponent("conflicts.json")
+            ),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false
+        )
+
+        XCTAssertTrue(viewModel.commitNoteEdit(
+            note,
+            title: "Same title",
+            content: "Same body",
+            richTextContentData: Data("presentation-only".utf8)
+        ))
+        XCTAssertEqual(note.modifiedAt, committedModifiedAt)
+        viewModel.renameNote(note, to: "  Same title  ")
+        XCTAssertEqual(note.modifiedAt, committedModifiedAt)
+
+        let persisted = try XCTUnwrap(ModelContext(container)
+            .fetch(FetchDescriptor<Note>()).first)
+        XCTAssertEqual(persisted.modifiedAt, committedModifiedAt)
+        XCTAssertEqual(persisted.title, "Same title")
+        XCTAssertEqual(persisted.content, "Same body")
+        XCTAssertEqual(persisted.richTextContentData, Data("presentation-only".utf8))
     }
 
     func testFormattingOnlyProductionCommitAdvancesMarksWithoutRecentTextGate() async throws {

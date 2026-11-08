@@ -223,7 +223,7 @@ final class SyncConvergencePlanningTests: XCTestCase {
         }
         XCTAssertFalse(effect.didChangeApplicationState)
         XCTAssertEqual(effect.finalMarkState, markState)
-        XCTAssertEqual(validated.plan.presentationPlan.noteRoutings[noteID], .none)
+        XCTAssertEqual(validated.plan.presentationPlan.noteRoutings[noteID], SyncConvergencePresentationRouting.none)
     }
 
     func testStructuralMarkDependencyAllowsSupplyingAnchoredCandidatePastBlock() {

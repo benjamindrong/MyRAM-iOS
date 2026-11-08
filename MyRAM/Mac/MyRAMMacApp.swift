@@ -1,8 +1,10 @@
 #if os(macOS)
 import SwiftUI
+import AppKit
 
 @main
 struct MyRAMMacApp: App {
+    @NSApplicationDelegateAdaptor(MyRAMMacApplicationDelegate.self) private var applicationDelegate
     var body: some Scene {
         WindowGroup {
             MyRAMMacAppRootFactory.makeRoot(
@@ -17,6 +19,17 @@ struct MyRAMMacApp: App {
             MacNoteViewZoomCommands()
             MacMarkdownFileCommands()
         }
+    }
+}
+
+@MainActor
+final class MyRAMMacApplicationDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillTerminate(_ notification: Notification) {
+        guard !MacStartupNetworkingPolicy.isHostedTest(
+            environment: ProcessInfo.processInfo.environment,
+            isXCTestRuntimeLoaded: NSClassFromString("XCTestCase") != nil
+        ) else { return }
+        MyRAMMacProcessSyncCompositionRoot.syncController.stopNetworking()
     }
 }
 

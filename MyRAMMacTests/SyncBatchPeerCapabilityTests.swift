@@ -34,7 +34,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
 
     func testStrictDecoderRejectsNoncanonicalValues() {
         for value in [
-            "", ",1", "1,", "1,,2", "1,1", "3", "0", "-1",
+            "", ",1", "1,", "1,,2", "1,1", "4", "0", "-1",
             "+1", "01", "1,02", " 1", "1 ", "1, 2", "1,2 ",
             "one", "2,1"
         ] {
@@ -304,7 +304,9 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             foundPeer: remotePeerID,
             withDiscoveryInfo: [
                 SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2",
-                SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey: "1"
+                SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey: "1",
+                SyncBatchPeerCapabilityCodec.structuralMarkDiscoveryInfoKey:
+                    SyncBatchPeerCapabilityCodec.structuralMarkDiscoveryInfoValue
             ]
         )
         await Task.yield()
@@ -496,6 +498,92 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         )
     }
 
+    func testPartialBootstrapNoteCoverageReplaysBaselineSafeHistoryWithoutOpeningMacBarrier() async throws {
+        let peer = MCPeerID(displayName: "Remote|partial-bootstrap-mac")
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let context = container.mainContext
+        let coveredNoteID = UUID(uuidString: "23300000-0000-0000-0000-0000000000C1")!
+        let uncoveredNoteID = UUID(uuidString: "23300000-0000-0000-0000-0000000000C2")!
+        let coveredNote = Note(title: "Covered", content: "")
+        coveredNote.id = coveredNoteID
+        let uncoveredNote = Note(title: "Uncovered", content: "")
+        uncoveredNote.id = uncoveredNoteID
+        context.insert(coveredNote)
+        context.insert(uncoveredNote)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: coveredNote,
+            in: context
+        )
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: uncoveredNote,
+            in: context
+        )
+        try context.save()
+
+        var kinds: [MultipeerSyncMessageKind] = []
+        var sentBatchIDs: [SyncBatchID] = []
+        let controller = try makeController(
+            context: context,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in
+                let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+                kinds.append(message.kind)
+                if message.kind == .batchSync {
+                    sentBatchIDs.append(try SyncBatchEnvelopeCodec.decode(message.payload).batch.id)
+                }
+            }
+        )
+        controller.recordBootstrapCapabilityForTesting(
+            "1",
+            forPeerDeviceID: "partial-bootstrap-mac"
+        )
+        let blockedHistorical = makeV1TitleBatch(idSuffix: 2173, noteID: uncoveredNoteID)
+        let safeHistorical = makeV1TitleBatch(idSuffix: 2174, noteID: coveredNoteID)
+
+        try await controller.acceptLocalBatch(blockedHistorical)
+        try await controller.acceptLocalBatch(safeHistorical)
+        controller.beginBootstrapForTesting(to: peer)
+        let state = try XCTUnwrap(
+            controller.bootstrapStateForTesting(peerDeviceID: "partial-bootstrap-mac")
+        )
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: state.snapshotID,
+                coveredBatchIDs: [],
+                coveredNoteIDs: [coveredNoteID]
+            ),
+            from: peer
+        )
+
+        XCTAssertFalse(
+            controller.bootstrapStateForTesting(peerDeviceID: "partial-bootstrap-mac")?
+                .ordinarySyncReady == true
+        )
+        XCTAssertEqual(
+            controller.unsentBatchQueueSnapshotForTesting().pendingBatches.map(\.id),
+            [blockedHistorical.id, safeHistorical.id]
+        )
+        XCTAssertEqual(sentBatchIDs, [safeHistorical.id])
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: state.snapshotID,
+                coveredBatchIDs: [blockedHistorical.id, safeHistorical.id],
+                coveredNoteIDs: [coveredNoteID, uncoveredNoteID]
+            ),
+            from: peer
+        )
+
+        XCTAssertTrue(
+            controller.bootstrapStateForTesting(peerDeviceID: "partial-bootstrap-mac")?
+                .ordinarySyncReady == true
+        )
+        XCTAssertTrue(controller.unsentBatchQueueSnapshotForTesting().pendingBatches.isEmpty)
+        XCTAssertTrue(kinds.contains(.batchSync))
+    }
+
     func testBootstrapApplyRejectsDirtyDestinationWithoutSavingOrRollingBackLocalChanges() throws {
         let sourceContainer = try makeInMemoryContainer()
         let sourceContext = sourceContainer.mainContext
@@ -534,6 +622,84 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertFalse(
             try destinationContext.fetch(FetchDescriptor<Note>())
                 .contains(where: { $0.id == remoteNote.id })
+        )
+    }
+
+    func testBootstrapMergeReportsCausallySubsumedHistoricalBatchAsCovered() throws {
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "23300000-0000-0000-0000-0000000000D1")!
+        let batchID = UUID(uuidString: "23300000-0000-0000-0000-0000000000D2")!
+        let originDeviceID = UUID(uuidString: "23300000-0000-0000-0000-0000000000D3")!
+        let createdAt = Date(timeIntervalSinceReferenceDate: 2_330)
+        let modifiedAt = createdAt.addingTimeInterval(1)
+        let note = Note(title: "Shared", content: "B")
+        note.id = noteID
+        note.createdAt = createdAt
+        note.modifiedAt = createdAt
+        context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
+
+        let initial = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: note,
+            in: context
+        )
+        let insertion = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: noteID,
+            utf16Offset: 1,
+            text: "A",
+            modifiedAt: modifiedAt,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "B"),
+            operationID: SyncOperationID(deviceID: originDeviceID, localCounter: 1),
+            state: initial.state
+        )
+        guard case .noteBodyTextInsertedAnchored(let anchoredInsertion) = insertion else {
+            return XCTFail("Expected anchored insertion")
+        }
+        let remoteState = try SyncBatchAnchoredInsertReplay.applying(
+            anchoredInsertion,
+            to: initial.state
+        ).sequenceState
+        let payload = try NoteSequenceStatePersistenceCodec.encode(
+            state: remoteState,
+            noteID: noteID
+        )
+        let snapshot = SyncPeerBootstrapSnapshot(
+            id: UUID(uuidString: "23300000-0000-0000-0000-0000000000D4")!,
+            folders: [],
+            notes: [SyncPeerBootstrapNoteSnapshot(
+                id: noteID,
+                title: note.title,
+                body: remoteState.visibleText,
+                isPinned: false,
+                createdAt: createdAt,
+                modifiedAt: modifiedAt,
+                deletedAt: nil,
+                folderID: nil,
+                formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+                revision: 1,
+                visibleUTF16Count: remoteState.visibleUTF16Count,
+                tombstonedUTF16Count: remoteState.tombstonedUTF16Count,
+                payloadByteCount: payload.count,
+                statePayloadData: payload
+            )],
+            historyCoverage: [SyncPeerBootstrapHistoryBatchCoverage(
+                batchID: batchID,
+                noteIDs: [noteID],
+                anchoredRecoveryChanges: [.insertion(anchoredInsertion)]
+            )]
+        )
+
+        let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(snapshot, to: context)
+
+        XCTAssertEqual(note.content, "BA")
+        XCTAssertEqual(disposition.coveredNoteIDs, [noteID])
+        XCTAssertEqual(
+            disposition.coveredBatchIDs,
+            [batchID],
+            "History incorporated by the committed bootstrap baseline must retire through the bootstrap acknowledgement instead of replaying against that newer baseline."
         )
     }
 
@@ -631,7 +797,9 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             controller.advertisedBatchSchemaDiscoveryInfo,
             [
                 SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2",
-                SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey: "1"
+                SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey: "1",
+                SyncBatchPeerCapabilityCodec.structuralMarkDiscoveryInfoKey:
+                    SyncBatchPeerCapabilityCodec.structuralMarkDiscoveryInfoValue
             ]
         )
 
@@ -645,7 +813,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertEqual(invitationContexts, [Data("1,2".utf8)])
     }
 
-    func testControllerReconnectRebindsWithoutRediscoveryAndUpdatesRevokeImmediately() async throws {
+    func testControllerReconnectRebindsWithoutRediscoveryAndDefersReplacementCapabilities() async throws {
         let localPeerID = MCPeerID(displayName: "Local|local-device")
         let remotePeerID = MCPeerID(displayName: "Remote|capability-peer")
         var connectedPeers = [remotePeerID]
@@ -686,7 +854,8 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             invitationHandler: { _, _ in }
         )
         await Task.yield()
-        XCTAssertFalse(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
+        XCTAssertTrue(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"),
+                      "Pending replacement context must not revoke the preceding session's capabilities")
 
         controller.advertiser(
             advertiser,

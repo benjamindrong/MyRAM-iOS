@@ -138,17 +138,37 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
         }
     }
 
+    func removeObligationsForBootstrapAcknowledgement(withIDs ids: Set<UUID>) throws {
+        let original = obligations
+        do {
+            try removeObligations(withIDs: ids)
+        } catch QueueError.persistenceFailed {
+            let reloaded = loadPersistedQueue()
+            health = reloaded.health
+            if canPersistCurrentQueue, reloaded.obligations == original {
+                obligations = reloaded.obligations
+            } else {
+                health = .readFailed("Bootstrap cleanup rollback verification failed")
+            }
+            throw QueueError.persistenceFailed
+        }
+    }
+
     func replacePendingBatches(_ replacement: [SyncBatch]) throws {
         try replacement.forEach(SyncBatchAnchoredPayloadPolicy.validateDurableAdmission)
-        try replacePendingObligations(replacement.map(SyncConvergenceLocalObligation.init(legacyBatch:)))
+        let preserved = replacement.map { batch in
+            obligations.first { $0.batch == batch }
+                ?? SyncConvergenceLocalObligation(legacyBatch: batch)
+        }
+        try replacePendingObligations(preserved)
     }
 
     func replacePendingObligations(_ replacement: [SyncConvergenceLocalObligation]) throws {
-        try replacement.forEach(Self.validateDurableObligation)
+        try Self.validateDurableObligations(replacement)
         guard canReplaceQueue else { throw QueueError.unhealthyPersistence }
 
         let original = obligations
-        obligations = Array(replacement.prefix(limit))
+        obligations = replacement
         do {
             try persistQueueThrowing(allowUnhealthyReplacement: true)
             health = .healthy
@@ -190,7 +210,7 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
             switch version {
             case PersistedSyncConvergenceLocalObligationQueue.currentVersion:
                 let persistedQueue = try JSONDecoder().decode(PersistedSyncConvergenceLocalObligationQueue.self, from: data)
-                try persistedQueue.obligations.forEach(Self.validateDurableObligation)
+                try Self.validateDurableObligations(persistedQueue.obligations)
                 return FileBackedSyncConvergenceLocalObligationQueueSnapshot(
                     obligations: persistedQueue.obligations,
                     health: .healthy
@@ -201,6 +221,7 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
                     from: data
                 )
                 try legacyQueue.obligations.forEach(Self.validateLegacyV2Obligation)
+                try Self.validateDurableObligations(legacyQueue.obligations)
                 obligations = legacyQueue.obligations
                 try persistQueueThrowing(allowUnhealthyReplacement: true)
                 return FileBackedSyncConvergenceLocalObligationQueueSnapshot(
@@ -209,10 +230,9 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
                 )
             case PersistedLegacySyncBatchQueue.currentVersion:
                 let legacyQueue = try JSONDecoder().decode(PersistedLegacySyncBatchQueue.self, from: data)
-                try legacyQueue.batches.forEach(
-                    SyncBatchAnchoredPayloadPolicy.validateDurableAdmission
-                )
                 let migrated = legacyQueue.batches.map(SyncConvergenceLocalObligation.init(legacyBatch:))
+                try migrated.forEach(Self.validateLegacyV2Obligation)
+                try Self.validateDurableObligations(migrated)
                 obligations = migrated
                 try persistQueueThrowing(allowUnhealthyReplacement: true)
                 return FileBackedSyncConvergenceLocalObligationQueueSnapshot(obligations: migrated, health: .healthy)
@@ -298,7 +318,7 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
                     PersistedSyncConvergenceLocalObligationQueue.self,
                     from: data
                 )
-                try persisted.obligations.forEach(Self.validateDurableObligation)
+                try Self.validateDurableObligations(persisted.obligations)
                 guard persisted.obligations == expectedObligations else {
                     health = .readFailed("Persisted queue image changed after failed write")
                     return false
@@ -316,6 +336,18 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
             }
         case .corrupt, .unsupportedVersion, .unsupportedAnchoredPayload, .readFailed:
             return false
+        }
+    }
+
+    private static func validateDurableObligations(
+        _ obligations: [SyncConvergenceLocalObligation]
+    ) throws {
+        var ids: Set<SyncBatchID> = []
+        for obligation in obligations {
+            try validateDurableObligation(obligation)
+            guard ids.insert(obligation.id).inserted else {
+                throw QueueError.conflictingDuplicateIdentity(obligation.id)
+            }
         }
     }
 

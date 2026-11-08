@@ -340,7 +340,7 @@ struct MyRAMMacRootView: View {
     }
 
     private func configureSyncConvergenceIfNeeded() {
-        guard syncConvergenceCoordinator == nil else { return }
+        guard syncController.applicationSyncEnabled, syncConvergenceCoordinator == nil else { return }
 
         let presentationSurface = MacSyncConvergencePresentationSurface(
             selectedNoteID: { selectedNoteID },
@@ -424,6 +424,8 @@ struct MyRAMMacRootView: View {
             (conflict.entityType == .note && selectedNoteID == conflict.entityID) {
             reloadSelectedEditor(reason: .unsafeIncrementalApply)
         }
+        await syncController.resumeBootstrapAfterConflictResolution()
+        resumeSyncConvergence()
     }
 
     private func resumeSyncConvergence() {
@@ -1054,46 +1056,49 @@ private struct MacNoteListView: View {
     let onCreateNote: () -> Void
 
     var body: some View {
-        List(selection: selectedBinding) {
-            Section {
-                MacSyncStatusView(syncController: syncController)
-            }
+        VStack(spacing: 0) {
+            // Sync controls are independent of the selectable note list.
+            // A selection row must never intercept diagnostic or recovery actions.
+            MacSyncStatusView(syncController: syncController)
+            Divider()
 
-            Section {
-                MacSyncConflictSummaryView(
-                    store: conflictStore,
-                    refreshToken: syncController.lastSyncAt,
-                    resolve: resolveConflict
-                )
-            }
-
-            ForEach(notes, id: \.id) { note in
-                Button {
-                    onSelect(note)
-                } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(displayTitle(for: note))
-                            .font(.headline)
-                            .lineLimit(1)
-                        Text(displayPreview(for: note))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(selectionBackground(for: note))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .tag(note.id)
-                .contextMenu {
-                    MyRAMWidgetSelectionButton(
-                        coordinator: widgetCoordinator,
-                        noteID: note.id
+            List(selection: selectedBinding) {
+                Section {
+                    MacSyncConflictSummaryView(
+                        store: conflictStore,
+                        refreshToken: syncController.lastSyncAt,
+                        resolve: resolveConflict
                     )
+                }
+
+                ForEach(notes, id: \.id) { note in
+                    Button {
+                        onSelect(note)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(displayTitle(for: note))
+                                .font(.headline)
+                                .lineLimit(1)
+                            Text(displayPreview(for: note))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(selectionBackground(for: note))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .tag(note.id)
+                    .contextMenu {
+                        MyRAMWidgetSelectionButton(
+                            coordinator: widgetCoordinator,
+                            noteID: note.id
+                        )
+                    }
                 }
             }
         }
@@ -1150,6 +1155,7 @@ private struct MacNoteListView: View {
 
 private struct MacSyncStatusView: View {
     @ObservedObject var syncController: MacSyncBatchController
+    @State private var showingSyncDiagnostics = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1171,6 +1177,15 @@ private struct MacSyncStatusView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            if syncController.requiresExclusivePeerAuthorization {
+                Text(syncController.authorizedCapturePeer == nil
+                    ? "Exclusive capture: authorize one intended iPhone before sync."
+                    : "Exclusive capture: one peer authorized for this launch.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("mac-sync-exclusive-capture-status")
+            }
+
             if !syncController.availablePeers.isEmpty {
                 ForEach(syncController.availablePeers) { peer in
                     HStack {
@@ -1178,9 +1193,17 @@ private struct MacSyncStatusView: View {
                             .font(.caption)
                             .lineLimit(1)
                         Spacer()
-                        Button("Pair") {
-                            syncController.invite(peer)
+                        Button(syncController.requiresExclusivePeerAuthorization
+                            ? "Authorize and connect" : "Pair") {
+                            if syncController.requiresExclusivePeerAuthorization {
+                                syncController.authorizeExclusivePeerForCapture(peer)
+                            } else {
+                                syncController.invite(peer)
+                            }
                         }
+                        .disabled(syncController.requiresExclusivePeerAuthorization &&
+                            syncController.authorizedCapturePeer != nil)
+                        .buttonStyle(.borderless)
                         .controlSize(.mini)
                     }
                 }
@@ -1195,8 +1218,50 @@ private struct MacSyncStatusView: View {
                     .font(.caption2)
                     .foregroundStyle(.red)
             }
+
+            Button("Sync diagnostics (read only)") {
+                showingSyncDiagnostics = true
+            }
+            .buttonStyle(.borderless)
+            .accessibilityIdentifier("mac-sync-show-diagnostics")
         }
-        .padding(.vertical, 6)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .sheet(isPresented: $showingSyncDiagnostics) {
+            MacSyncReadOnlyDiagnosticsSheet(syncController: syncController)
+        }
+    }
+}
+
+private struct MacSyncReadOnlyDiagnosticsSheet: View {
+    @ObservedObject var syncController: MacSyncBatchController
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Sync diagnostics")
+                    .font(.headline)
+                Spacer()
+                Button("Copy diagnostics") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(
+                        syncController.readOnlySyncDiagnostics, forType: .string
+                    )
+                }
+                .accessibilityIdentifier("mac-sync-copy-diagnostics")
+                Button("Close") { dismiss() }
+            }
+            ScrollView {
+                Text(syncController.readOnlySyncDiagnostics)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("mac-sync-readonly-diagnostics")
+            }
+        }
+        .padding()
+        .frame(minWidth: 520, minHeight: 360)
     }
 }
 

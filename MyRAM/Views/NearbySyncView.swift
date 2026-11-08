@@ -1,6 +1,11 @@
 import SwiftUI
+import UIKit
 
 struct NearbySyncView: View {
+    private struct DiagnosticsCapture: Identifiable {
+        let id = UUID()
+        let text: String
+    }
     struct ResetAvailability: Equatable {
         let isAvailable: Bool
         let unavailableReason: String?
@@ -14,6 +19,7 @@ struct NearbySyncView: View {
     let resetAvailability: ResetAvailability
     let prepareEditorState: () async throws -> Void
     @State private var showingResetConfirmation = false
+    @State private var capturedSyncDiagnostics: DiagnosticsCapture?
 
     var body: some View {
         ScrollView {
@@ -35,6 +41,12 @@ struct NearbySyncView: View {
                 }
 
                 section("Advanced") {
+                    Button("Sync diagnostics (read only)") {
+                        capturedSyncDiagnostics = DiagnosticsCapture(text: syncController.readOnlySyncDiagnostics)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("ios-sync-readonly-diagnostics")
+
                     Button("Reset Pending Sync") {
                         showingResetConfirmation = true
                     }
@@ -99,6 +111,31 @@ struct NearbySyncView: View {
             .padding(16)
         }
         .background(style.appBackgroundColor.ignoresSafeArea())
+        .sheet(item: $capturedSyncDiagnostics) { capture in
+            NavigationStack {
+                ScrollView {
+                    Text(capture.text)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                }
+                .navigationTitle("Sync diagnostics")
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Close") {
+                            capturedSyncDiagnostics = nil
+                        }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Copy diagnostics") {
+                            UIPasteboard.general.string = capture.text
+                        }
+                        .accessibilityIdentifier("ios-sync-copy-diagnostics")
+                    }
+                }
+            }
+        }
         .alert("Reset Pending Sync?", isPresented: $showingResetConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Reset and Resync", role: .destructive) {

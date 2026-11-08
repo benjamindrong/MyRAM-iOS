@@ -4,6 +4,7 @@ import SwiftData
 import UIKit
 import Combine
 import UniformTypeIdentifiers
+import OSLog
 
 @MainActor
 final class NotesListState: ObservableObject {
@@ -15,17 +16,27 @@ final class NotesListState: ObservableObject {
 
     struct BootstrapActions {
         var rollbackIfNeededOnLaunch: @MainActor () async throws -> Void
-        var migrateNoteSequenceStates: @MainActor () async throws -> Void
+        var migrateNoteSequenceStates: @MainActor () async throws -> Set<UUID>
         var completeModelInitializationAfterMigration: @MainActor () -> Void = {}
         var refreshPendingSyncStatus: @MainActor () async -> Void
         var resumeOutboundAfterRecovery: @MainActor () -> Void
         var startNetworkingIfNeeded: @MainActor () -> Void
         var resumePendingConvergencePresentationIfNeeded: @MainActor () -> Void
+        var hasUnfinishedLocalResolution: @MainActor () async throws -> Bool = { false }
     }
 
     let vm: NotesViewModel
     let syncController: MyRAMSyncController
     @Published private(set) var bootstrapState: BootstrapState = .recovering
+    @Published private(set) var divergentNoteIDs: Set<UUID> = []
+    @Published private(set) var readableNotesDuringStartupFailure: [Note] = []
+    @Published private(set) var didFailToReadNotesDuringStartupFailure = false
+    @Published private(set) var startupFailureSupportDetails: String?
+    @Published private(set) var isBootstrapping = false
+    private static let startupLogger = Logger(subsystem: "com.northsignalstudio.myram", category: "Startup")
+    private let noteContext: ModelContext
+    private var didPrepareLocalNotes = false
+    @Published private(set) var syncRecoveryMessage: String?
     private let bootstrapActions: BootstrapActions
     private var cancellables: Set<AnyCancellable> = []
 
@@ -37,6 +48,7 @@ final class NotesListState: ObservableObject {
         let syncController = MyRAMSyncController(startsNetworking: false)
         syncController.suspendOutboundForRecovery()
         self.syncController = syncController
+        noteContext = context
         vm = NotesViewModel(
             context: context,
             syncController: syncController,
@@ -49,8 +61,13 @@ final class NotesListState: ObservableObject {
                     try await vm.rollbackIfNeededOnLaunch(syncController: syncController)
                 },
                 migrateNoteSequenceStates: {
-                    try await NoteSequenceStateBootstrapMigrator(
-                        container: PersistenceManager.shared.container,
+                    // Check durable unfinished intents *before* migrations.
+                    // Otherwise a crash after note save but before queue
+                    // reconciliation could expose the note to mark writes.
+                    let protectedNotes = try await NoteLocalDivergenceEvidenceStore()
+                        .unfinishedResolutionNoteIDs()
+                    return try await NoteSequenceStateBootstrapMigrator(
+                        container: context.container,
                         legacyFormattingProjection: { data, _ in
                             await MainActor.run {
                                 EditorStructuralFormattingAdapter.strictLegacyProjection(
@@ -71,7 +88,9 @@ final class NotesListState: ObservableObject {
                                 return RTFCoding.encode(attributed)
                             }
                         }
-                    ).runToCompletion()
+                    ).runPreservingDivergentStates(
+                        protectedNoteIDs: protectedNotes
+                    )
                 },
                 completeModelInitializationAfterMigration: { [vm] in
                     vm.completeStartupInitializationAfterMigration()
@@ -87,6 +106,10 @@ final class NotesListState: ObservableObject {
                 },
                 resumePendingConvergencePresentationIfNeeded: { [vm] in
                     vm.resumePendingConvergencePresentationIfNeeded()
+                },
+                hasUnfinishedLocalResolution: {
+                    try await NoteLocalDivergenceEvidenceStore()
+                        .hasUnfinishedResolutionIntents()
                 }
             )
 
@@ -104,20 +127,109 @@ final class NotesListState: ObservableObject {
         }
     }
 
+    // Resolve from the authoritative IDs, independent of folder/search visibility.
+    var protectedNotes: [Note] {
+        divergentNoteIDs.sorted { $0.uuidString < $1.uuidString }
+            .compactMap { vm.refreshedNote(withID: $0) }
+    }
+
+    func didCompleteProtectedNoteResolution(_ noteID: UUID) async {
+        divergentNoteIDs.remove(noteID)
+        vm.isolateDivergentNoteIDs(divergentNoteIDs)
+        await bootstrapAfterRecovery()
+    }
+
     func bootstrapAfterRecovery() async {
+        // Repeated taps must never interleave sync journal rollback or note migrations.
+        guard !isBootstrapping else { return }
+        isBootstrapping = true
+        defer { isBootstrapping = false }
+
+        var recoveryError: Error?
         do {
             try await bootstrapActions.rollbackIfNeededOnLaunch()
-            try await bootstrapActions.migrateNoteSequenceStates()
-            bootstrapActions.completeModelInitializationAfterMigration()
-            await bootstrapActions.refreshPendingSyncStatus()
-            bootstrapActions.resumeOutboundAfterRecovery()
-            bootstrapActions.startNetworkingIfNeeded()
-            bootstrapActions.resumePendingConvergencePresentationIfNeeded()
+        } catch {
+            recoveryError = error
+        }
+
+        do {
+            // Local model preparation is independent of the sync transaction.
+            // Do not rerun migration against an already mounted editor on retry.
+            if !didPrepareLocalNotes {
+                divergentNoteIDs = try await bootstrapActions.migrateNoteSequenceStates()
+                vm.isolateDivergentNoteIDs(divergentNoteIDs)
+                bootstrapActions.completeModelInitializationAfterMigration()
+                didPrepareLocalNotes = true
+            }
+            // A durable owner-choice intent is not a completed resolution.
+            // Do not admit outbound while its queue/SwiftData transaction may
+            // be interrupted, even if the text mismatch is no longer visible.
+            var unfinishedResolution = false
+            var resolutionLedgerError: Error?
+            do {
+                unfinishedResolution = try await bootstrapActions.hasUnfinishedLocalResolution()
+            } catch {
+                resolutionLedgerError = error
+            }
+
+            if !divergentNoteIDs.isEmpty {
+                // The original note text and anchored history remain intact.
+                // A differing note must never trigger bulk replacement, and no
+                // pending sync work can be sent until the conflict is resolved.
+                syncRecoveryMessage = "One or more notes have conflicting saved text and sync history. Those notes are read-only; other notes remain editable. Sync is paused."
+                startupFailureSupportDetails = "Local note-state divergence requires explicit resolution."
+                if let recoveryError {
+                    Self.startupLogger.error(
+                        "Pending sync recovery also failed: \(String(describing: recoveryError), privacy: .private)"
+                    )
+                }
+            } else if let recoveryError {
+                let diagnostic = String(describing: recoveryError)
+                Self.startupLogger.error("Pending sync recovery failed: \(diagnostic, privacy: .private)")
+                startupFailureSupportDetails = "Pending sync recovery: \(diagnostic)"
+                syncRecoveryMessage = "Sync recovery is paused. You can keep working with local notes."
+            } else if let resolutionLedgerError {
+                Self.startupLogger.error(
+                    "Local resolution ledger unavailable: \(String(describing: resolutionLedgerError), privacy: .private)"
+                )
+                startupFailureSupportDetails = "Local resolution ledger needs recovery."
+                syncRecoveryMessage = "Local resolution records cannot be verified. Sync remains paused; healthy notes remain editable."
+            } else if unfinishedResolution {
+                startupFailureSupportDetails = "An explicit local note resolution has not completed."
+                syncRecoveryMessage = "A local note resolution is unfinished. Sync remains paused; healthy notes remain editable."
+            } else {
+                vm.completeStartupSyncRecovery()
+                await bootstrapActions.refreshPendingSyncStatus()
+                bootstrapActions.resumeOutboundAfterRecovery()
+                bootstrapActions.startNetworkingIfNeeded()
+                bootstrapActions.resumePendingConvergencePresentationIfNeeded()
+                startupFailureSupportDetails = nil
+                syncRecoveryMessage = nil
+            }
+            readableNotesDuringStartupFailure = []
+            didFailToReadNotesDuringStartupFailure = false
             bootstrapState = .ready
         } catch {
-            bootstrapState = .failed(
-                "Startup recovery or note-state preparation failed. Restart MyRAM before syncing or editing."
-            )
+            let diagnostic = String(describing: error)
+            Self.startupLogger.error("Note-state preparation failed: \(diagnostic, privacy: .private)")
+            startupFailureSupportDetails = "Note-state preparation: \(diagnostic)"
+            do {
+                let storedNotes = try noteContext.fetch(FetchDescriptor<Note>())
+                readableNotesDuringStartupFailure = storedNotes
+                    .filter { $0.deletedAt == nil }
+                    .sorted { $0.modifiedAt > $1.modifiedAt }
+                didFailToReadNotesDuringStartupFailure = false
+                bootstrapState = .failed(
+                    "Note-state preparation failed. Saved notes can be read below. Editing and syncing are paused to protect pending work."
+                )
+            } catch {
+                readableNotesDuringStartupFailure = []
+                didFailToReadNotesDuringStartupFailure = true
+                startupFailureSupportDetails = "Note-state preparation: \(diagnostic); note read: \(String(describing: error))"
+                bootstrapState = .failed(
+                    "Note-state preparation failed, and stored notes cannot be read safely. Existing data has not been reset. Editing and syncing remain paused."
+                )
+            }
         }
     }
 }
@@ -151,6 +263,7 @@ struct NotesListView: View {
     @State private var selectedNote: Note? = nil
     @State private var showingRecentlyDeleted = false
     @State private var recentlyDeletedNotes: [Note] = []
+    @State private var includesRetainedExpiredNotes = false
     @State private var selectedNoteIDs: Set<UUID> = []
     @State private var sharePayload: SharePayload?
     @State private var exportErrorMessage: String?
@@ -173,6 +286,7 @@ struct NotesListView: View {
     @State private var rootTitleUndoHistory: [String] = []
     @State private var rootTitleRedoHistory: [String] = []
     @State private var showingListUndoRedoActions = false
+    @State private var showingProtectedNotes = false
     @State private var showingNearbySync = false
     @State private var searchText = ""
     @State private var searchScope: NotesSearchScope = .allNotes
@@ -209,25 +323,55 @@ struct NotesListView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(editorChromeStyle.appBackgroundColor.ignoresSafeArea())
             case .failed(let message):
-                VStack(spacing: 12) {
-                    Text(message)
-                        .font(.body)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.red)
-                    Button("Copy Support Details") {
-                        UIPasteboard.general.string = message
-                    }
-                        .buttonStyle(.borderedProminent)
-                    Text("Close and reopen MyRAM before syncing or editing.")
-                        .font(.footnote)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.secondary)
-                }
-                .padding()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(editorChromeStyle.appBackgroundColor.ignoresSafeArea())
+                startupFailureContent(message: message)
             case .ready:
-                readyContent
+                VStack(spacing: 0) {
+                    if let message = state.syncRecoveryMessage {
+                        HStack {
+                            Text(message).font(.footnote)
+                            if !state.divergentNoteIDs.isEmpty {
+                                Button("Review protected notes") {
+                                    showingProtectedNotes = true
+                                }
+                                .accessibilityIdentifier("startup-review-protected-notes")
+                            } else {
+                                Button("Retry Sync") {
+                                    Task { @MainActor in await state.bootstrapAfterRecovery() }
+                                }
+                                .accessibilityIdentifier("startup-retry-sync")
+                            }
+                        }
+                        .padding()
+                        .accessibilityIdentifier("startup-sync-paused")
+                    }
+                    readyContent
+                }
+                .disabled(state.isBootstrapping)
+            }
+        }
+        .sheet(isPresented: $showingProtectedNotes) {
+            NavigationStack {
+                List(state.protectedNotes) { note in
+                    NavigationLink {
+                        DivergentNoteReadOnlyView(
+                            note: note, vm: vm, syncController: syncController,
+                            onCompleted: { noteID in
+                                await state.didCompleteProtectedNoteResolution(noteID)
+                                if state.divergentNoteIDs.isEmpty {
+                                    showingProtectedNotes = false
+                                }
+                            }
+                        )
+                    } label: {
+                        Text(note.title.isEmpty ? "Untitled" : note.title)
+                    }
+                }
+                .navigationTitle("Protected Notes")
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showingProtectedNotes = false }
+                    }
+                }
             }
         }
         .fileImporter(
@@ -300,6 +444,69 @@ struct NotesListView: View {
         }
     }
 
+    // Read-only fallback intentionally bypasses the editor and every mutation action.
+    // It is usable even when sequence migration or pending sync rollback is unsafe.
+    private func startupFailureContent(message: String) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.red)
+                .padding(.horizontal)
+                .accessibilityIdentifier("startup-failure-message")
+
+            if state.didFailToReadNotesDuringStartupFailure {
+                ContentUnavailableView(
+                    "Notes Unavailable",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text("The original store could not be read. No data was reset.")
+                )
+            } else {
+                List(state.readableNotesDuringStartupFailure, id: \.id) { note in
+                    NavigationLink {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text(note.title.isEmpty ? "Untitled" : note.title)
+                                    .font(.title2.bold())
+                                Text(note.content)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .padding()
+                        }
+                        .navigationTitle("Read-Only Note")
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(note.title.isEmpty ? "Untitled" : note.title)
+                                .font(.headline)
+                            Text(note.content)
+                                .lineLimit(2)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .accessibilityIdentifier("startup-readonly-note-\(note.id.uuidString)")
+                }
+                .listStyle(.plain)
+            }
+
+            HStack {
+                Button("Retry Recovery") {
+                    Task { @MainActor in await state.bootstrapAfterRecovery() }
+                }
+                .disabled(state.isBootstrapping)
+                .buttonStyle(.borderedProminent)
+                Button("Copy Support Details") {
+                    UIPasteboard.general.string = state.startupFailureSupportDetails ?? message
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(.horizontal)
+        }
+        .padding(.vertical)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(editorChromeStyle.appBackgroundColor.ignoresSafeArea())
+    }
+
     private var readyContent: some View {
         VStack(spacing: 6) {
             notesListTopBar
@@ -338,25 +545,31 @@ struct NotesListView: View {
         .modifier(MobileNoteEditorSheet(
             selectedNote: $selectedNote,
             vm: vm,
+            divergentNoteIDs: state.divergentNoteIDs,
             syncController: syncController,
             fileOperationBridge: editorFileOperationBridge,
             onOpenSyncConflicts: {
                 showingNearbySync = true
+            },
+            onResolutionCompleted: { noteID in
+                await state.didCompleteProtectedNoteResolution(noteID)
             }
         ))
             .sheet(isPresented: $showingRecentlyDeleted) {
                 RecentlyDeletedView(
                     notes: recentlyDeletedNotes,
+                    includesRetainedExpired: $includesRetainedExpiredNotes,
+                    allowsRetainedExpiredInspection: MyRAMSyncRuntimeConfiguration.current().allowsRetainedDeletedNoteInspection,
                     onAppear: {
-                        recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes()
+                        recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes(includeRetainedExpired: includesRetainedExpiredNotes)
                     },
                     onRestore: { note in
                         vm.restoreNote(note)
-                        recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes()
+                        recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes(includeRetainedExpired: includesRetainedExpiredNotes)
                     },
                     onDelete: { note in
                         vm.permanentlyDeleteNote(note)
-                        recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes()
+                        recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes(includeRetainedExpired: includesRetainedExpiredNotes)
                     }
                 )
             }
@@ -852,6 +1065,14 @@ struct NotesListView: View {
     @ViewBuilder
     private var desktopEditorDetail: some View {
         if let selectedNote {
+            if state.divergentNoteIDs.contains(selectedNote.id) {
+                DivergentNoteReadOnlyView(
+                    note: selectedNote, vm: vm, syncController: syncController,
+                    onCompleted: { noteID in
+                        await state.didCompleteProtectedNoteResolution(noteID)
+                    }
+                )
+            } else {
             NoteEditorView(
                 vm: vm,
                 note: selectedNote,
@@ -869,6 +1090,7 @@ struct NotesListView: View {
                 }
             )
             .id(selectedNote.id)
+            }
         } else {
             ContentUnavailableView(
                 "Select a Note",
@@ -1886,9 +2108,11 @@ private struct SharePayload: Identifiable {
 private struct MobileNoteEditorSheet: ViewModifier {
     @Binding var selectedNote: Note?
     @ObservedObject var vm: NotesViewModel
+    let divergentNoteIDs: Set<UUID>
     @ObservedObject var syncController: MyRAMSyncController
     @ObservedObject var fileOperationBridge: NoteEditorFileOperationBridge
     let onOpenSyncConflicts: () -> Void
+    let onResolutionCompleted: @MainActor (UUID) async -> Void
 
     func body(content: Content) -> some View {
         if MyRAMPlatform.isMacCatalyst {
@@ -1897,6 +2121,15 @@ private struct MobileNoteEditorSheet: ViewModifier {
         } else {
             content
                 .sheet(item: $selectedNote) { note in
+                    if divergentNoteIDs.contains(note.id) {
+                        DivergentNoteReadOnlyView(
+                            note: note, vm: vm, syncController: syncController,
+                            onCompleted: { noteID in
+                                selectedNote = nil
+                                await onResolutionCompleted(noteID)
+                            }
+                        )
+                    } else {
                     NoteEditorView(
                         vm: vm,
                         note: note,
@@ -1908,7 +2141,195 @@ private struct MobileNoteEditorSheet: ViewModifier {
                         syncConflicts: vm.activeSyncConflicts(for: note),
                         onOpenSyncConflicts: onOpenSyncConflicts
                     )
+                    }
                 }
+        }
+    }
+}
+
+private struct DivergentNoteReadOnlyView: View {
+    let note: Note
+    @ObservedObject var vm: NotesViewModel
+    @ObservedObject var syncController: MyRAMSyncController
+    let onCompleted: @MainActor (UUID) async -> Void
+
+    @State private var snapshot: NoteLocalDivergenceSnapshot?
+    @State private var selectedChoice: NoteLocalDivergenceResolutionChoice?
+    @State private var inspectedIntent: NoteLocalDivergenceResolutionIntent?
+    @State private var pendingChoice: NoteLocalDivergenceResolutionChoice?
+    @State private var showingConfirmation = false
+    @State private var isPreparing = false
+    @State private var isCompleting = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Label("Editing paused for this note", systemImage: "exclamationmark.triangle")
+                    .font(.headline)
+                Text("The saved text and synchronization history disagree. Neither version has been discarded. Other notes remain editable; sync is paused.")
+                    .font(.subheadline)
+                Text(note.title.isEmpty ? "Untitled" : note.title)
+                    .font(.title2.bold())
+
+                if let snapshot {
+                    Group {
+                        Text("Saved text").font(.headline)
+                        Text(snapshot.savedBody)
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("divergence-saved-text")
+                        Divider()
+                        Text("Synchronization history").font(.headline)
+                        Text(snapshot.sequenceVisibleText)
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("divergence-anchored-history")
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if let selectedChoice {
+                        Text(selectedChoice == .keepSavedBody
+                             ? "Saved-text choice recorded."
+                             : "Synchronization-history choice recorded.")
+                            .font(.headline)
+                        if selectedChoice == .keepAnchoredHistory {
+                            Text("The choice is preserved. Completion verifies the note commit and pending queue ownership without discarding work.")
+                                .font(.subheadline)
+                                .accessibilityIdentifier("divergence-choice-pending-reconciliation")
+                            Button("Complete recovery") {
+                                Task { await complete() }
+                            }
+                            .disabled(isPreparing || isCompleting)
+                            .accessibilityIdentifier("divergence-complete-recovery")
+                        } else {
+                            // Prior releases could record a saved-body choice whose
+                            // anchored operations cannot be published. Preserve both
+                            // versions without offering a retry that cannot succeed.
+                            Text("This previously recorded saved-text choice cannot be completed in this version. Both versions are preserved; you can still copy the saved text above.")
+                                .font(.subheadline)
+                                .accessibilityIdentifier("divergence-saved-choice-unavailable")
+                        }
+                    } else {
+                        Text("Saved text remains available above to select and copy. Saved-text recovery is unavailable until its pending operations can be published safely.")
+                            .font(.subheadline)
+                            .accessibilityIdentifier("divergence-saved-choice-unavailable")
+                        Text("Choosing synchronization history records an irreversible recovery choice; it does not immediately modify the note or resume syncing.")
+                            .font(.subheadline)
+                        Button("Choose synchronization history") {
+                            pendingChoice = .keepAnchoredHistory
+                            showingConfirmation = true
+                        }
+                        .disabled(isPreparing)
+                        .accessibilityIdentifier("divergence-choose-history")
+                    }
+                } else {
+                    Text(note.content)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if errorMessage == nil {
+                        ProgressView("Loading preserved versions")
+                    }
+                }
+                if isPreparing {
+                    ProgressView("Preserving choice and queue evidence")
+                }
+                if isCompleting {
+                    ProgressView("Verifying note and pending sync work")
+                }
+                if let errorMessage {
+                    Text(errorMessage)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("divergence-resolution-error")
+                }
+            }
+            .padding()
+        }
+        .navigationTitle("Protected Note")
+        .accessibilityIdentifier("divergent-note-readonly")
+        .task(id: note.id) {
+            await inspect()
+        }
+        .confirmationDialog(
+            "Confirm owner choice",
+            isPresented: $showingConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Record this choice") {
+                if let pendingChoice {
+                    Task { await prepare(pendingChoice) }
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingChoice = nil
+            }
+        } message: {
+            Text("Both original versions remain archived, but the choice cannot be changed during this recovery. No note or sync data will be replaced by this action.")
+        }
+    }
+
+    @MainActor
+    private func inspect() async {
+        do {
+            let store = await NoteLocalDivergenceEvidenceStore()
+            let result = try await vm.inspectProtectedLocalDivergence(
+                noteID: note.id, evidenceStore: store
+            )
+            snapshot = result.snapshot
+            selectedChoice = result.selected
+            inspectedIntent = result.intent
+            errorMessage = nil
+        } catch {
+            errorMessage = "Unable to inspect preserved versions: \(error)"
+        }
+    }
+
+    @MainActor
+    private func complete() async {
+        guard !isPreparing, !isCompleting, selectedChoice != nil else { return }
+        isCompleting = true
+        defer { isCompleting = false }
+        do {
+            let store = await NoteLocalDivergenceEvidenceStore()
+            try await vm.completeProtectedLocalDivergence(
+                noteID: note.id, expectedIntent: inspectedIntent,
+                queueAdmin: syncController,
+                evidenceStore: store
+            )
+            errorMessage = nil
+            await onCompleted(note.id)
+        } catch NoteLocalDivergenceEvidenceStoreError.unresolvedCapturedResolutionChanges {
+            errorMessage = "This saved-text choice has captured edits that still require durable queue reconciliation. Nothing was discarded; the note remains protected."
+        } catch {
+            errorMessage = "Recovery remains incomplete; no pending work was discarded: \(error)"
+        }
+    }
+
+    @MainActor
+    private func prepare(_ choice: NoteLocalDivergenceResolutionChoice) async {
+        guard !isPreparing, selectedChoice == nil, let displayedSnapshot = snapshot else { return }
+        isPreparing = true
+        defer {
+            isPreparing = false
+            pendingChoice = nil
+        }
+        do {
+            let store = await NoteLocalDivergenceEvidenceStore()
+            try await vm.prepareProtectedLocalDivergenceChoice(
+                noteID: note.id, expectedSnapshot: displayedSnapshot,
+                expectedIntent: inspectedIntent, choice: choice,
+                queueAdmin: syncController, evidenceStore: store
+            )
+            let result = try await vm.inspectProtectedLocalDivergence(
+                noteID: note.id, evidenceStore: store
+            )
+            snapshot = result.snapshot
+            selectedChoice = result.selected
+            inspectedIntent = result.intent
+            errorMessage = nil
+        } catch {
+            let detail = String(describing: error)
+            await inspect()
+            errorMessage = "Resolution preparation remains incomplete: \(detail)"
         }
     }
 }
@@ -2371,6 +2792,8 @@ struct ActivityShareSheet: UIViewControllerRepresentable {
 private struct RecentlyDeletedView: View {
     @Environment(\.dismiss) private var dismiss
     let notes: [Note]
+    @Binding var includesRetainedExpired: Bool
+    let allowsRetainedExpiredInspection: Bool
     let onAppear: () -> Void
     let onRestore: (Note) -> Void
     let onDelete: (Note) -> Void
@@ -2400,6 +2823,7 @@ private struct RecentlyDeletedView: View {
                                         .foregroundStyle(.secondary)
                                 }
                             }
+                            .accessibilityIdentifier("deleted-note-\(note.id.uuidString)")
                             .swipeActions(edge: .leading, allowsFullSwipe: true) {
                                 Button("Restore") {
                                     onRestore(note)
@@ -2407,10 +2831,10 @@ private struct RecentlyDeletedView: View {
                                 .tint(.green)
                             }
                             .swipeActions(edge: .trailing) {
-                                Button("Delete") {
-                                    onDelete(note)
+                                if !includesRetainedExpired {
+                                    Button("Delete") { onDelete(note) }
+                                        .tint(.red)
                                 }
-                                .tint(.red)
                             }
                         }
                     }
@@ -2423,7 +2847,9 @@ private struct RecentlyDeletedView: View {
                     Image(systemName: "clock.arrow.circlepath")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    Text("Deleted notes are kept here for 7 days.")
+                    Text(includesRetainedExpired
+                         ? "Verification: retained expired notes can be restored."
+                         : "Deleted notes are kept here for 7 days.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -2432,11 +2858,16 @@ private struct RecentlyDeletedView: View {
                 .background(.ultraThinMaterial)
             }
             .toolbar {
+                if allowsRetainedExpiredInspection {
+                    Toggle("Include retained expired notes", isOn: $includesRetainedExpired)
+                        .accessibilityIdentifier("verification-retained-deleted-notes")
+                }
                 Button("Done") {
                     dismiss()
                 }
             }
         }
         .onAppear(perform: onAppear)
+        .onChange(of: includesRetainedExpired) { _, _ in onAppear() }
     }
 }

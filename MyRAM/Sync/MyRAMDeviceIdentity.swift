@@ -3,19 +3,10 @@ import MultipeerConnectivity
 import UIKit
 
 enum MyRAMDeviceIdentity {
-    private static let deviceIDKey = "myram.sync.deviceID"
     static let maximumPeerDisplayNameUTF8ByteCount = 63
 
-    static func currentDeviceID() -> String {
-        let deviceID: String
-        if let existing = UserDefaults.standard.string(forKey: deviceIDKey),
-           UUID(uuidString: existing) != nil {
-            deviceID = existing
-        } else {
-            let created = UUID().uuidString
-            UserDefaults.standard.set(created, forKey: deviceIDKey)
-            deviceID = created
-        }
+    static func currentDeviceID(defaults: UserDefaults = .standard, bundle: Bundle = .main) -> String {
+        let deviceID = MyRAMSyncDeviceIdentityStore.currentID(defaults: defaults, bundle: bundle)
 
         MyRAMSyncBenchmarkTelemetry.shared.configure(
             platform: .iOS,

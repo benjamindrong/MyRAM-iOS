@@ -122,9 +122,10 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         let fileURL = temporaryQueueFileURL()
         let first = makeBatch(idSuffix: 1)
         let second = makeBatch(idSuffix: 2)
-        let legacyQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
-        try legacyQueue.enqueueIncoming(first)
-        try legacyQueue.enqueueIncoming(second)
+        try createDirectory(for: fileURL)
+        try JSONEncoder().encode(TestPersistedSyncBatchQueue(
+            version: 1, batches: [first, second]
+        )).write(to: fileURL)
 
         let migratedQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: fileURL, limit: 10)
 
@@ -152,6 +153,44 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
 
         XCTAssertEqual(queue.pendingObligations, [obligation])
         XCTAssertEqual(header.version, 3)
+    }
+
+    func testLocalObligationQueueRejectsPersistedDuplicateIdentitiesWithoutOverwrite() throws {
+        let first = SyncConvergenceLocalObligation(legacyBatch: makeBatch(idSuffix: 14))
+        let conflicting = SyncConvergenceLocalObligation(legacyBatch: SyncBatch(
+            id: first.id, originDeviceID: UUID(), createdAt: .now, changes: []
+        ))
+        for obligations in [[first, first], [first, conflicting]] {
+            let fileURL = temporaryQueueFileURL()
+            try createDirectory(for: fileURL)
+            let encoded = try JSONEncoder().encode(TestPersistedSyncConvergenceLocalObligationQueue(
+                version: 3, obligations: obligations
+            ))
+            try encoded.write(to: fileURL)
+            let queue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: fileURL, limit: 10)
+            XCTAssertTrue(queue.pendingObligations.isEmpty)
+            guard case .readFailed = queue.snapshot().health else {
+                return XCTFail("Duplicate identities must fail before becoming live queue state")
+            }
+            XCTAssertThrowsError(try queue.enqueue(first))
+            XCTAssertEqual(try Data(contentsOf: fileURL), encoded)
+        }
+    }
+
+    func testLocalObligationQueueRejectsStructuralMarkPayloadClaimingVersionOneWithoutOverwrite() throws {
+        let fileURL = temporaryQueueFileURL()
+        try createDirectory(for: fileURL)
+        let batch = try makeStructuralMarkBatchForTest(idSuffix: 13)
+        let encoded = try JSONEncoder().encode(TestPersistedSyncBatchQueue(
+            version: 1, batches: [batch]
+        ))
+        try encoded.write(to: fileURL)
+        let queue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: fileURL, limit: 10)
+        XCTAssertTrue(queue.pendingObligations.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: fileURL), encoded)
+        guard case .readFailed = queue.snapshot().health else {
+            return XCTFail("A legacy queue cannot claim structural-mark ownership")
+        }
     }
 
     func testLocalObligationQueueRejectsStructuralMarkPayloadClaimingVersionTwoWithoutOverwrite() throws {
@@ -586,6 +625,33 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(queue.pendingBatches, [batch])
         XCTAssertEqual(try Data(contentsOf: fileURL), originalData)
         XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10).pendingBatches, [batch])
+    }
+
+    func testDurableEnqueueRejectsSameIDDifferentBatchWithoutMutation() throws {
+        let fileURL = temporaryQueueFileURL()
+        let original = makeBatch(idSuffix: 1)
+        let conflicting = SyncBatch(
+            id: original.id,
+            originDeviceID: original.originDeviceID,
+            createdAt: original.createdAt.addingTimeInterval(1),
+            batchSequence: original.batchSequence,
+            changes: original.changes
+        )
+        let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        try queue.enqueueDurably(original)
+
+        XCTAssertThrowsError(try queue.enqueueDurably(conflicting)) { error in
+            XCTAssertEqual(
+                error as? FileBackedSyncBatchQueue.QueueError,
+                .conflictingDuplicateBatchID(original.id)
+            )
+        }
+        XCTAssertEqual(queue.pendingBatches, [original])
+        XCTAssertEqual(
+            FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10).pendingBatches,
+            [original]
+        )
     }
 
     func testFileBackedQueueRemovesOnlySuccessfulIDsFromDisk() throws {

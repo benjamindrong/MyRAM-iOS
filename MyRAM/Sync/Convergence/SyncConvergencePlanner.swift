@@ -311,7 +311,7 @@ struct SyncConvergencePlanner {
                     resultEvidence.append(effect.resultEvidence)
                     routings[noteID] = effect.didChangeApplicationState
                         ? .structuralRefresh
-                        : .none
+                        : SyncConvergencePresentationRouting.none
                 case .deferred(let reason):
                     return .deferred(reason)
                 case .failed(let failure):
@@ -2664,7 +2664,7 @@ struct SyncConvergencePlanValidator {
                       routing == (
                           markEffect.didChangeApplicationState
                               ? SyncConvergencePresentationRouting.structuralRefresh
-                              : .none
+                              : SyncConvergencePresentationRouting.none
                       ) else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
                 }
@@ -3402,7 +3402,12 @@ struct SyncConvergenceIncorporationExecutor {
                 current: current,
                 creationEffect: notePlan.creationEffect
             )
-            try verifyTitlePrecondition(notePlan.titleEffect, current: current, transaction: transaction)
+            try verifyTitlePrecondition(
+                notePlan.titleEffect,
+                current: current,
+                creationEffect: notePlan.creationEffect,
+                transaction: transaction
+            )
         }
     }
 
@@ -3699,6 +3704,7 @@ struct SyncConvergenceIncorporationExecutor {
     private func verifyTitlePrecondition(
         _ effect: SyncConvergenceTitleEffect?,
         current: SyncConvergenceMutableNoteRecord?,
+        creationEffect: SyncConvergenceCreationEffect?,
         transaction: SyncConvergencePersistenceTransaction
     ) throws {
         guard let effect else { return }
@@ -3713,7 +3719,17 @@ struct SyncConvergenceIncorporationExecutor {
             return
         }
         guard let current else {
-            throw ExecutorFailure(.staleAuthoritativeState(noteID: effect.resultEvidence.noteID))
+            // Before this atomic save, a same-batch creation has no persisted
+            // note or title winner. Validate against its exact projected title;
+            // an idempotent creation must still have an authoritative note.
+            guard let creationEffect, creationEffect.verdict == .create,
+                  effect.verdict == .apply,
+                  effect.priorTitle == creationEffect.title,
+                  effect.priorWinningKey == nil,
+                  winner == nil else {
+                throw ExecutorFailure(.staleAuthoritativeState(noteID: effect.resultEvidence.noteID))
+            }
+            return
         }
         switch effect.verdict {
         case .apply:
@@ -4540,7 +4556,11 @@ private extension SyncConvergenceNotePlan {
 
     var plannedModifiedAt: Date? {
         if let titleEffect, titleEffect.verdict == .apply {
-            return titleEffect.candidateCanonicalKey.modifiedAt
+            let titleModifiedAt = titleEffect.candidateCanonicalKey.modifiedAt
+            guard lifecycleEffect?.verdict != .apply else {
+                return titleModifiedAt
+            }
+            return latestBodyModifiedAt.map { max(titleModifiedAt, $0) } ?? titleModifiedAt
         }
         if let lifecycleEffect, lifecycleEffect.verdict == .apply {
             return lifecycleEffect.modifiedAt

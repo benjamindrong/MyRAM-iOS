@@ -1,0 +1,100 @@
+{
+  "schema": "myram.verification-contract.authority.v1",
+  "repository": "benjamindrong/MyRAM-iOS",
+  "base_sha": "4334f3f3ea718d5523ace296b84feb52df4c0d40",
+  "frozen_candidate_sha": "69928c0ef7ee377aab046c033440de70945b5e17",
+  "observed_current_candidate_sha": "69928c0ef7ee377aab046c033440de70945b5e17",
+  "changed_paths": [
+    "AGENTS.md",
+    "MyRAM.xcodeproj/project.pbxproj",
+    "MyRAM/Mac/MacMarkdownPreviewDocumentBuilder.swift",
+    "MyRAM/Mac/MacMarkdownPreviewFocusResignation.swift",
+    "MyRAM/Mac/MacMarkdownPreviewTextView.swift",
+    "MyRAM/Mac/MacNoteEditorView.swift",
+    "MyRAM/Mac/MacNoteViewZoom.swift",
+    "MyRAM/Mac/MacTextViewRepresentable.swift",
+    "MyRAM/Mac/MyRAMMacApp.swift",
+    "MyRAM/Mac/MyRAMMacRootView.swift",
+    "MyRAM/Markdown/MarkdownPreview.swift",
+    "MyRAMMacTests/MacMarkdownPreviewDocumentBuilderTests.swift",
+    "MyRAMMacTests/MacMarkdownPreviewIntegrationTests.swift",
+    "MyRAMMacTests/MacNoteViewZoomTests.swift",
+    "MyRAMUITests/MarkdownPreviewUITests.swift",
+    "docs/MYR-196-completion-verification-evidence.md"
+  ],
+  "authorities": [
+    {
+      "id": "A-PR114",
+      "class": "pr-change-set",
+      "identity": {
+        "repository": "benjamindrong/MyRAM-iOS",
+        "pr_number": 114,
+        "base_sha": "4334f3f3ea718d5523ace296b84feb52df4c0d40",
+        "candidate_sha": "69928c0ef7ee377aab046c033440de70945b5e17"
+      }
+    },
+    {
+      "id": "A-REPO-AGENTS",
+      "class": "repository-owned-rule",
+      "identity": {
+        "repository": "benjamindrong/MyRAM-iOS",
+        "path": "AGENTS.md",
+        "blob_sha": "54f74bd503a65ded3b1b7bf549761f1174d61317"
+      }
+    },
+    {
+      "id": "A-REPO-DEV",
+      "class": "repository-owned-rule",
+      "identity": {
+        "repository": "benjamindrong/MyRAM-iOS",
+        "path": "docs/DEVELOPMENT_INSTRUCTIONS.md",
+        "blob_sha": "1f5e4cbca4bb6ffe1e073be3a6b6a7ca0d6dd4cc"
+      }
+    },
+    {
+      "id": "A-TICKET",
+      "class": "frozen-external-authority",
+      "identity": {
+        "jira_issue_id": "12015",
+        "jira_key": "MYR-196",
+        "field": "description"
+      }
+    },
+    {
+      "id": "A-V4",
+      "class": "frozen-external-authority",
+      "identity": {
+        "name": "MYR-196-implementation-proposal-v4.md",
+        "library_object_id": "file_00000000288c81fbb19f55742671cfd9",
+        "timestamp": "2026-07-30T22:04:46Z",
+        "pinned_baseline_sha": "4334f3f3ea718d5523ace296b84feb52df4c0d40"
+      }
+    },
+    {
+      "id": "A-V8",
+      "class": "frozen-external-authority",
+      "identity": {
+        "name": "MYR-196-PR-114-remediation-proposal-v8.md",
+        "library_object_id": "file_00000000fce481f7ab67851eff8190b5",
+        "timestamp": "2026-07-30T23:51:20Z",
+        "original_implementation_sha": "11346a8aa9ff6a582995609a355be0068392566e"
+      }
+    },
+    {
+      "id": "A-CATALOG",
+      "class": "frozen-external-authority",
+      "identity": {
+        "jira_key": "LAN-39",
+        "comment_id": "11464"
+      }
+    },
+    {
+      "id": "A-FAIL",
+      "class": "frozen-external-authority",
+      "identity": {
+        "jira_key": "LAN-39",
+        "comment_id": "11461"
+      }
+    }
+  ]
+}

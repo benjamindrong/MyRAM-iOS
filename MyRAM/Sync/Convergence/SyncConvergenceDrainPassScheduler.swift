@@ -89,6 +89,7 @@ enum SyncConvergenceQuarantineReason: Equatable {
     case localEvidenceIndexMismatch
     case localEvidenceInvalidOperation
     case localEvidenceBaseHashMismatch
+    case staleAuthoritativeState(noteID: UUID?)
     case anchoredTerminalStructuralFailure(SyncBatchAnchoredStructuralFailure)
     case anchoredBootstrapConflict(SyncBatchAnchoredBootstrapConflict)
 }

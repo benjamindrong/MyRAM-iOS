@@ -17,7 +17,7 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
             bootstrapActionsFactory: { _, _ in
                 NotesListState.BootstrapActions(
                     rollbackIfNeededOnLaunch: { events.append("rollback") },
-                    migrateNoteSequenceStates: { events.append("migration") },
+                    migrateNoteSequenceStates: { events.append("migration"); return [] },
                     completeModelInitializationAfterMigration: {
                         events.append("initialize")
                     },
@@ -336,15 +336,14 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
         XCTAssertTrue(viewModel.hasUndoableAction)
     }
 
-    func testSoftDeleteAndRestorePreserveStructuralFormattingAuthority() throws {
+    func testSoftDeleteAndRestorePreserveStructuralFormattingAuthority() async throws {
         let fixture = try makeLifecycleFixture()
-        XCTAssertTrue(
-            fixture.viewModel.commitNoteEdit(
+        let committed = await fixture.viewModel.commitNoteEditForProduction(
                 fixture.note,
                 title: fixture.note.title,
                 content: "AB"
             )
-        )
+        XCTAssertTrue(committed)
         let context = fixture.container.mainContext
         let snapshot = try NoteSequenceStateFullBodyIntegration
             .loadMutationSnapshot(for: fixture.note, in: context)
@@ -370,15 +369,14 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
         XCTAssertEqual(restored.markState, marks)
     }
 
-    func testPermanentDeleteRemovesStructuralTextAndFormattingAuthorityWithNote() throws {
+    func testPermanentDeleteRemovesStructuralTextAndFormattingAuthorityWithNote() async throws {
         let fixture = try makeLifecycleFixture()
-        XCTAssertTrue(
-            fixture.viewModel.commitNoteEdit(
+        let committed = await fixture.viewModel.commitNoteEditForProduction(
                 fixture.note,
                 title: fixture.note.title,
                 content: "AB"
             )
-        )
+        XCTAssertTrue(committed)
         let context = fixture.container.mainContext
         let snapshot = try NoteSequenceStateFullBodyIntegration
             .loadMutationSnapshot(for: fixture.note, in: context)
@@ -402,16 +400,16 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
         XCTAssertTrue(try fetchStateRecords(in: fixture.container).isEmpty)
     }
 
-    func testExpiredTrashPurgeRemovesStructuralAuthorityWithNote() throws {
+    func testExpiredTrashVisibilityRetainsNoteAndStructuralAuthority() throws {
         let fixture = try makeLifecycleFixture()
         fixture.note.deletedAt = .distantPast
         try fixture.container.mainContext.save()
         XCTAssertFalse(try fetchStateRecords(in: fixture.container).isEmpty)
 
-        fixture.viewModel.refreshRecentlyDeletedNotes()
+        XCTAssertTrue(fixture.viewModel.fetchRecentlyDeletedNotes().isEmpty)
 
-        XCTAssertTrue(try fetchNotes(in: fixture.container).isEmpty)
-        XCTAssertTrue(try fetchStateRecords(in: fixture.container).isEmpty)
+        XCTAssertEqual(try fetchNotes(in: fixture.container).map(\.id), [fixture.note.id])
+        XCTAssertEqual(try fetchStateRecords(in: fixture.container).map(\.noteID), [fixture.note.id])
     }
 
     func testConvergenceInsertCreatesNoteAndStateInTheTransaction() throws {

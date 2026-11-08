@@ -243,6 +243,12 @@ struct SyncPeerBootstrapAcknowledgement: Codable, Equatable, Sendable {
         self.coveredFormattingNoteIDs = coveredFormattingNoteIDs
         self.coveredFormattingBatchIDs = coveredFormattingBatchIDs
     }
+
+    /// Metadata-only correlation for durable bootstrap coverage and queue release.
+    var benchmarkDetail: String {
+        let noteIDs = (coveredNoteIDs ?? []).map(\.uuidString).sorted().joined(separator: ",")
+        return "snapshotID=\(snapshotID.uuidString);coveredNoteIDs=\(noteIDs)"
+    }
 }
 
 struct SyncPeerBootstrapApplyDisposition: Equatable, Sendable {
@@ -272,10 +278,90 @@ struct SyncPeerBootstrapApplyDisposition: Equatable, Sendable {
     }
 }
 
+enum SyncPeerBootstrapOwnershipError: Error, Equatable {
+    case unhealthyUnsentQueue
+    case unhealthyLocalObligationQueue
+    case conflictingDuplicateBatchID(SyncBatchID)
+}
+
+struct SyncPeerBootstrapOwnershipCandidate: Equatable, Sendable {
+    let unsentBatches: [SyncBatch]
+    let localObligationBatches: [SyncBatch]
+    let canonicalBatches: [SyncBatch]
+
+    private let canonicalBatchesByID: [SyncBatchID: SyncBatch]
+
+    init(
+        unsentSnapshot: FileBackedSyncBatchQueueSnapshot,
+        localObligationSnapshot: FileBackedSyncBatchQueueSnapshot
+    ) throws {
+        guard Self.permitsCapture(unsentSnapshot.health) else {
+            throw SyncPeerBootstrapOwnershipError.unhealthyUnsentQueue
+        }
+        guard Self.permitsCapture(localObligationSnapshot.health) else {
+            throw SyncPeerBootstrapOwnershipError.unhealthyLocalObligationQueue
+        }
+
+        try unsentSnapshot.pendingBatches.forEach(
+            SyncBatchAnchoredPayloadPolicy.validateDurableAdmission
+        )
+        try localObligationSnapshot.pendingBatches.forEach(
+            SyncBatchAnchoredPayloadPolicy.validateDurableAdmission
+        )
+
+        unsentBatches = unsentSnapshot.pendingBatches
+        localObligationBatches = localObligationSnapshot.pendingBatches
+
+        var byID: [SyncBatchID: SyncBatch] = [:]
+        var ordered: [SyncBatch] = []
+        for batch in unsentBatches + localObligationBatches {
+            if let existing = byID[batch.id] {
+                guard existing == batch else {
+                    throw SyncPeerBootstrapOwnershipError.conflictingDuplicateBatchID(batch.id)
+                }
+                continue
+            }
+            byID[batch.id] = batch
+            ordered.append(batch)
+        }
+        canonicalBatchesByID = byID
+        canonicalBatches = ordered
+    }
+
+    var batchIDs: Set<SyncBatchID> {
+        Set(canonicalBatchesByID.keys)
+    }
+
+    var unsentBatchIDs: Set<SyncBatchID> {
+        Set(unsentBatches.map(\.id))
+    }
+
+    var localObligationBatchIDs: Set<SyncBatchID> {
+        Set(localObligationBatches.map(\.id))
+    }
+
+    func canonicalBatch(for batchID: SyncBatchID) -> SyncBatch? {
+        canonicalBatchesByID[batchID]
+    }
+
+    private static func permitsCapture(_ health: PersistedQueueHealth) -> Bool {
+        switch health {
+        case .healthy, .fileMissing:
+            return true
+        case .corrupt, .unsupportedVersion, .unsupportedAnchoredPayload, .readFailed:
+            return false
+        }
+    }
+}
+
 struct SyncPeerBootstrapPendingState: Equatable, Sendable {
     let snapshot: SyncPeerBootstrapSnapshot
     private let capturedBatchIDs: Set<SyncBatchID>
-    /// Compatible/anchored history represented by this outbound snapshot.
+    let frozenUnsentBatchIDs: Set<SyncBatchID>
+    let frozenLocalObligationBatchIDs: Set<SyncBatchID>
+    private let frozenCanonicalBatchesByID: [SyncBatchID: SyncBatch]
+    /// IDs the frozen snapshot manifest actually represents. Bootstrap ACKs may
+    /// prune only this set, never every batch that happened to be queued at capture.
     let coveredBatchIDs: Set<SyncBatchID>
     /// Structural-mark history represented by this outbound capable snapshot.
     let coveredFormattingBatchIDs: Set<SyncBatchID>
@@ -283,18 +369,30 @@ struct SyncPeerBootstrapPendingState: Equatable, Sendable {
     var acknowledgedFormattingBatchIDs: Set<SyncBatchID>
     var outboundAcknowledgedFormattingNoteIDs: Set<SyncBatchNoteID>
     var withheldHistoricalBatchIDs: Set<SyncBatchID>
-    var ordinarySyncReady: Bool
+    private(set) var sequenceBaselineCoveredNoteIDs: Set<SyncBatchNoteID> = []
+    private(set) var hasSequenceBaselineAcknowledgement = false
+    var ordinarySyncReady: Bool {
+        didSet {
+            guard ordinarySyncReady else { return }
+            withheldHistoricalBatchIDs = historicalBatchIDsThatRemainWithheld
+        }
+    }
     var retryAttempt: Int
 
     init(
         snapshot: SyncPeerBootstrapSnapshot,
-        coveredBatchIDs capturedBatchIDs: Set<SyncBatchID>,
+        ownershipCandidate: SyncPeerBootstrapOwnershipCandidate,
         withheldHistoricalBatchIDs: Set<SyncBatchID>,
         ordinarySyncReady: Bool,
         retryAttempt: Int
     ) {
         self.snapshot = snapshot
-        self.capturedBatchIDs = capturedBatchIDs
+        capturedBatchIDs = ownershipCandidate.batchIDs
+        frozenUnsentBatchIDs = ownershipCandidate.unsentBatchIDs
+        frozenLocalObligationBatchIDs = ownershipCandidate.localObligationBatchIDs
+        frozenCanonicalBatchesByID = Dictionary(
+            uniqueKeysWithValues: ownershipCandidate.canonicalBatches.map { ($0.id, $0) }
+        )
         coveredBatchIDs = Set(snapshot.historyCoverage.compactMap {
             $0.structuralMarkOnly == true ? nil : $0.batchID
         })
@@ -319,27 +417,67 @@ struct SyncPeerBootstrapPendingState: Equatable, Sendable {
         formattingBatchIDs: Set<SyncBatchID>,
         formattingNoteIDs: Set<SyncBatchNoteID>
     ) {
-        acknowledgedBatchIDs.formUnion(compatibleBatchIDs)
-        acknowledgedFormattingBatchIDs.formUnion(formattingBatchIDs)
-        outboundAcknowledgedFormattingNoteIDs.formUnion(formattingNoteIDs)
+        acknowledgedBatchIDs.formUnion(compatibleBatchIDs.intersection(coveredBatchIDs))
+        acknowledgedFormattingBatchIDs.formUnion(
+            formattingBatchIDs.intersection(coveredFormattingBatchIDs)
+        )
+        outboundAcknowledgedFormattingNoteIDs.formUnion(
+            formattingNoteIDs.intersection(snapshotNoteIDs)
+                .intersection(sequenceBaselineCoveredNoteIDs)
+        )
         withheldHistoricalBatchIDs = historicalBatchIDsThatRemainWithheld
+    }
+
+    func frozenBatch(for batchID: SyncBatchID) -> SyncBatch? {
+        frozenCanonicalBatchesByID[batchID]
+    }
+
+    mutating func recordSequenceBaselineCoverage(_ noteIDs: Set<SyncBatchNoteID>) {
+        hasSequenceBaselineAcknowledgement = true
+        sequenceBaselineCoveredNoteIDs.formUnion(noteIDs)
+        withheldHistoricalBatchIDs = historicalBatchIDsThatRemainWithheld
+    }
+
+    func permitsOrdinarySync(for batch: SyncBatch) -> Bool {
+        guard hasSequenceBaselineAcknowledgement,
+              !withheldHistoricalBatchIDs.contains(batch.id) else {
+            return false
+        }
+        let uncoveredSnapshotNoteIDs = snapshotNoteIDs
+            .subtracting(sequenceBaselineCoveredNoteIDs)
+        let batchNoteIDs = Set(batch.changes.map(\.noteID))
+        return batchNoteIDs.isDisjoint(with: uncoveredSnapshotNoteIDs)
+    }
+
+    func intentionallyWithholdsOrdinarySync(for batch: SyncBatch) -> Bool {
+        hasSequenceBaselineAcknowledgement && !permitsOrdinarySync(for: batch)
+    }
+
+    private var snapshotNoteIDs: Set<SyncBatchNoteID> {
+        Set(snapshot.notes.map(\.id))
     }
 
     private var historicalBatchIDsThatRemainWithheld: Set<SyncBatchID> {
         let manifested = coveredBatchIDs.union(coveredFormattingBatchIDs)
-        let acknowledged = acknowledgedBatchIDs.union(
-            acknowledgedFormattingBatchIDs
-        )
         let absentFromManifest = capturedBatchIDs.subtracting(manifested)
-        let unacknowledgedManifest = manifested.subtracting(acknowledged)
+        let unacknowledgedFormatting = coveredFormattingBatchIDs
+            .subtracting(acknowledgedFormattingBatchIDs)
         let emptyManifestBatchIDs = Set(
             snapshot.historyCoverage.compactMap { coverage in
                 coverage.noteIDs.isEmpty ? coverage.batchID : nil
             }
         )
+        let baselineUnsafeManifestBatchIDs = Set(
+            snapshot.historyCoverage.compactMap { coverage in
+                coverage.noteIDs.isSubset(of: sequenceBaselineCoveredNoteIDs)
+                    ? nil
+                    : coverage.batchID
+            }
+        )
         return absentFromManifest
-            .union(unacknowledgedManifest)
             .union(emptyManifestBatchIDs)
+            .union(baselineUnsafeManifestBatchIDs)
+            .union(unacknowledgedFormatting)
     }
 }
 
@@ -519,9 +657,9 @@ enum SyncPeerBootstrapSnapshotPersistence {
                         } catch {
                             throw SyncPeerBootstrapError.invalidSequenceState(note.id)
                         }
-                        let exactSequenceBaseline = recordExactlyMatches(record, noteSnapshot)
+                        let exactSequenceBaseline = recordStateExactlyMatches(record, noteSnapshot)
                         if let structuralConflictStore,
-                           let structuralConflict = try structuralConflictStore.bootstrapStructuralConflictRecordChecked(
+                           let persistedStructuralConflict = try structuralConflictStore.bootstrapStructuralConflictRecordChecked(
                             noteID: note.id,
                             sidecarFileURL: structuralConflictSidecarFileURL,
                             fileIO: structuralConflictFileIO
@@ -531,7 +669,25 @@ enum SyncPeerBootstrapSnapshotPersistence {
                                 noteID: note.id,
                                 state: snapshotState
                             )
-                            if structuralConflict.lifecycle == .resolvedLocalAuthority,
+                            let currentLocalFingerprint = try SyncConflictStore.bootstrapStructuralFingerprint(
+                                noteID: note.id,
+                                state: localState
+                            )
+                            let structuralConflict: SyncBootstrapStructuralConflictRecord
+                            if persistedStructuralConflict.lifecycle == .preparing {
+                                structuralConflict = try structuralConflictStore
+                                    .resumeBootstrapStructuralConflictPreparationChecked(
+                                        persistedStructuralConflict,
+                                        currentLocalFingerprint: currentLocalFingerprint,
+                                        sidecarFileURL: structuralConflictSidecarFileURL,
+                                        fileIO: structuralConflictFileIO
+                                    )
+                            } else {
+                                structuralConflict = persistedStructuralConflict
+                            }
+                            if (structuralConflict.lifecycle == .active
+                                    || structuralConflict.lifecycle == .resolvedLocalAuthority),
+                               currentLocalFingerprint == structuralConflict.localStructuralFingerprint,
                                remoteFingerprint == structuralConflict.localStructuralFingerprint {
                                 sequenceBaselineCoveredNoteIDs.insert(note.id)
                                 bootstrapOwnershipStatesByNoteID[note.id] = snapshotState
@@ -585,6 +741,16 @@ enum SyncPeerBootstrapSnapshotPersistence {
                                     didMutate = true
                                 }
                                 bootstrapOwnershipStatesByNoteID[note.id] = snapshotState
+                                let isFullyCoveredAfterMerge = note.title == noteSnapshot.title
+                                    && NoteSequenceStateExactText.matches(note.content, noteSnapshot.body)
+                                    && (note.isPinned ?? false) == noteSnapshot.isPinned
+                                    && note.modifiedAt == noteSnapshot.modifiedAt
+                                    && note.deletedAt == noteSnapshot.deletedAt
+                                    && note.folder?.id == noteSnapshot.folderID
+                                    && recordStateExactlyMatches(record, noteSnapshot)
+                                if isFullyCoveredAfterMerge {
+                                    fullyCoveredNoteIDs.insert(note.id)
+                                }
                             } catch SyncTextSequenceMergeError.noSharedRetainedLineage {
                                 if structuralConflictStore != nil {
                                     stagedStructuralConflicts.append((
@@ -1067,12 +1233,14 @@ enum SyncPeerBootstrapSnapshotPersistence {
         }
     }
 
-    private static func recordExactlyMatches(
+    private static func recordStateExactlyMatches(
         _ record: NoteSequenceStateRecord,
         _ note: SyncPeerBootstrapNoteSnapshot
     ) -> Bool {
+        // revision is a peer-local optimistic-concurrency counter, not part of
+        // CRDT structural identity. Equal encoded state plus its derived counts is
+        // sufficient to prove the same sequence baseline across peers.
         record.formatVersion == note.formatVersion
-            && record.revision == note.revision
             && record.visibleUTF16Count == note.visibleUTF16Count
             && record.tombstonedUTF16Count == note.tombstonedUTF16Count
             && record.payloadByteCount == note.payloadByteCount

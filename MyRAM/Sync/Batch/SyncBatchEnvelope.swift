@@ -139,6 +139,13 @@ struct SyncBatchAcknowledgementOutbox: Equatable, Sendable {
         batchIDsByPeerDeviceID[peerDeviceID] ?? []
     }
 
+    /// Read-only projection of retained ACK ownership for local diagnostics.
+    var pendingOwnersForDiagnostics: [(peerDeviceID: String, batchID: SyncBatchID)] {
+        batchIDsByPeerDeviceID.flatMap { peerDeviceID, batchIDs in
+            batchIDs.map { (peerDeviceID: peerDeviceID, batchID: $0) }
+        }
+    }
+
     mutating func remove(_ batchID: SyncBatchID, forPeerDeviceID peerDeviceID: String) {
         guard var pending = batchIDsByPeerDeviceID[peerDeviceID] else { return }
         pending.removeAll { $0 == batchID }
@@ -166,6 +173,11 @@ struct SyncBatchOutstandingDeliveryTracker: Equatable, Sendable {
     }
 
     private var tokenByKey: [Key: UUID] = [:]
+
+    /// Diagnostic access never releases or reserves a transport delivery.
+    var pendingOwnersForDiagnostics: [(batchID: SyncBatchID, peerDeviceID: String)] {
+        tokenByKey.keys.map { (batchID: $0.batchID, peerDeviceID: $0.peerDeviceID) }
+    }
 
     mutating func reserve(
         _ batchID: SyncBatchID,
@@ -219,6 +231,8 @@ struct SyncBatchOutstandingDeliveryTracker: Equatable, Sendable {
 /// or executing. Batch identity, not transient peer/session identity, owns convergence work.
 struct SyncBatchPendingReceiveTracker: Equatable, Sendable {
     private var batchIDs: Set<SyncBatchID> = []
+
+    var pendingBatchIDsForDiagnostics: Set<SyncBatchID> { batchIDs }
 
     mutating func begin(_ batchID: SyncBatchID) -> Bool {
         batchIDs.insert(batchID).inserted

@@ -119,6 +119,72 @@ private struct RawCanonicalReplayKeyPayload: Codable {
 final class MyRAMDeviceIdentityTests: XCTestCase {
     private let deviceID = "00000000-0000-0000-0000-000000000123"
 
+    func testVerificationFixtureIdentityOwnsDefaultsBeforePeerReadersAndAfterRelaunch() throws {
+        let suite = "MYR233.identity.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("B0F701B7-7744-4236-8805-E140C4004A14", forKey: "myram.sync.deviceID")
+        let trusted = Data("preserved Verification pairing".utf8)
+        defaults.set(trusted, forKey: "myram.sync.trustedPeers")
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).bundle")
+        try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let info: [String: Any] = [
+            "CFBundleIdentifier": "com.northsignalstudio.myram.verification",
+            "MyRAMVerificationFixtureDeviceID": "94C3C1CC-4FD0-4E55-97E3-3AAD33F24B8B"
+        ]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: path.appendingPathComponent("Info.plist"))
+        let bundle = try XCTUnwrap(Bundle(path: path.path))
+        let first = MyRAMDeviceIdentity.currentDeviceID(defaults: defaults, bundle: bundle)
+        XCTAssertEqual(first, "94C3C1CC-4FD0-4E55-97E3-3AAD33F24B8B")
+        XCTAssertEqual(defaults.string(forKey: "myram.sync.deviceID"), first)
+        let recreated = try XCTUnwrap(UserDefaults(suiteName: suite))
+        XCTAssertEqual(MyRAMDeviceIdentity.currentDeviceID(defaults: recreated, bundle: bundle), first)
+        recreated.set("B0F701B7-7744-4236-8805-E140C4004A14", forKey: "myram.sync.deviceID")
+        XCTAssertEqual(MyRAMDeviceIdentity.currentDeviceID(defaults: recreated, bundle: bundle), first)
+        XCTAssertEqual(recreated.data(forKey: "myram.sync.trustedPeers"), trusted)
+    }
+
+    func testFixtureConfigurationRejectsProductionAndMalformedIdentityWithoutWritingDefaults() throws {
+        let suite = "MYR233.identity.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(deviceID, forKey: "myram.sync.deviceID")
+        for bundleID in ["com.northsignalstudio.myram", "com.northsignalstudio.myram.dev",
+                         "com.northsignalstudio.myram.verification.widget"] {
+            XCTAssertThrowsError(try MyRAMSyncDeviceIdentityStore.resolve(
+                defaults: defaults, bundleIdentifier: bundleID, configuredDeviceID: deviceID
+            ))
+        }
+        for value in ["invalid", 123] as [Any] {
+            XCTAssertThrowsError(try MyRAMSyncDeviceIdentityStore.resolve(
+                defaults: defaults, bundleIdentifier: "com.northsignalstudio.myram.verification",
+                configuredDeviceID: value
+            ))
+        }
+        XCTAssertEqual(defaults.string(forKey: "myram.sync.deviceID"), deviceID)
+    }
+
+    func testProductionIdentityKeepsExistingStringAndCreatesOnlyWhenMissingOrInvalid() throws {
+        let suite = "MYR233.identity.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let retained = "94c3c1cc-4fd0-4e55-97e3-3aad33f24b8b"
+        defaults.set(retained, forKey: "myram.sync.deviceID")
+        XCTAssertEqual(try MyRAMSyncDeviceIdentityStore.resolve(
+            defaults: defaults, bundleIdentifier: "com.northsignalstudio.myram",
+            configuredDeviceID: nil, uuidProvider: { XCTFail("Existing ID must be retained"); return UUID() }
+        ), retained)
+        defaults.set("invalid", forKey: "myram.sync.deviceID")
+        let created = UUID()
+        XCTAssertEqual(try MyRAMSyncDeviceIdentityStore.resolve(
+            defaults: defaults, bundleIdentifier: "com.northsignalstudio.myram",
+            configuredDeviceID: nil, uuidProvider: { created }
+        ), created.uuidString)
+        XCTAssertEqual(defaults.string(forKey: "myram.sync.deviceID"), created.uuidString)
+    }
+
     func testSimulatorStyleDeviceNameFitsMCPeerIDWithoutChangingDeviceID() {
         let displayName = MyRAMDeviceIdentity.boundedDisplayName(
             "MYR-180-S2-20260824T010103Z",
