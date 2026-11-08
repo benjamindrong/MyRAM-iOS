@@ -83,9 +83,12 @@ final class MyRAMWidgetHostTests: XCTestCase {
         XCTAssertEqual(claimedByOriginatingScene.kind, .widgetNote(noteID))
     }
 
-    func testDispatcherRejectsMalformedWidgetURLWithoutQueueing() {
+    func testDispatcherRejectsMalformedWidgetURLWithoutQueueing() throws {
         let dispatcher = MyRAMExternalOpenDispatcher()
-        let malformed = URL(string: "myram://note/not-a-uuid")!
+        let valid = try XCTUnwrap(MyRAMWidgetDeepLink.url(noteID: UUID(), platform: .iOS))
+        var components = try XCTUnwrap(URLComponents(url: valid, resolvingAgainstBaseURL: false))
+        components.path = "/not-a-uuid"
+        let malformed = try XCTUnwrap(components.url)
 
         XCTAssertNil(dispatcher.enqueue(url: malformed, platform: .iOS))
         XCTAssertEqual(dispatcher.pendingCount, 0)

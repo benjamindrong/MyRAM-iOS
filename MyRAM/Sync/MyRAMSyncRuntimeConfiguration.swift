@@ -6,6 +6,7 @@ import CryptoKit
 /// Defaults/preferences and launch arguments cannot enable it in a production app.
 struct MyRAMSyncRuntimeConfiguration {
     static let transportOnlyKey = "MyRAMVerificationTransportOnly"
+    static let offlineRestoreKey = "MyRAMVerificationOfflineRestore"
     static let verificationBundleIDs: Set<String> = [
         "com.northsignalstudio.myram.verification",
         "com.northsignalstudio.myram.mac.verification"
@@ -14,6 +15,8 @@ struct MyRAMSyncRuntimeConfiguration {
     enum ConfigurationError: Error {
         case transportOnlyRequiresVerificationIdentity
         case invalidTransportOnlyValue
+        case offlineRestoreRequiresVerificationIdentity
+        case invalidOfflineRestoreValue
     }
 
     enum AdmissionError: Error { case applicationSyncDisabled }
@@ -22,11 +25,21 @@ struct MyRAMSyncRuntimeConfiguration {
 
     let applicationSyncEnabled: Bool
     let recordsTransportDiagnostics: Bool
+    let isOfflineRestoreVerification: Bool
 
-    init(bundleIdentifier: String?, bonjourServices: [String]?, transportOnlyValue: Any?) throws {
+    init(bundleIdentifier: String?, bonjourServices: [String]?, transportOnlyValue: Any?, offlineRestoreValue: Any? = nil) throws {
         let isolated = Self.verificationBundleIDs.contains(bundleIdentifier ?? "")
             && bonjourServices == ["_myram-verify._tcp"]
         recordsTransportDiagnostics = isolated
+        if let offlineRestoreValue {
+            guard isolated else { throw ConfigurationError.offlineRestoreRequiresVerificationIdentity }
+            guard let offlineRestore = offlineRestoreValue as? Bool else {
+                throw ConfigurationError.invalidOfflineRestoreValue
+            }
+            isOfflineRestoreVerification = offlineRestore
+        } else {
+            isOfflineRestoreVerification = false
+        }
         guard let transportOnlyValue else {
             applicationSyncEnabled = true
             return
@@ -45,7 +58,8 @@ struct MyRAMSyncRuntimeConfiguration {
             return try Self(
                 bundleIdentifier: bundle.bundleIdentifier,
                 bonjourServices: bundle.object(forInfoDictionaryKey: "NSBonjourServices") as? [String],
-                transportOnlyValue: bundle.object(forInfoDictionaryKey: transportOnlyKey)
+                transportOnlyValue: bundle.object(forInfoDictionaryKey: transportOnlyKey),
+                offlineRestoreValue: bundle.object(forInfoDictionaryKey: offlineRestoreKey)
             )
         } catch {
             preconditionFailure("Invalid Verification transport configuration: \(error)")

@@ -97,7 +97,11 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
 
     func replacePendingBatches(_ replacement: [SyncBatch]) throws {
         try replacement.forEach(SyncBatchAnchoredPayloadPolicy.validateDurableAdmission)
-        try replacePendingObligations(replacement.map(SyncConvergenceLocalObligation.init(legacyBatch:)))
+        let preserved = replacement.map { batch in
+            obligations.first { $0.batch == batch }
+                ?? SyncConvergenceLocalObligation(legacyBatch: batch)
+        }
+        try replacePendingObligations(preserved)
     }
 
     func replacePendingObligations(_ replacement: [SyncConvergenceLocalObligation]) throws {
@@ -107,7 +111,7 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
         guard canReplaceQueue else { throw QueueError.unhealthyPersistence }
 
         let original = obligations
-        obligations = Array(replacement.prefix(limit))
+        obligations = replacement
         do {
             try persistQueueThrowing(allowUnhealthyReplacement: true)
             health = .healthy

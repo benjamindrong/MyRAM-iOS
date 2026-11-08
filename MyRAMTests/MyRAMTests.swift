@@ -2326,7 +2326,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(payload.baseText, "Version to Sync")
     }
 
-    func testOrdinaryNoteSyncIsBlockedWhileContentConflictIsActive() throws {
+    func testOrdinaryNoteSyncIsBlockedWhileContentConflictIsActive() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let conflictFileURL = temporarySyncConflictFileURL()
@@ -2336,6 +2336,8 @@ final class MyRAMTests: XCTestCase {
         let note = Note(title: "Shared", content: "Local-only text")
         note.id = UUID()
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
         let expiresAt = Date().addingTimeInterval(1_000)
         let conflict = SyncConflictVersion(
             entityType: .note,
@@ -2351,7 +2353,8 @@ final class MyRAMTests: XCTestCase {
         _ = conflictStore.preserve(conflict)
         let vm = NotesViewModel(context: context, syncController: recorder, syncConflictStore: conflictStore)
 
-        vm.commitNoteEdit(note, title: "Shared", content: "typed during review")
+        let committed = await vm.commitNoteEditForProduction(note, title: "Shared", content: "typed during review")
+        XCTAssertTrue(committed)
 
         XCTAssertEqual(note.content, "typed during review")
         XCTAssertTrue(recorder.recordedChanges.isEmpty)
@@ -2366,6 +2369,7 @@ final class MyRAMTests: XCTestCase {
         let recorder = RecordingSyncController()
         let note = Note(title: "Shared", content: "Hello")
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
         let vm = NotesViewModel(
             context: context,
@@ -2374,7 +2378,8 @@ final class MyRAMTests: XCTestCase {
             syncBatchQuietWindow: 0
         )
 
-        vm.commitNoteEdit(note, title: "Shared", content: "Hello world")
+        let committed = await vm.commitNoteEditForProduction(note, title: "Shared", content: "Hello world")
+        XCTAssertTrue(committed)
         for _ in 0..<20 where recorder.recordedBatches.isEmpty {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
@@ -2384,13 +2389,17 @@ final class MyRAMTests: XCTestCase {
         })
         let batch = try XCTUnwrap(recorder.recordedBatches.first)
         XCTAssertEqual(batch.changes.count, 1)
-        guard case .noteBodyTextInserted(let change) = try XCTUnwrap(batch.changes.first) else {
-            return XCTFail("Expected body insert batch change")
+        guard case .noteBodyTextInsertedAnchored(let change) = try XCTUnwrap(batch.changes.first) else {
+            return XCTFail("Expected anchored body insertion")
         }
         XCTAssertEqual(change.noteID, note.id)
         XCTAssertEqual(change.utf16Offset, "Hello".utf16.count)
         XCTAssertEqual(change.text, " world")
         XCTAssertEqual(change.baseContentHash, SyncBatchContentHash.sha256Hex(for: "Hello"))
+        XCTAssertEqual(note.content, "Hello world")
+        let record = try XCTUnwrap(context.fetch(FetchDescriptor<NoteSequenceStateRecord>()).first { $0.noteID == note.id })
+        let sequence = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(record: record, noteID: note.id)
+        XCTAssertEqual(sequence.visibleText, "Hello world")
     }
 
     func testReadyLocalBatchRegistersConvergenceEvidenceBeforeTransport() async throws {
@@ -2402,6 +2411,7 @@ final class MyRAMTests: XCTestCase {
         let note = Note(title: "Shared", content: "Hello")
         note.id = UUID(uuidString: "00000000-0000-0000-0000-000000127501")!
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
         let vm = NotesViewModel(
             context: context,
@@ -2410,7 +2420,8 @@ final class MyRAMTests: XCTestCase {
             syncBatchQuietWindow: 0
         )
 
-        vm.commitNoteEdit(note, title: "Renamed", content: "Hello world")
+        let committed = await vm.commitNoteEditForProduction(note, title: "Renamed", content: "Hello world")
+        XCTAssertTrue(committed)
         for _ in 0..<20 where recorder.recordedBatches.isEmpty {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
@@ -2624,6 +2635,7 @@ final class MyRAMTests: XCTestCase {
         let note = Note(title: "Draft", content: "abc")
         note.id = UUID(uuidString: "00000000-0000-0000-0000-0000001275B0")!
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
         let syncController = RecordingSyncController()
         let viewModel = NotesViewModel(
@@ -2635,7 +2647,8 @@ final class MyRAMTests: XCTestCase {
             resumesPendingConvergenceOnInit: false
         )
 
-        viewModel.commitNoteEdit(note, title: "Draft", content: "axc")
+        let committed = await viewModel.commitNoteEditForProduction(note, title: "Draft", content: "axc")
+        XCTAssertTrue(committed)
 
         XCTAssertEqual(note.content, "axc")
         XCTAssertEqual(note.title, "Draft")
@@ -2648,9 +2661,9 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(syncController.recordedBatches.count, 1)
         XCTAssertEqual(syncController.recordedBatches.first?.id, obligationID)
         XCTAssertEqual(syncController.recordedBatches.first?.changes.count, 2)
-        guard case .noteBodyTextDeleted(let deletion) = syncController.recordedBatches.first?.changes.first,
-              case .noteBodyTextInserted(let insertion) = syncController.recordedBatches.first?.changes.dropFirst().first else {
-            return XCTFail("Expected replacement to record delete then insert")
+        guard case .noteBodyTextDeletedAnchored(let deletion) = syncController.recordedBatches.first?.changes.first,
+              case .noteBodyTextInsertedAnchored(let insertion) = syncController.recordedBatches.first?.changes.dropFirst().first else {
+            return XCTFail("Expected anchored replacement to record delete then insert")
         }
         XCTAssertEqual(deletion.expectedText, "b")
         XCTAssertEqual(insertion.text, "x")
@@ -2670,6 +2683,7 @@ final class MyRAMTests: XCTestCase {
         let note = Note(title: "Shared", content: "")
         note.id = UUID(uuidString: "22900000-0000-0000-0000-000000000087")!
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
         let syncController = RecordingSyncController()
         let viewModel = NotesViewModel(
@@ -2681,21 +2695,18 @@ final class MyRAMTests: XCTestCase {
             resumesPendingConvergenceOnInit: false
         )
 
-        viewModel.commitNoteEdit(note, title: "Shared", content: "operation 87")
+        let committed = await viewModel.commitNoteEditForProduction(note, title: "Shared", content: "operation 87")
+        XCTAssertTrue(committed)
         XCTAssertEqual(note.content, "operation 87")
 
         await viewModel.prepareLocalOwnershipForBootstrapForTesting()
 
         XCTAssertEqual(syncController.recordedBatches.count, 1)
         XCTAssertEqual(syncController.recordedBatches.first?.changes.count, 1)
-        switch syncController.recordedBatches.first?.changes.first {
-        case .noteBodyTextInsertedAnchored(let insertion):
-            XCTAssertEqual(insertion.text, "operation 87")
-        case .noteBodyTextInserted(let insertion):
-            XCTAssertEqual(insertion.text, "operation 87")
-        default:
-            return XCTFail("Bootstrap preflight must durably own the committed insertion")
+        guard case .noteBodyTextInsertedAnchored(let insertion) = syncController.recordedBatches.first?.changes.first else {
+            return XCTFail("Bootstrap preflight must durably own the anchored insertion")
         }
+        XCTAssertEqual(insertion.text, "operation 87")
         let residualBatchID = await viewModel.capturePendingLocalBatchForRecovery()
         XCTAssertNil(residualBatchID)
     }
@@ -2707,6 +2718,7 @@ final class MyRAMTests: XCTestCase {
         let replacementBody = String(repeating: "b", count: 600)
         let note = Note(title: "Draft", content: originalBody)
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
         let syncController = RecordingSyncController()
         let viewModel = NotesViewModel(
@@ -2718,7 +2730,8 @@ final class MyRAMTests: XCTestCase {
             resumesPendingConvergenceOnInit: false
         )
 
-        viewModel.commitNoteEdit(note, title: "Draft", content: replacementBody)
+        let committed = await viewModel.commitNoteEditForProduction(note, title: "Draft", content: replacementBody)
+        XCTAssertTrue(committed)
 
         XCTAssertEqual(note.content, replacementBody)
         XCTAssertEqual(note.title, "Draft")
@@ -2753,7 +2766,15 @@ final class MyRAMTests: XCTestCase {
         let folder = Folder(name: "Unrelated")
         context.insert(note)
         context.insert(folder)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
+        let originalSequenceRecord = try XCTUnwrap(
+            context.fetch(FetchDescriptor<NoteSequenceStateRecord>()).first { $0.noteID == note.id }
+        )
+        let originalSequenceRevision = originalSequenceRecord.revision
+        let originalSequencePayload = originalSequenceRecord.statePayloadData
+        let originalMarkRevision = originalSequenceRecord.markRevision
+        let originalMarkPayload = originalSequenceRecord.markStatePayloadData
         folder.name = "Unrelated dirty change"
         var failNextSave = true
         struct SaveFailure: Error {}
@@ -2774,13 +2795,19 @@ final class MyRAMTests: XCTestCase {
             }
         )
 
-        viewModel.commitNoteEdit(note, title: "Saved later?", content: "axc", richTextContentData: failedRichText)
+        let committed = await viewModel.commitNoteEditForProduction(note, title: "Saved later?", content: "axc", richTextContentData: failedRichText)
+        XCTAssertFalse(committed)
 
         XCTAssertEqual(note.title, "Draft")
         XCTAssertEqual(note.content, "abc")
         XCTAssertEqual(note.richTextContentData, originalRichText)
         XCTAssertEqual(note.modifiedAt, originalModifiedAt)
         XCTAssertEqual(folder.name, "Unrelated dirty change")
+        XCTAssertTrue(context.hasChanges, "The unrelated folder edit must remain pending.")
+        XCTAssertEqual(originalSequenceRecord.revision, originalSequenceRevision)
+        XCTAssertEqual(originalSequenceRecord.statePayloadData, originalSequencePayload)
+        XCTAssertEqual(originalSequenceRecord.markRevision, originalMarkRevision)
+        XCTAssertEqual(originalSequenceRecord.markStatePayloadData, originalMarkPayload)
         XCTAssertEqual(viewModel.syncBatchErrorMessage, "Unable to save the latest edit.")
         XCTAssertFalse(viewModel.hasRecentTextEditForTesting(noteID: note.id))
         let pendingBatchID = await viewModel.capturePendingLocalBatchForRecovery()
@@ -2799,6 +2826,17 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(reloadedNote.content, "abc")
         XCTAssertEqual(reloadedNote.richTextContentData, originalRichText)
         XCTAssertEqual(reloadedFolder.name, "Unrelated dirty change")
+        let persistedSequence = try XCTUnwrap(
+            freshContext.fetch(FetchDescriptor<NoteSequenceStateRecord>()).first { $0.noteID == noteID }
+        )
+        XCTAssertEqual(persistedSequence.revision, originalSequenceRevision)
+        XCTAssertEqual(persistedSequence.statePayloadData, originalSequencePayload)
+        XCTAssertEqual(persistedSequence.markRevision, originalMarkRevision)
+        XCTAssertEqual(persistedSequence.markStatePayloadData, originalMarkPayload)
+        let restoredState = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: persistedSequence, noteID: noteID
+        )
+        XCTAssertEqual(restoredState.visibleText, "abc")
     }
 
     func testIncomingBodyMutationFinalizesPendingLocalObligationBeforeAuthoritativeMutation() async throws {
@@ -2808,6 +2846,7 @@ final class MyRAMTests: XCTestCase {
         let note = Note(title: "Shared", content: "Hello")
         note.id = noteID
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
         let syncController = RecordingSyncController()
         let viewModel = NotesViewModel(
@@ -2819,7 +2858,8 @@ final class MyRAMTests: XCTestCase {
             resumesPendingConvergenceOnInit: false
         )
 
-        viewModel.commitNoteEdit(note, title: "Shared", content: "Hello local")
+        let committed = await viewModel.commitNoteEditForProduction(note, title: "Shared", content: "Hello local")
+        XCTAssertTrue(committed)
         await Task.yield()
         await Task.yield()
         let remoteBatch = SyncBatch(
@@ -2841,7 +2881,7 @@ final class MyRAMTests: XCTestCase {
 
         XCTAssertEqual(syncController.recordedBatches.count, 1)
         XCTAssertEqual(syncController.recordedBatches.first?.changes.count, 1)
-        guard case .noteBodyTextInserted(let localChange) = syncController.recordedBatches.first?.changes.first else {
+        guard case .noteBodyTextInsertedAnchored(let localChange) = syncController.recordedBatches.first?.changes.first else {
             return XCTFail("Expected pending local body insertion to be finalized before incoming mutation")
         }
         XCTAssertEqual(localChange.noteID, noteID)
@@ -3095,6 +3135,7 @@ final class MyRAMTests: XCTestCase {
         note.id = noteID
         note.modifiedAt = Date(timeIntervalSince1970: 100)
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
 
         let injector = InjectableLegacyIncomingSaveFailure(shouldFail: true)
@@ -3122,7 +3163,8 @@ final class MyRAMTests: XCTestCase {
 
         // A later, wholly unrelated edit succeeds and saves normally.
         injector.shouldFail = false
-        vm.commitNoteEdit(note, title: "Original", content: "Original body edited locally")
+        let committed = await vm.commitNoteEditForProduction(note, title: "Original", content: "Original body edited locally")
+        XCTAssertTrue(committed)
         XCTAssertEqual(note.content, "Original body edited locally")
 
         let reopenedContainer = try makeContainer(isStoredInMemoryOnly: false, configurationName: storeName)
@@ -3905,6 +3947,7 @@ final class MyRAMTests: XCTestCase {
         let note = Note(title: "Shared", content: "Hello")
         note.id = noteID
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
         let viewModel = NotesViewModel(
             context: context,
@@ -3915,7 +3958,8 @@ final class MyRAMTests: XCTestCase {
             resumesPendingConvergenceOnInit: false
         )
 
-        viewModel.commitNoteEdit(note, title: "Shared", content: "Hello local")
+        let committed = await viewModel.commitNoteEditForProduction(note, title: "Shared", content: "Hello local")
+        XCTAssertTrue(committed)
         await Task.yield()
         await Task.yield()
 
@@ -3956,6 +4000,7 @@ final class MyRAMTests: XCTestCase {
         let note = Note(title: "Shared", content: "Hello")
         note.id = noteID
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
         let viewModel = NotesViewModel(
             context: context,
@@ -3967,7 +4012,8 @@ final class MyRAMTests: XCTestCase {
             resumesPendingConvergenceOnInit: false
         )
 
-        viewModel.commitNoteEdit(note, title: "Shared", content: "Hello local")
+        let committed = await viewModel.commitNoteEditForProduction(note, title: "Shared", content: "Hello local")
+        XCTAssertTrue(committed)
         await Task.yield()
         await Task.yield()
 
@@ -5947,10 +5993,13 @@ final class MyRAMTests: XCTestCase {
         note.id = UUID()
         note.modifiedAt = Date(timeIntervalSince1970: 100)
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
         let vm = NotesViewModel(context: context, syncController: recorder, syncConflictStore: conflictStore)
         vm.selectNote(note)
 
-        vm.commitNoteEdit(note, title: "Shared", content: "Shared body\nDevice B text")
+        let committed = await vm.commitNoteEditForProduction(note, title: "Shared", content: "Shared body\nDevice B text")
+        XCTAssertTrue(committed)
 
         let deviceANote = Note(title: "Shared", content: "Shared body\nDevice A text")
         deviceANote.id = note.id
@@ -5981,7 +6030,8 @@ final class MyRAMTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: fixture.conflictFileURL.deletingLastPathComponent()) }
         let typedAfterConflict = "Local before conflict\nTyped after conflict"
 
-        fixture.vm.commitNoteEdit(fixture.note, title: "Shared", content: typedAfterConflict)
+        let committed = await fixture.vm.commitNoteEditForProduction(fixture.note, title: "Shared", content: typedAfterConflict)
+        XCTAssertTrue(committed)
 
         XCTAssertEqual(fixture.note.content, typedAfterConflict)
         XCTAssertEqual(fixture.vm.localText(forSyncConflict: fixture.conflict), typedAfterConflict)
@@ -6020,7 +6070,8 @@ final class MyRAMTests: XCTestCase {
         let typedAfterConflict = "Local before conflict\nTyped after conflict"
         fixture.note.richTextContentData = Data("local editor formatting".utf8)
 
-        fixture.vm.commitNoteEdit(fixture.note, title: "Shared", content: typedAfterConflict)
+        let committed = await fixture.vm.commitNoteEditForProduction(fixture.note, title: "Shared", content: typedAfterConflict)
+        XCTAssertTrue(committed)
 
         XCTAssertEqual(fixture.note.content, typedAfterConflict)
         XCTAssertTrue(fixture.recorder.recordedChanges.isEmpty)
@@ -6110,7 +6161,8 @@ final class MyRAMTests: XCTestCase {
         let typedAfterConflict = "Local before conflict\nTyped after conflict"
         let mergedText = "\(typedAfterConflict)\nVersion to Sync"
 
-        fixture.vm.commitNoteEdit(fixture.note, title: "Shared", content: typedAfterConflict)
+        let committed = await fixture.vm.commitNoteEditForProduction(fixture.note, title: "Shared", content: typedAfterConflict)
+        XCTAssertTrue(committed)
 
         XCTAssertEqual(fixture.note.content, typedAfterConflict)
         XCTAssertTrue(fixture.recorder.recordedChanges.isEmpty)
@@ -6947,7 +6999,8 @@ final class MyRAMTests: XCTestCase {
         let bundleIdentifier = Bundle.main.bundleIdentifier ?? ""
         XCTAssertTrue(
             bundleIdentifier == "com.apexcoretechs.MyRAM.dev"
-                || bundleIdentifier == "com.northsignalstudio.myram.dev",
+                || bundleIdentifier == "com.northsignalstudio.myram.dev"
+                || MyRAMSyncRuntimeConfiguration.current().recordsTransportDiagnostics,
             "Debug runs should use a MyRAM app bundle identifier."
         )
 #endif
@@ -8145,19 +8198,20 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(reopenedNote.photoAttachments.count, 1)
     }
 
-    func testUpdateNoteKeepsExistingNotesWithoutAttachmentsCompatible() throws {
+    func testActivatedNoteEditKeepsExistingNotesWithoutAttachmentsCompatible() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
         let note = try XCTUnwrap(vm.createNewNote())
 
-        vm.updateNote(note, title: "Title", content: "Content")
+        let saved = await vm.commitNoteEditForProduction(note, title: "Title", content: "Content")
+        XCTAssertTrue(saved)
 
         XCTAssertEqual(note.title, "Title")
         XCTAssertEqual(note.content, "Content")
         XCTAssertTrue(note.photoAttachments.isEmpty)
     }
 
-    func testUpdateNotePersistsRichTextDataAlongsidePlainText() throws {
+    func testActivatedNoteEditRejectsUnpairedRichTextCache() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
         let note = try XCTUnwrap(vm.createNewNote())
@@ -8168,16 +8222,27 @@ final class MyRAMTests: XCTestCase {
         )
         let richTextData = try XCTUnwrap(RichTextContentCodec.encode(attributedText))
 
-        vm.updateNote(
+        // Rich-text presentation bytes cannot be made authoritative without a
+        // matching structural mark projection. The activated save must commit
+        // the body and anchored sequence, discarding this unpaired cache.
+        let saved = await vm.commitNoteEditForProduction(
             note,
             title: "Styled",
             content: attributedText.string,
             richTextContentData: richTextData
         )
 
+        XCTAssertTrue(saved)
         XCTAssertEqual(note.title, "Styled")
         XCTAssertEqual(note.content, "Styled note")
-        XCTAssertEqual(note.richTextContentData, richTextData)
+        XCTAssertNil(note.richTextContentData)
+        let record = try XCTUnwrap(try container.mainContext.fetch(
+            FetchDescriptor<NoteSequenceStateRecord>()
+        ).first { $0.noteID == note.id })
+        let sequence = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: record, noteID: note.id
+        )
+        XCTAssertEqual(sequence.visibleText, "Styled note")
     }
 
     func testRichTextCodecFallsBackToPlainTextWhenRichDataMissing() {
@@ -8391,11 +8456,12 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(exported.contains("Body:\nBook flights"))
     }
 
-    func testExportNotesForSharingSingleNoteCreatesStructuredJSONFileAndImageFiles() throws {
+    func testExportNotesForSharingSingleNoteCreatesStructuredJSONFileAndImageFiles() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
         let note = try XCTUnwrap(vm.createNewNote())
-        vm.updateNote(note, title: "Daily Log", content: "UTF-8 test ✅")
+        let saved = await vm.commitNoteEditForProduction(note, title: "Daily Log", content: "UTF-8 test ✅")
+        XCTAssertTrue(saved)
         note.createdAt = Date(timeIntervalSince1970: 1000)
         note.modifiedAt = Date(timeIntervalSince1970: 2000)
         _ = vm.addPinnedThought(to: note, text: "Review receipt")
@@ -8429,16 +8495,18 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(noteText.contains("Body:\nUTF-8 test ✅"))
     }
 
-    func testExportNotesForSharingMultipleNotesIncludesFolderPathsAndPhotos() throws {
+    func testExportNotesForSharingMultipleNotesIncludesFolderPathsAndPhotos() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
         let note1 = try XCTUnwrap(vm.createNewNote())
-        vm.updateNote(note1, title: "First Note", content: "Body A")
+        let firstSaved = await vm.commitNoteEditForProduction(note1, title: "First Note", content: "Body A")
+        XCTAssertTrue(firstSaved)
 
         vm.createFolder(named: "Work")
         let workFolder = try XCTUnwrap(vm.folders.first(where: { $0.name == "Work" }))
         let note2 = try XCTUnwrap(vm.createNewNote())
-        vm.updateNote(note2, title: "Second Note", content: "Body B")
+        let secondSaved = await vm.commitNoteEditForProduction(note2, title: "Second Note", content: "Body B")
+        XCTAssertTrue(secondSaved)
         vm.moveNote(note2, to: workFolder)
         let imageData = try makeJPEGData()
         vm.addPhotoAttachment(to: note2, imageData: imageData)
@@ -8463,13 +8531,14 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: jpgURLs[0]), imageData)
     }
 
-    func testImportNotesFromMyRAMExportRestoresNotesPinnedThoughtsAndFolders() throws {
+    func testImportNotesFromMyRAMExportRestoresNotesPinnedThoughtsAndFolders() async throws {
         let sourceContainer = try makeContainer(isStoredInMemoryOnly: true)
         let sourceVM = NotesViewModel(context: sourceContainer.mainContext)
         sourceVM.createFolder(named: "Work")
         let workFolder = try XCTUnwrap(sourceVM.folders.first(where: { $0.name == "Work" }))
         let sourceNote = try XCTUnwrap(sourceVM.createNewNote())
-        sourceVM.updateNote(sourceNote, title: "Imported Plan", content: "Follow up tomorrow")
+        let saved = await sourceVM.commitNoteEditForProduction(sourceNote, title: "Imported Plan", content: "Follow up tomorrow")
+        XCTAssertTrue(saved)
         sourceVM.moveNote(sourceNote, to: workFolder)
         let pinnedThought = try XCTUnwrap(sourceVM.addPinnedThought(to: sourceNote, text: "Call Sam"))
         pinnedThought.isCollapsed = true
@@ -8495,13 +8564,19 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(importVM.currentNote?.id, importedNote.id)
     }
 
-    func testSetNotePinnedMovesNoteAheadOfUnpinnedNotes() throws {
+    func testSetNotePinnedMovesNoteAheadOfUnpinnedNotes() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
         let older = try XCTUnwrap(vm.createNewNote())
-        vm.updateNote(older, title: "Older", content: "")
+        let olderSaved = await vm.commitNoteEditForProduction(
+            older, title: "Older", content: ""
+        )
+        XCTAssertTrue(olderSaved)
         let newer = try XCTUnwrap(vm.createNewNote())
-        vm.updateNote(newer, title: "Newer", content: "")
+        let newerSaved = await vm.commitNoteEditForProduction(
+            newer, title: "Newer", content: ""
+        )
+        XCTAssertTrue(newerSaved)
 
         vm.setNotePinned(older, isPinned: true)
 
@@ -9379,6 +9454,8 @@ final class MyRAMTests: XCTestCase {
         note.id = UUID()
         note.modifiedAt = Date(timeIntervalSince1970: 100)
         context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
         let conflict = SyncConflictVersion(
             entityType: .note,
             entityID: note.id,

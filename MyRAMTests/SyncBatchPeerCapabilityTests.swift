@@ -1,4 +1,5 @@
 import AnchoredSequenceCore
+import CryptoKit
 import MultipeerConnectivity
 import XCTest
 @testable import MyRAM
@@ -661,6 +662,79 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertEqual(transport.batchRecipientLists, [[peer]])
         await controller.handleBootstrapCapabilityAnnouncementForTesting(from: peer)
         XCTAssertEqual(transport.sentMessageKinds.last, .bootstrapSnapshot)
+    }
+
+    func testMYR238ReceiverDiagnosticsCorrelatePartialCoverageWithStructuralConflictWithoutMutation() async throws {
+        let peer = MCPeerID(displayName: "Mac|23800000-0000-0000-0000-000000000701")
+        let transport = CapabilityRecordingTransport(connectedPeers: [peer])
+        let controller = makeController(transport: transport)
+        let coveredID = UUID(uuidString: "23800000-0000-0000-0000-000000000702")!
+        let uncoveredID = UUID(uuidString: "23800000-0000-0000-0000-000000000703")!
+        let snapshotID = UUID(uuidString: "23800000-0000-0000-0000-000000000704")!
+        let first = try makeBootstrapSnapshot(id: snapshotID, noteID: coveredID)
+        let second = try makeBootstrapSnapshot(id: snapshotID, noteID: uncoveredID)
+        let snapshot = SyncPeerBootstrapSnapshot(
+            id: snapshotID, folders: [], notes: first.notes + second.notes
+        )
+        controller.applyBootstrapSnapshot = { _ in
+            SyncPeerBootstrapApplyDisposition(
+                coveredBatchIDs: [],
+                coveredNoteIDs: [coveredID],
+                insertedNoteIDs: [],
+                presentationRefreshRequired: false
+            )
+        }
+        var lifecycleQueries: [UUID] = []
+        controller.bootstrapConflictLifecycleForReadOnlyDiagnostics = { noteID in
+            lifecycleQueries.append(noteID)
+            return .active
+        }
+        await controller.receiveBootstrapSnapshotForTesting(snapshot, from: peer)
+        let priorQueue = controller.unsentBatchQueueSnapshot()
+        let acknowledgementCount = transport.sentBootstrapAcknowledgements.count
+        let diagnostics = controller.readOnlySyncDiagnostics
+        let missingHash = SHA256.hash(data: Data(
+            ("myram.mac.sync-diagnostics.v1:" + uncoveredID.uuidString).utf8
+        )).prefix(16).map { String(format: "%02x", $0) }.joined()
+        XCTAssertTrue(diagnostics.contains("schema=myram.iphone.sync-diagnostics.v1"))
+        XCTAssertTrue(diagnostics.contains("receiver_pending_bootstrap_peer_count=1"))
+        XCTAssertTrue(diagnostics.contains("expected_notes:2,covered_notes:1,missing_notes:1"))
+        XCTAssertTrue(diagnostics.contains("missing_note_hashes:" + missingHash))
+        XCTAssertTrue(diagnostics.contains("note:" + missingHash + ",structural_conflict_lifecycle:active"))
+        XCTAssertEqual(lifecycleQueries, [uncoveredID])
+        XCTAssertFalse(diagnostics.contains(coveredID.uuidString))
+        XCTAssertFalse(diagnostics.contains(uncoveredID.uuidString))
+        XCTAssertFalse(diagnostics.contains(snapshotID.uuidString))
+        XCTAssertFalse(diagnostics.contains("Authoritative"))
+        XCTAssertEqual(controller.unsentBatchQueueSnapshot(), priorQueue)
+        XCTAssertEqual(transport.sentBootstrapAcknowledgements.count, acknowledgementCount)
+
+        enum ReadError: Error { case unavailable }
+        controller.bootstrapConflictLifecycleForReadOnlyDiagnostics = { _ in
+            throw ReadError.unavailable
+        }
+        let failedRead = controller.readOnlySyncDiagnostics
+        XCTAssertTrue(failedRead.contains("structural_conflict_lifecycle:structural_record_read_error"))
+        XCTAssertFalse(failedRead.contains("structural_conflict_lifecycle:active"))
+        XCTAssertEqual(controller.unsentBatchQueueSnapshot(), priorQueue)
+    }
+
+    func testMYR238ReceiverDiagnosticsShowEightDurableUnsentBatchesWithoutRelease() async throws {
+        let controller = makeController(transport: CapabilityRecordingTransport())
+        for suffix in 238_710...238_717 {
+            try await controller.acceptLocalBatch(makeV1Batch(idSuffix: suffix))
+        }
+        let before = controller.unsentBatchQueueSnapshot()
+        XCTAssertEqual(before.pendingBatches.count, 8)
+        let diagnostics = controller.readOnlySyncDiagnostics
+        XCTAssertTrue(diagnostics.contains("unsent_count=8"))
+        XCTAssertTrue(diagnostics.contains("receiver_pending_bootstrap_peer_count=0"))
+        XCTAssertEqual(diagnostics.components(separatedBy: "\nunsent[").count - 1, 8)
+        for batch in before.pendingBatches {
+            XCTAssertFalse(diagnostics.contains(batch.id.uuidString))
+            XCTAssertFalse(diagnostics.contains(batch.originDeviceID.uuidString))
+        }
+        XCTAssertEqual(controller.unsentBatchQueueSnapshot(), before)
     }
 
     func testConflictResolutionReappliesBlockedBootstrapAndSendsUpdatedAcknowledgement() async throws {

@@ -9,6 +9,187 @@ import XCTest
 final class MacSyncBatchControllerTests: XCTestCase {
     private var retainedContainers: [ModelContainer] = []
 
+
+    func testMYR238ExclusiveCaptureRequiresOneOperatorAuthorizedExactPeer() async throws {
+        let allowed = MCPeerID(displayName: "iPhone|23800000-0000-0000-0000-000000000501")
+        let other = MCPeerID(displayName: "Other|23800000-0000-0000-0000-000000000502")
+        var members: [MCPeerID] = []
+        var invitations: [MCPeerID] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { members },
+            invitePeerOperation: { peer, _, _ in invitations.append(peer) },
+            exclusivePeerCaptureMode: true
+        )
+        let local = MCPeerID(displayName: "local|23800000-0000-0000-0000-000000000503")
+        let advertiser = MCNearbyServiceAdvertiser(
+            peer: local, discoveryInfo: nil, serviceType: "myram-verify"
+        )
+        let browser = MCNearbyServiceBrowser(peer: local, serviceType: "myram-verify")
+
+        var unarmed: Bool?
+        controller.advertiser(
+            advertiser, didReceiveInvitationFromPeer: allowed, withContext: nil
+        ) { accepted, _ in unarmed = accepted }
+        await waitUntil { unarmed != nil }
+        XCTAssertEqual(unarmed, false)
+        XCTAssertTrue(invitations.isEmpty)
+        XCTAssertFalse(controller.hasConnectedPeers)
+
+        controller.browser(browser, foundPeer: allowed, withDiscoveryInfo: nil)
+        controller.browser(browser, foundPeer: other, withDiscoveryInfo: nil)
+        await waitUntil { controller.availablePeers.count == 2 }
+        let chosen = try XCTUnwrap(controller.availablePeers.first { $0.peerID == allowed })
+        XCTAssertTrue(controller.authorizeExclusivePeerForCapture(chosen))
+        XCTAssertEqual(invitations, [allowed])
+        XCTAssertFalse(controller.authorizeExclusivePeerForCapture(chosen))
+        let disallowed = try XCTUnwrap(controller.availablePeers.first { $0.peerID == other })
+        controller.invite(disallowed)
+        XCTAssertEqual(invitations, [allowed])
+
+        var otherAccepted: Bool?
+        controller.advertiser(
+            advertiser, didReceiveInvitationFromPeer: other, withContext: nil
+        ) { accepted, _ in otherAccepted = accepted }
+        await waitUntil { otherAccepted != nil }
+        XCTAssertEqual(otherAccepted, false)
+
+        var allowedAccepted: Bool?
+        controller.advertiser(
+            advertiser, didReceiveInvitationFromPeer: allowed, withContext: nil
+        ) { accepted, acceptedSession in
+            allowedAccepted = accepted
+            if accepted { XCTAssertNotNil(acceptedSession) }
+        }
+        await waitUntil { allowedAccepted != nil }
+        XCTAssertEqual(allowedAccepted, true)
+        members = [allowed]
+        XCTAssertTrue(controller.hasConnectedPeers)
+        let diagnostics = controller.readOnlySyncDiagnostics
+        XCTAssertTrue(diagnostics.contains("exclusive_capture_mode=true"))
+        XCTAssertTrue(diagnostics.contains("exclusive_peer_authorized=true"))
+        XCTAssertTrue(diagnostics.contains("exclusive_session_ready=true"))
+        XCTAssertFalse(diagnostics.contains(allowed.displayName))
+        controller.stopNetworking()
+    }
+
+    func testMYR238ExclusiveCaptureCannotTrustConnectedPeerOrWrongACK() async throws {
+        let allowed = MCPeerID(displayName: "iPhone|23800000-0000-0000-0000-000000000511")
+        let impostor = MCPeerID(displayName: allowed.displayName)
+        let other = MCPeerID(displayName: "Other|23800000-0000-0000-0000-000000000512")
+        XCTAssertNotEqual(allowed, impostor)
+        let queueURL = temporaryQueueFileURL(named: "myr238-exclusive-queue.json")
+        let queue = FileBackedSyncBatchQueue(fileURL: queueURL)
+        let pending = makeBatch(idSuffix: 238_019)
+        try queue.enqueueDurably(pending)
+        var members = [allowed]
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil, unsentBatchQueue: queue,
+            connectedPeersProvider: { members },
+            invitePeerOperation: { _, _, _ in },
+            exclusivePeerCaptureMode: true
+        )
+        let local = MCPeerID(displayName: "local|23800000-0000-0000-0000-000000000513")
+        let browser = MCNearbyServiceBrowser(peer: local, serviceType: "myram-verify")
+        let session = MCSession(
+            peer: local, securityIdentity: nil, encryptionPreference: .required
+        )
+        controller.browser(browser, foundPeer: allowed, withDiscoveryInfo: nil)
+        await waitUntil { !controller.availablePeers.isEmpty }
+        let choice = try XCTUnwrap(controller.availablePeers.first)
+        XCTAssertFalse(controller.authorizeExclusivePeerForCapture(choice))
+        XCTAssertFalse(controller.hasConnectedPeers)
+
+        let payload = try MultipeerSyncMessageCoding.encode(
+            kind: .batchAcknowledgement,
+            payload: JSONEncoder().encode(SyncBatchAcknowledgement(batchID: pending.id))
+        )
+        controller.session(session, didReceive: payload, fromPeer: allowed)
+        await Task.yield()
+        XCTAssertTrue(queue.contains(pending.id))
+
+        members = []
+        XCTAssertTrue(controller.authorizeExclusivePeerForCapture(choice))
+        members = [allowed]
+        controller.session(session, didReceive: payload, fromPeer: impostor)
+        controller.session(session, didReceive: payload, fromPeer: other)
+        await Task.yield()
+        XCTAssertTrue(queue.contains(pending.id))
+
+        members = [allowed, other]
+        XCTAssertFalse(controller.hasConnectedPeers)
+        controller.session(session, didReceive: payload, fromPeer: allowed)
+        await Task.yield()
+        XCTAssertTrue(queue.contains(pending.id), "Mixed membership cannot release local history")
+        controller.stopNetworking()
+        XCTAssertTrue(queue.contains(pending.id))
+    }
+
+    func testMYR238ExclusiveCaptureWithholdsBootstrapSendDuringMixedMembership() async throws {
+        let allowed = MCPeerID(displayName: "iPhone|23800000-0000-0000-0000-000000000531")
+        let other = MCPeerID(displayName: "Other|23800000-0000-0000-0000-000000000532")
+        let queueURL = temporaryQueueFileURL(named: "myr238-exclusive-outbound.json")
+        let queue = FileBackedSyncBatchQueue(fileURL: queueURL)
+        let historical = makeBatch(idSuffix: 238_020)
+        try queue.enqueueDurably(historical)
+        var members: [MCPeerID] = []
+        var transmitted: [Data] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: queue,
+            connectedPeersProvider: { members },
+            sendBatchDataOperation: { data, _, _ in transmitted.append(data) },
+            invitePeerOperation: { _, _, _ in },
+            exclusivePeerCaptureMode: true
+        )
+        let local = MCPeerID(displayName: "local|23800000-0000-0000-0000-000000000533")
+        let browser = MCNearbyServiceBrowser(peer: local, serviceType: "myram-verify")
+        controller.browser(browser, foundPeer: allowed, withDiscoveryInfo: nil)
+        await waitUntil { !controller.availablePeers.isEmpty }
+        let selected = try XCTUnwrap(controller.availablePeers.first)
+        XCTAssertTrue(controller.authorizeExclusivePeerForCapture(selected))
+        let before = queue.snapshot()
+
+        members = [allowed, other]
+        controller.recordBootstrapCapabilityForTesting(
+            "1", forPeerDeviceID: selected.deviceID
+        )
+        controller.beginBootstrapForTesting(to: allowed)
+        XCTAssertTrue(transmitted.isEmpty, "Mixed membership cannot send bootstrap data")
+        XCTAssertEqual(queue.snapshot(), before, "Denied bootstrap cannot release durable history")
+        XCTAssertFalse(controller.hasConnectedPeers)
+        controller.stopNetworking()
+    }
+
+    func testMYR238ExclusiveCaptureUnexpectedConnectionStopsTransport() async throws {
+        let allowed = MCPeerID(displayName: "iPhone|23800000-0000-0000-0000-000000000521")
+        let other = MCPeerID(displayName: "Other|23800000-0000-0000-0000-000000000522")
+        var members: [MCPeerID] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil, unsentBatchQueue: nil,
+            connectedPeersProvider: { members },
+            invitePeerOperation: { _, _, _ in },
+            exclusivePeerCaptureMode: true
+        )
+        let local = MCPeerID(displayName: "local|23800000-0000-0000-0000-000000000523")
+        let browser = MCNearbyServiceBrowser(peer: local, serviceType: "myram-verify")
+        controller.browser(browser, foundPeer: allowed, withDiscoveryInfo: nil)
+        await waitUntil { !controller.availablePeers.isEmpty }
+        let chosen = try XCTUnwrap(controller.availablePeers.first)
+        XCTAssertTrue(controller.authorizeExclusivePeerForCapture(chosen))
+        members = [allowed, other]
+        let session = MCSession(
+            peer: local, securityIdentity: nil, encryptionPreference: .required
+        )
+        controller.session(session, peer: other, didChange: .connected)
+        await waitUntil {
+            controller.lastErrorMessage?.contains("unexpected connection") == true
+        }
+        XCTAssertFalse(controller.hasConnectedPeers)
+        XCTAssertTrue(controller.readOnlySyncDiagnostics.contains("exclusive_capture_mode=true"))
+    }
+
     func testReplacementInvitationWaitsForPrecedingConnectionToRetire() async throws {
         let prior = MCPeerID(displayName: "phone|replacement-owner")
         let replacement = prior // The restarted iPhone reuses its archived MCPeerID.
@@ -2880,6 +3061,195 @@ final class MacSyncBatchControllerTests: XCTestCase {
         )
     }
 
+    func testMYR238DiagnosticControlLivesOutsideSelectableNoteList() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        try ProtectedRepositoryAuditPolicy.skipIfNeeded(repositoryURL: repository)
+        let source = try String(
+            contentsOf: repository.appendingPathComponent("MyRAM/Mac/MyRAMMacRootView.swift"),
+            encoding: .utf8
+        )
+        let noteListStart = try XCTUnwrap(source.range(of: "private struct MacNoteListView: View"))
+        let statusStart = try XCTUnwrap(source.range(of: "private struct MacSyncStatusView: View"))
+        let noteList = source[noteListStart.lowerBound..<statusStart.lowerBound]
+        let syncPanel = try XCTUnwrap(noteList.range(of: "MacSyncStatusView(syncController: syncController)"))
+        let selectableList = try XCTUnwrap(noteList.range(of: "List(selection: selectedBinding)"))
+        XCTAssertLessThan(syncPanel.lowerBound, selectableList.lowerBound)
+
+        let sheetStart = try XCTUnwrap(source.range(of: "private struct MacSyncReadOnlyDiagnosticsSheet: View"))
+        let nextType = try XCTUnwrap(source.range(
+            of: "enum MacMarkdownModeBindingFactory",
+            range: sheetStart.upperBound..<source.endIndex
+        ))
+        let statusView = source[statusStart.lowerBound..<sheetStart.lowerBound]
+        let sheetView = source[sheetStart.lowerBound..<nextType.lowerBound]
+        XCTAssertTrue(statusView.contains("Button(\"Sync diagnostics (read only)\")"))
+        XCTAssertTrue(statusView.contains(".sheet(isPresented: $showingSyncDiagnostics)"))
+        XCTAssertTrue(statusView.contains(".buttonStyle(.borderless)"))
+        XCTAssertFalse(statusView.contains("DisclosureGroup("))
+        XCTAssertTrue(sheetView.contains("syncController.readOnlySyncDiagnostics"))
+        XCTAssertTrue(sheetView.contains("Button(\"Copy diagnostics\")"))
+        XCTAssertFalse(sheetView.contains("flushPendingBatch("))
+        XCTAssertFalse(sheetView.contains("invite("))
+    }
+
+    func testMYR238ReadOnlyDiagnosticsRetainQuarantineAndHideRawIdentifiers() throws {
+        let controller = try makeController(unsentBatchQueueFileURL: nil)
+        let batchID = UUID(uuidString: "23800000-0000-0000-0000-000000000101")!
+        let noteID = UUID(uuidString: "23800000-0000-0000-0000-000000000102")!
+        let originID = UUID(uuidString: "23800000-0000-0000-0000-000000000103")!
+        let item = SyncConvergenceQuarantinedItem(
+            domain: .localObligation,
+            batchID: batchID,
+            affectedNoteIDs: [noteID],
+            originDeviceID: originID,
+            reason: .localEvidenceBaseHashMismatch
+        )
+        let work = SyncConvergenceQuarantinedWork(items: [item])
+        controller.markConvergenceQuarantined(work)
+        let retainedMessage = controller.lastErrorMessage
+
+        let snapshot = controller.readOnlySyncDiagnostics
+
+        XCTAssertEqual(snapshot, controller.readOnlySyncDiagnostics)
+        XCTAssertTrue(snapshot.contains("schema=myram.mac.sync-diagnostics.v1"))
+        XCTAssertTrue(snapshot.contains("quarantine_count=1"))
+        XCTAssertTrue(snapshot.contains("domain:localObligation,reason:localEvidenceBaseHashMismatch"))
+        XCTAssertTrue(snapshot.contains("affected_notes:1"))
+        XCTAssertTrue(snapshot.contains("mc_session_connected_count=0"))
+        XCTAssertTrue(snapshot.contains("ack_outbox_count=0"))
+        XCTAssertTrue(snapshot.contains("awaiting_delivery_ack_count=0"))
+        XCTAssertFalse(snapshot.contains(batchID.uuidString))
+        XCTAssertFalse(snapshot.contains(noteID.uuidString))
+        XCTAssertFalse(snapshot.contains(originID.uuidString))
+        XCTAssertEqual(controller.quarantinedWork, work)
+        XCTAssertEqual(controller.lastErrorMessage, retainedMessage)
+    }
+
+    func testMYR238PartialBaselineDiagnosticsExposeMissingHashesWithoutMutatingQueues() async throws {
+        let batch = makeBatch(idSuffix: 238_017)
+        let fixture = try makeMYR233BootstrapFixture(
+            unsentBatches: [batch],
+            localBatches: [],
+            peerDeviceID: "myr238-partial-coverage"
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let coveredNoteID = UUID(uuidString: "23800000-0000-0000-0000-000000000201")!
+        let uncoveredNoteID = UUID(uuidString: "23800000-0000-0000-0000-000000000202")!
+        for (id, body) in [(coveredNoteID, "Covered test text"), (uncoveredNoteID, "Hidden test text")] {
+            let note = Note(title: "Test note", content: body)
+            note.id = id
+            fixture.context.insert(note)
+            try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+                for: note, in: fixture.context
+            )
+        }
+        try fixture.context.save()
+
+        fixture.controller.beginBootstrapForTesting(to: fixture.peer)
+        let snapshot = try fixture.firstBootstrapSnapshot()
+        XCTAssertEqual(Set(snapshot.notes.map(\.id)), [coveredNoteID, uncoveredNoteID])
+        let before = fixture.unsentQueue.snapshot()
+
+        await fixture.controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: snapshot.id,
+                coveredBatchIDs: [],
+                coveredNoteIDs: [coveredNoteID]
+            ),
+            from: fixture.peer
+        )
+        let diagnostic = fixture.controller.readOnlySyncDiagnostics
+        XCTAssertEqual(diagnostic, fixture.controller.readOnlySyncDiagnostics)
+        XCTAssertTrue(diagnostic.contains(
+            "state:partial_note_baseline,expected_notes:2,acknowledged_notes:1,missing_notes:1"
+        ))
+        XCTAssertTrue(diagnostic.contains("cause:empty_history"))
+        XCTAssertTrue(diagnostic.contains("withheld_historical_batches:1"))
+        XCTAssertFalse(diagnostic.contains(coveredNoteID.uuidString))
+        XCTAssertFalse(diagnostic.contains(uncoveredNoteID.uuidString))
+        XCTAssertFalse(diagnostic.contains("Covered test text"))
+        XCTAssertFalse(diagnostic.contains("Hidden test text"))
+        XCTAssertEqual(fixture.unsentQueue.snapshot(), before)
+        XCTAssertFalse(fixture.controller.bootstrapStateForTesting(
+            peerDeviceID: "myr238-partial-coverage"
+        )?.ordinarySyncReady == true)
+    }
+
+    func testMYR238AbsentManifestReferenceDiagnosticsStayHashedAndPreserveQueue() async throws {
+        let historical = makeLegacyBodyBatch(idSuffix: 238_018)
+        let fixture = try makeMYR233BootstrapFixture(
+            unsentBatches: [historical],
+            localBatches: [],
+            peerDeviceID: "myr238-absent-reference"
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let presentNoteID = UUID(uuidString: "23800000-0000-0000-0000-000000000203")!
+        let absentNoteID = UUID(uuidString: "17100000-0000-0000-0000-0000000000BA")!
+        let note = Note(title: "Present test note", content: "Present test body")
+        note.id = presentNoteID
+        fixture.context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: note, in: fixture.context
+        )
+        try fixture.context.save()
+
+        fixture.controller.beginBootstrapForTesting(to: fixture.peer)
+        let snapshot = try fixture.firstBootstrapSnapshot()
+        XCTAssertEqual(Set(snapshot.notes.map(\.id)), [presentNoteID])
+        XCTAssertTrue(snapshot.historyCoverage.isEmpty)
+        let before = fixture.unsentQueue.snapshot()
+
+        await fixture.controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: snapshot.id,
+                coveredBatchIDs: [],
+                coveredNoteIDs: [presentNoteID]
+            ),
+            from: fixture.peer
+        )
+
+        let diagnostic = fixture.controller.readOnlySyncDiagnostics
+        let withheld = try XCTUnwrap(
+            diagnostic.split(separator: "\n").first {
+                $0.contains("cause:absent_from_manifest")
+            }
+        )
+        XCTAssertTrue(withheld.contains("frozen_changes:1"))
+        XCTAssertTrue(withheld.contains("referenced_notes:1"))
+        XCTAssertTrue(withheld.contains("absent_reference_count:1"))
+        XCTAssertTrue(withheld.contains("absent_note_hashes:"))
+        XCTAssertFalse(withheld.contains("absent_note_hashes:,"))
+        XCTAssertFalse(diagnostic.contains(absentNoteID.uuidString))
+        XCTAssertFalse(diagnostic.contains(presentNoteID.uuidString))
+        XCTAssertFalse(diagnostic.contains("Present test body"))
+        XCTAssertEqual(diagnostic, fixture.controller.readOnlySyncDiagnostics)
+        XCTAssertEqual(fixture.unsentQueue.snapshot(), before)
+    }
+
+    func testMYR238ReadOnlyTransportOwnershipProjectionsDoNotAcknowledgeOrRelease() {
+        let batchID = UUID(uuidString: "23800000-0000-0000-0000-000000000104")!
+        let deviceID = "diagnostic-peer"
+        var ackOutbox = SyncBatchAcknowledgementOutbox()
+        ackOutbox.enqueue(batchID, forPeerDeviceID: deviceID)
+        XCTAssertEqual(ackOutbox.pendingOwnersForDiagnostics.count, 1)
+        XCTAssertEqual(ackOutbox.pendingBatchIDs(forPeerDeviceID: deviceID), [batchID])
+
+        var deliveries = SyncBatchOutstandingDeliveryTracker()
+        let reservation = deliveries.reserve(batchID, forPeerDeviceID: deviceID)
+        XCTAssertNotNil(reservation)
+        XCTAssertEqual(deliveries.pendingOwnersForDiagnostics.count, 1)
+        XCTAssertTrue(deliveries.isAwaitingAcknowledgement(batchID, forPeerDeviceID: deviceID))
+
+        var receives = SyncBatchPendingReceiveTracker()
+        XCTAssertTrue(receives.begin(batchID))
+        XCTAssertEqual(receives.pendingBatchIDsForDiagnostics, [batchID])
+        XCTAssertTrue(receives.contains(batchID))
+    }
+
     func testProductionMacSyncFilesDoNotConstructOldDrainEngine() throws {
         let repo = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -3126,6 +3496,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: peerDeviceID)
         return MYR233MacBootstrapFixture(
             directory: directory,
+            context: container.mainContext,
             controller: controller,
             coordinator: coordinator,
             unsentQueue: unsentQueue,
@@ -3163,7 +3534,8 @@ final class MacSyncBatchControllerTests: XCTestCase {
         sendBatchDataOperation:
             ((Data, [MCPeerID], MCSessionSendDataMode) throws -> Void)? = nil,
         invitePeerOperation:
-            ((MCPeerID, Data, TimeInterval) -> Void)? = nil
+            ((MCPeerID, Data, TimeInterval) -> Void)? = nil,
+        exclusivePeerCaptureMode: Bool = false
     ) throws -> MacSyncBatchController {
         let resolvedContext: ModelContext
         if let context {
@@ -3178,6 +3550,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
             unsentBatchQueueFileURL: unsentBatchQueueFileURL,
             unsentBatchQueue: unsentBatchQueue,
             startsNetworking: false,
+            exclusivePeerCaptureMode: exclusivePeerCaptureMode,
             connectedPeersProvider: connectedPeersProvider,
             sendBatchDataOperation: sendBatchDataOperation,
             invitePeerOperation: invitePeerOperation
@@ -3335,6 +3708,7 @@ private final class MYR233MacSentMessageRecorder {
 
 private struct MYR233MacBootstrapFixture {
     let directory: URL
+    let context: ModelContext
     let controller: MacSyncBatchController
     let coordinator: MacSyncConvergenceCoordinator
     let unsentQueue: FileBackedSyncBatchQueue

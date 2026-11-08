@@ -6,6 +6,48 @@ import UIKit
 
 @MainActor
 final class NoteEditorLifecyclePersistenceTests: XCTestCase {
+    func testActivatedLegacySaveCannotDesynchronizeNoteBodyAndPersistedSequence() throws {
+        XCTAssertTrue(SyncBatchAnchoredPayloadCapability.isEnabled)
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR238-LegacySaveGuard-\(UUID().uuidString)",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        let container = try ModelContainer(for: schema, configurations: configuration)
+        let context = container.mainContext
+        let note = Note(title: "Original", content: "Original body")
+        context.insert(note)
+        try context.save()
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
+        let record = try XCTUnwrap(
+            context.fetch(FetchDescriptor<NoteSequenceStateRecord>()).first
+        )
+        let originalPayload = record.statePayloadData
+        let originalRevision = record.revision
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR238-LegacyGuard-\(UUID().uuidString)")
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: SyncConflictStore(fileURL: root.appendingPathComponent("conflicts.json")),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false
+        )
+
+        XCTAssertFalse(vm.commitNoteEdit(note, title: "Changed", content: "Unpaired body"))
+        XCTAssertEqual(note.title, "Original")
+        XCTAssertEqual(note.content, "Original body")
+        XCTAssertEqual(record.revision, originalRevision)
+        XCTAssertEqual(record.statePayloadData, originalPayload)
+        let persisted = try XCTUnwrap(
+            ModelContext(container).fetch(FetchDescriptor<Note>()).first
+        )
+        XCTAssertEqual(persisted.content, "Original body")
+        XCTAssertFalse(context.hasChanges)
+    }
+
     func testMYR233ExpiredDeletionRetainsPinnedTextAcrossStartupAndBootstrap() throws {
         let schema = Schema(MyRAMModelRegistry.models)
         let container = try ModelContainer(for: schema, configurations:
