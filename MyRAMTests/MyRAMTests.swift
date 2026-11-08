@@ -2565,10 +2565,11 @@ final class MyRAMTests: XCTestCase {
 
         let outcome = await runtime.submitLocalObligation(obligation)
 
-        guard case .blocked(let failure) = outcome else {
-            return XCTFail("Expected invalid newly submitted captured obligation to be blocked")
+        guard case .quarantined(let work) = outcome else {
+            return XCTFail("Expected invalid newly submitted captured obligation to be quarantined")
         }
-        XCTAssertEqual(failure.kind, .localEvidenceContinuityViolation)
+        XCTAssertEqual(work.items.map(\.batchID), [obligation.id])
+        XCTAssertEqual(work.items.map(\.reason), [.localEvidenceContinuityViolation])
         XCTAssertTrue(localQueue.pendingObligations.isEmpty)
         XCTAssertTrue(try context.fetch(FetchDescriptor<RetainedBodyOperation>()).isEmpty)
     }

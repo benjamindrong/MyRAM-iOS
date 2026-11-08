@@ -66,30 +66,6 @@ actor IPhoneSyncBatchAccumulator {
         appendCapturedChanges(capturedChanges, at: date)
     }
 
-    func recordAndTakeBoundaryObligation(
-        adding capturedChanges: [SyncConvergenceCapturedLocalChange],
-        affecting noteID: UUID,
-        at date: Date = .now
-    ) -> SyncConvergenceLocalObligation? {
-        recordAndTakeBoundaryObligations(
-            adding: capturedChanges,
-            affecting: noteID,
-            at: date
-        ).first
-    }
-
-    func recordAndTakeBoundaryObligations(
-        adding capturedChanges: [SyncConvergenceCapturedLocalChange],
-        affecting noteID: UUID,
-        at date: Date = .now
-    ) -> [SyncConvergenceLocalObligation] {
-        recordAndPrepareBoundaryCollection(
-            adding: capturedChanges,
-            affecting: noteID,
-            at: date
-        )?.obligations ?? []
-    }
-
     func recordAndPrepareBoundaryCollection(
         adding capturedChanges: [SyncConvergenceCapturedLocalChange],
         affecting noteID: UUID,
@@ -141,14 +117,6 @@ actor IPhoneSyncBatchAccumulator {
         }
     }
 
-    func takeReadyBatch(at date: Date = .now) -> SyncConvergenceLocalObligation? {
-        takeReadyBatches(at: date).first
-    }
-
-    func takeReadyBatches(at date: Date = .now) -> [SyncConvergenceLocalObligation] {
-        takeReadyCollection(at: date)?.obligations ?? []
-    }
-
     func takeReadyCollection(at date: Date = .now) -> SyncPreparedLocalObligationCollection? {
         prepareCollection { pendingBatch in
             date >= pendingBatch.readyAt
@@ -157,14 +125,6 @@ actor IPhoneSyncBatchAccumulator {
 
     private func readyCollectionIfAvailable(at date: Date) -> SyncPreparedLocalObligationCollection? {
         takeReadyCollection(at: date)
-    }
-
-    func takePendingBatchNow() -> SyncConvergenceLocalObligation? {
-        takePendingBatchesNow().first
-    }
-
-    func takePendingBatchesNow() -> [SyncConvergenceLocalObligation] {
-        takePendingCollectionNow()?.obligations ?? []
     }
 
     func takePendingCollectionNow() -> SyncPreparedLocalObligationCollection? {
@@ -186,16 +146,6 @@ actor IPhoneSyncBatchAccumulator {
         } ?? false
     }
 
-    func takePendingObligationIfAffecting(noteID: UUID) -> SyncConvergenceLocalObligation? {
-        takePendingObligationsIfAffecting(noteID: noteID).first
-    }
-
-    func takePendingObligationsIfAffecting(
-        noteID: UUID
-    ) -> [SyncConvergenceLocalObligation] {
-        takePendingCollectionIfAffecting(noteID: noteID)?.obligations ?? []
-    }
-
     func takePendingCollectionIfAffecting(
         noteID: UUID
     ) -> SyncPreparedLocalObligationCollection? {
@@ -204,12 +154,6 @@ actor IPhoneSyncBatchAccumulator {
                 SyncConvergenceLocalEvidenceCapture.noteID(for: $0.change) == noteID
             }
         }
-    }
-
-    private func extractPendingBatches(
-        when shouldExtract: (PendingBatch) -> Bool
-    ) -> [SyncConvergenceLocalObligation] {
-        prepareCollection(when: shouldExtract)?.obligations ?? []
     }
 
     private func prepareCollection(

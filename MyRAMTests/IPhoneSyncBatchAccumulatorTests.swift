@@ -11,7 +11,7 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
 
         await accumulator.record(firstChange, at: start)
         await accumulator.record(secondChange, at: start.addingTimeInterval(1))
-        let batch = await accumulator.takeReadyBatch(at: start.addingTimeInterval(5))
+        let batch = await accumulator.takeReadyCollection(at: start.addingTimeInterval(5))?.primary
 
         XCTAssertEqual(batch?.changes, [firstChange, secondChange])
     }
@@ -34,7 +34,7 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
         let start = Date(timeIntervalSince1970: 120)
 
         await accumulator.record(capturedChange, at: start)
-        let obligation = await accumulator.takeReadyBatch(at: start.addingTimeInterval(5))
+        let obligation = await accumulator.takeReadyCollection(at: start.addingTimeInterval(5))?.primary
 
         XCTAssertEqual(obligation?.batch.changes, [change])
         guard case .captured(let capturedChanges) = obligation?.evidence else {
@@ -126,8 +126,8 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
         XCTAssertEqual(rearmedBatchID, originalBatchID)
         XCTAssertEqual(originalReadyAt, start.addingTimeInterval(3))
         XCTAssertEqual(rearmedReadyAt, start.addingTimeInterval(5))
-        let earlyBatch = await accumulator.takeReadyBatch(at: start.addingTimeInterval(4))
-        let readyBatch = await accumulator.takeReadyBatch(at: start.addingTimeInterval(5))
+        let earlyBatch = await accumulator.takeReadyCollection(at: start.addingTimeInterval(4))?.primary
+        let readyBatch = await accumulator.takeReadyCollection(at: start.addingTimeInterval(5))?.primary
         XCTAssertNil(earlyBatch)
         XCTAssertNotNil(readyBatch)
     }
@@ -217,7 +217,7 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
 
         await accumulator.record(titleChange("First"), at: start)
         await accumulator.record(titleChange("Second"), at: start.addingTimeInterval(1))
-        let batch = await accumulator.takeReadyBatch(at: start.addingTimeInterval(5))
+        let batch = await accumulator.takeReadyCollection(at: start.addingTimeInterval(5))?.primary
 
         XCTAssertEqual(batch?.batchSequence, 42)
     }
@@ -236,7 +236,7 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
         await accumulator.record(firstChange, at: start)
         await accumulator.record(secondChange, at: start.addingTimeInterval(1))
 
-        let batch = await accumulator.takePendingBatchNow()
+        let batch = await accumulator.takePendingCollectionNow()?.primary
 
         XCTAssertEqual(batch?.id, UUID(uuidString: "00000000-0000-0000-0000-000000124107")!)
         XCTAssertEqual(batch?.createdAt, start)
@@ -271,7 +271,7 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
         let hasPendingNoteBBodyChange = await accumulator.containsPendingBodyChange(for: noteBID)
         XCTAssertTrue(hasPendingNoteABodyChange)
         XCTAssertFalse(hasPendingNoteBBodyChange)
-        let obligation = await accumulator.takePendingObligationIfAffecting(noteID: noteAID)
+        let obligation = await accumulator.takePendingCollectionIfAffecting(noteID: noteAID)?.primary
         let pendingBatchID = await accumulator.pendingBatchID()
 
         XCTAssertEqual(obligation?.changes, [noteAChange, noteBChange])
@@ -283,23 +283,33 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
         let unrelatedNoteID = UUID(uuidString: "00000000-0000-0000-0000-000000124303")!
 
         await accumulator.record(titleChange("A"), at: Date(timeIntervalSince1970: 1))
-        let obligation = await accumulator.takePendingObligationIfAffecting(noteID: unrelatedNoteID)
+        let obligation = await accumulator.takePendingCollectionIfAffecting(noteID: unrelatedNoteID)?.primary
         let pendingBatchID = await accumulator.pendingBatchID()
 
         XCTAssertNil(obligation)
         XCTAssertNotNil(pendingBatchID)
     }
 
-    func testTakePendingBatchNowClearsBatchSoReadyEmissionCannotReplayIt() async {
+    func testDurableAdmissionCommitsPreparedCaptureSoReadyEmissionCannotReplayIt() async throws {
         let accumulator = makeAccumulator()
         let start = Date(timeIntervalSince1970: 700)
 
         await accumulator.record(titleChange("First"), at: start)
-        let captured = await accumulator.takePendingBatchNow()
+        let prepared = await accumulator.takePendingCollectionNow()
+        let collection = try XCTUnwrap(prepared)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("local.json")
+        try FileBackedSyncConvergenceLocalObligationQueue(fileURL: fileURL)
+            .enqueueAtomically(collection.obligations)
+        XCTAssertEqual(FileBackedSyncConvergenceLocalObligationQueue(fileURL: fileURL).pendingObligations,
+                       collection.obligations)
+        let committed = await accumulator.commitPreparedCollection(token: collection.token)
+        XCTAssertTrue(committed)
         await accumulator.emitReadyBatches(at: start.addingTimeInterval(5))
-        let replayed = await accumulator.takeReadyBatch(at: start.addingTimeInterval(5))
+        let replayed = await accumulator.takeReadyCollection(at: start.addingTimeInterval(5))?.primary
 
-        XCTAssertNotNil(captured)
+        XCTAssertFalse(collection.obligations.isEmpty)
         XCTAssertNil(replayed)
     }
 
@@ -528,7 +538,7 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
 
         await accumulator.record(captured, at: Date(timeIntervalSince1970: 1))
         let originalBatchID = await accumulator.pendingBatchID()
-        let obligations = await accumulator.takePendingBatchesNow()
+        let obligations = await accumulator.takePendingCollectionNow()?.obligations ?? []
 
         XCTAssertEqual(obligations.count, 3)
         XCTAssertEqual(obligations.first?.id, originalBatchID)

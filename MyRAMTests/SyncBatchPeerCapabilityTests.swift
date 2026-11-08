@@ -367,6 +367,66 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         )
     }
 
+    func testMissingFormattingBaselineDoesNotBlockLaterCompatibleWorkForCapablePeer() async throws {
+        let peer = MCPeerID(displayName: "Remote|partial-formatting-peer")
+        let transport = CapabilityRecordingTransport(connectedPeers: [peer])
+        let controller = makeController(transport: transport)
+        let snapshotID = UUID()
+        let noteID = UUID()
+        controller.buildBootstrapSnapshot = {
+            try self.makeBootstrapSnapshot(id: snapshotID, noteID: noteID, body: "AB")
+        }
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "partial-formatting-peer")
+        controller.recordStructuralMarkCapabilityForTesting(
+            SyncBatchPeerCapabilityCodec.structuralMarkDiscoveryInfoValue,
+            forPeerDeviceID: "partial-formatting-peer"
+        )
+        await controller.beginBootstrapForTesting(to: peer)
+        await controller.handleBootstrapAcknowledgementForTesting(.init(
+            snapshotID: snapshotID, coveredBatchIDs: [], coveredNoteIDs: [noteID]
+        ), from: peer)
+        let sequence = try NoteSequenceStateBootstrapPersistence.prepareInitialState(noteID: noteID, body: "AB").state
+        let originID = UUID()
+        let operation = try SyncTextMarkOperation(
+            operationID: .init(deviceID: originID, localCounter: 1), logicalClock: 1,
+            key: .bold, assignment: .enabled,
+            startAnchor: sequence.operationAnchor(atVisibleUTF16Offset: 0),
+            endAnchor: sequence.operationAnchor(atVisibleUTF16Offset: 2)
+        )
+        let mark = SyncBatch(id: UUID(), originDeviceID: originID, createdAt: .now, batchSequence: 1,
+                             changes: [.noteStructuralMarksChanged(.init(
+                                noteID: noteID, operations: [operation], modifiedAt: .now
+                             ))])
+        let compatible = makeV1TitleBatch(idSuffix: 227_883, noteID: noteID)
+        try await controller.acceptLocalBatch(mark)
+        try await controller.acceptLocalBatch(compatible)
+        XCTAssertEqual(transport.batchRecipientLists, [[peer]])
+        XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches.map(\.id), [mark.id, compatible.id])
+        XCTAssertFalse(controller.isOrdinarySyncReadyForTesting(peerDeviceID: "partial-formatting-peer"))
+    }
+
+    func testFormattingAcknowledgementCannotClaimPayloadAbsentFromFrozenSnapshot() async throws {
+        let peer = MCPeerID(displayName: "Remote|missing-formatting-payload")
+        let controller = makeController(transport: CapabilityRecordingTransport(connectedPeers: [peer]))
+        let snapshotID = UUID()
+        let noteID = UUID()
+        controller.buildBootstrapSnapshot = {
+            try self.makeBootstrapSnapshot(id: snapshotID, noteID: noteID).withoutFormattingPayload()
+        }
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "missing-formatting-payload")
+        controller.recordStructuralMarkCapabilityForTesting(
+            SyncBatchPeerCapabilityCodec.structuralMarkDiscoveryInfoValue,
+            forPeerDeviceID: "missing-formatting-payload"
+        )
+        await controller.beginBootstrapForTesting(to: peer)
+        await controller.handleBootstrapAcknowledgementForTesting(.init(
+            snapshotID: snapshotID, coveredBatchIDs: [], coveredNoteIDs: [noteID],
+            coveredFormattingNoteIDs: [noteID]
+        ), from: peer)
+        XCTAssertFalse(controller.isOrdinarySyncReadyForTesting(peerDeviceID: "missing-formatting-payload"))
+        XCTAssertTrue(controller.outboundFormattingBaselineForTesting(peerDeviceID: "missing-formatting-payload").isEmpty)
+    }
+
     func testManifestedButUncoveredHistoryContinuesIncrementalReplayAfterBarrier() async throws {
         let peer = MCPeerID(displayName: "Remote|behind-peer")
         let transport = CapabilityRecordingTransport(connectedPeers: [peer])
@@ -1503,10 +1563,10 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         )
     }
 
-    private func makeBootstrapSnapshot(id: UUID, noteID: UUID) throws -> SyncPeerBootstrapSnapshot {
+    private func makeBootstrapSnapshot(id: UUID, noteID: UUID, body: String = "") throws -> SyncPeerBootstrapSnapshot {
         let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
             noteID: noteID,
-            body: ""
+            body: body
         )
         let record = prepared.makeRevisionZeroRecord()
         let timestamp = Date(timeIntervalSince1970: 2_160)
@@ -1517,7 +1577,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
                 SyncPeerBootstrapNoteSnapshot(
                     id: noteID,
                     title: "Authoritative",
-                    body: "",
+                    body: body,
                     isPinned: false,
                     createdAt: timestamp,
                     modifiedAt: timestamp,
@@ -1528,7 +1588,10 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
                     visibleUTF16Count: record.visibleUTF16Count,
                     tombstonedUTF16Count: record.tombstonedUTF16Count,
                     payloadByteCount: record.payloadByteCount,
-                    statePayloadData: record.statePayloadData
+                    statePayloadData: record.statePayloadData,
+                    markFormatVersion: record.markFormatVersion,
+                    markRevision: record.markRevision,
+                    markStatePayloadData: record.markStatePayloadData
                 )
             ]
         )

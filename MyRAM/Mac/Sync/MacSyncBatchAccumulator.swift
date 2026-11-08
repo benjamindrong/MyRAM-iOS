@@ -14,7 +14,6 @@ actor MacSyncBatchAccumulator {
     private var preparedRetryTask: Task<Void, Never>?
     private var preparedRetryAttempt = 0
     private let preparedRetryDelays: [TimeInterval]
-    private var continuations: [UUID: AsyncStream<MacSyncBatch>.Continuation] = [:]
     private var obligationContinuations: [UUID: AsyncStream<SyncPreparedLocalObligationCollection>.Continuation] = [:]
 
     init(
@@ -45,16 +44,6 @@ actor MacSyncBatchAccumulator {
         preparedRetryTask?.cancel()
     }
 
-    func readyBatches() -> AsyncStream<MacSyncBatch> {
-        let streamID = UUID()
-        let (stream, continuation) = AsyncStream.makeStream(of: MacSyncBatch.self)
-        continuations[streamID] = continuation
-        continuation.onTermination = { [weak self] _ in
-            Task { await self?.removeContinuation(id: streamID) }
-        }
-        return stream
-    }
-
     func readyLocalObligations() -> AsyncStream<SyncPreparedLocalObligationCollection> {
         let streamID = UUID()
         let (stream, continuation) = AsyncStream.makeStream(of: SyncPreparedLocalObligationCollection.self)
@@ -72,30 +61,6 @@ actor MacSyncBatchAccumulator {
     func record(_ capturedChanges: [SyncConvergenceCapturedLocalChange], at date: Date = .now) {
         guard !capturedChanges.isEmpty else { return }
         appendCapturedChanges(capturedChanges, at: date)
-    }
-
-    func recordAndTakeBoundaryObligation(
-        adding capturedChanges: [SyncConvergenceCapturedLocalChange],
-        affecting noteID: UUID,
-        at date: Date = .now
-    ) -> SyncConvergenceLocalObligation? {
-        recordAndTakeBoundaryObligations(
-            adding: capturedChanges,
-            affecting: noteID,
-            at: date
-        ).first
-    }
-
-    func recordAndTakeBoundaryObligations(
-        adding capturedChanges: [SyncConvergenceCapturedLocalChange],
-        affecting noteID: UUID,
-        at date: Date = .now
-    ) -> [SyncConvergenceLocalObligation] {
-        recordAndPrepareBoundaryCollection(
-            adding: capturedChanges,
-            affecting: noteID,
-            at: date
-        )?.obligations ?? []
     }
 
     func recordAndPrepareBoundaryCollection(
@@ -144,44 +109,13 @@ actor MacSyncBatchAccumulator {
 
     func emitReadyBatches(at date: Date = .now) {
         guard let collection = readyObligationCollectionIfAvailable(at: date) else { return }
-        for obligation in collection.obligations {
-            for continuation in continuations.values {
-                continuation.yield(obligation.batch)
-            }
-        }
         for continuation in obligationContinuations.values {
             continuation.yield(collection)
         }
     }
 
-    func takeReadyBatch(at date: Date = .now) -> MacSyncBatch? {
-        takeReadyObligations(at: date).first?.batch
-    }
-
-    func takeReadyObligations(at date: Date = .now) -> [SyncConvergenceLocalObligation] {
-        takeReadyObligationCollection(at: date)?.obligations ?? []
-    }
-
-    func takePendingObligationNow() -> SyncConvergenceLocalObligation? {
-        takePendingObligationsNow().first
-    }
-
-    func takePendingObligationsNow() -> [SyncConvergenceLocalObligation] {
-        takePendingObligationCollectionNow()?.obligations ?? []
-    }
-
     func takePendingObligationCollectionNow() -> SyncPreparedLocalObligationCollection? {
         prepareCollection { _ in true }
-    }
-
-    func takePendingObligationIfAffecting(noteID: UUID) -> SyncConvergenceLocalObligation? {
-        takePendingObligationsIfAffecting(noteID: noteID).first
-    }
-
-    func takePendingObligationsIfAffecting(
-        noteID: UUID
-    ) -> [SyncConvergenceLocalObligation] {
-        takePendingObligationCollectionIfAffecting(noteID: noteID)?.obligations ?? []
     }
 
     func takePendingObligationCollectionIfAffecting(
@@ -221,12 +155,6 @@ actor MacSyncBatchAccumulator {
         at date: Date
     ) -> SyncPreparedLocalObligationCollection? {
         takeReadyObligationCollection(at: date)
-    }
-
-    private func extractPendingBatches(
-        when shouldExtract: (PendingBatch) -> Bool
-    ) -> [SyncConvergenceLocalObligation] {
-        prepareCollection(when: shouldExtract)?.obligations ?? []
     }
 
     private func prepareCollection(
@@ -349,10 +277,6 @@ actor MacSyncBatchAccumulator {
             lastSequenceReservationIssue = issue
             return nil
         }
-    }
-
-    private func removeContinuation(id: UUID) {
-        continuations[id] = nil
     }
 
     private func removeObligationContinuation(id: UUID) {

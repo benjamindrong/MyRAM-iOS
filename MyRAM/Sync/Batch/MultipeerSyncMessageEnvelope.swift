@@ -422,7 +422,7 @@ struct SyncPeerBootstrapPendingState: Equatable, Sendable {
             formattingBatchIDs.intersection(coveredFormattingBatchIDs)
         )
         outboundAcknowledgedFormattingNoteIDs.formUnion(
-            formattingNoteIDs.intersection(snapshotNoteIDs)
+            formattingNoteIDs.intersection(formattingBaselineNoteIDs)
                 .intersection(sequenceBaselineCoveredNoteIDs)
         )
         withheldHistoricalBatchIDs = historicalBatchIDsThatRemainWithheld
@@ -446,7 +446,11 @@ struct SyncPeerBootstrapPendingState: Equatable, Sendable {
         let uncoveredSnapshotNoteIDs = snapshotNoteIDs
             .subtracting(sequenceBaselineCoveredNoteIDs)
         let batchNoteIDs = Set(batch.changes.map(\.noteID))
-        return batchNoteIDs.isDisjoint(with: uncoveredSnapshotNoteIDs)
+        guard batchNoteIDs.isDisjoint(with: uncoveredSnapshotNoteIDs) else { return false }
+        if SyncBatchDeliveryPartitionPlanner.classification(of: batch.changes) == .structuralMarkV3 {
+            return batchNoteIDs.isSubset(of: outboundAcknowledgedFormattingNoteIDs)
+        }
+        return true
     }
 
     func intentionallyWithholdsOrdinarySync(for batch: SyncBatch) -> Bool {
@@ -455,6 +459,14 @@ struct SyncPeerBootstrapPendingState: Equatable, Sendable {
 
     private var snapshotNoteIDs: Set<SyncBatchNoteID> {
         Set(snapshot.notes.map(\.id))
+    }
+
+    private var formattingBaselineNoteIDs: Set<SyncBatchNoteID> {
+        Set(snapshot.notes.compactMap { note in
+            note.markFormatVersion == NoteStructuralFormattingPersistence.schemaVersion
+                && note.markRevision != nil && note.markStatePayloadData != nil
+                ? note.id : nil
+        })
     }
 
     private var historicalBatchIDsThatRemainWithheld: Set<SyncBatchID> {
