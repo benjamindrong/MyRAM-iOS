@@ -144,6 +144,27 @@ final class MacSyncIncomingLocalBoundaryTests: XCTestCase {
         XCTAssertEqual(visitedNoteIDs, [laterID])
     }
 
+    func testInvalidCapturedPartitionCannotAdvanceIncomingBodyBoundary() async {
+        let noteID = Self.noteID(81)
+        var attemptedLaterNote = false
+        let preparer = MacIncomingBoundaryPreparer(
+            selectedNoteID: { nil },
+            hasUnsavedChanges: { false },
+            saveSelectedNoteForBoundary: { _ in .ready },
+            takePendingObligations: { candidate in
+                if candidate != noteID { attemptedLaterNote = true }
+                throw SyncBatchDeliveryPartitionPlanner.PartitionError.invalidCompatibleRepresentation
+            }
+        )
+
+        let result = await preparer.prepare(affecting: [noteID, Self.noteID(82)])
+        guard case .failed(.captureFailed(let capturedNoteID)) = result else {
+            return XCTFail("A partition failure must block remote body mutation")
+        }
+        XCTAssertEqual(capturedNoteID, noteID)
+        XCTAssertFalse(attemptedLaterNote)
+    }
+
     func testMultiNoteBoundaryReturnsReadyOnlyAfterEveryAffectedNoteIsChecked() async {
         let firstID = Self.noteID(12)
         let selectedID = Self.noteID(13)

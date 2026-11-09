@@ -401,8 +401,13 @@ final class NotesViewModel: ObservableObject {
         )
         syncBatchReadyTask = Task { [weak self, syncBatchAccumulator] in
             let stream = await syncBatchAccumulator.readyBatches()
-            for await collection in stream {
-                await self?.handleReadyLocalObligations(collection)
+            for await result in stream {
+                switch result {
+                case .success(let collection):
+                    await self?.handleReadyLocalObligations(collection)
+                case .failure:
+                    self?.syncBatchErrorMessage = Self.capturePreparationFailureMessage
+                }
             }
         }
         syncConflicts = syncConflictService.activeConflicts()
@@ -3143,6 +3148,9 @@ final class NotesViewModel: ObservableObject {
         case terminal
     }
 
+    private static let capturePreparationFailureMessage =
+        "Nearby sync cannot prepare pending local changes. Local edits remain retained; sync recovery is blocked."
+
     private func durablyAdmitPreparedLocalCollection(
         _ collection: SyncPreparedLocalObligationCollection
     ) async -> SyncConvergenceLocalObligationCollectionAdmissionResult {
@@ -3180,7 +3188,14 @@ final class NotesViewModel: ObservableObject {
                 .sorted { $0.key < $1.key }
                 .map(\.value)
             for task in tasks { await task.value }
-            if let collection = await syncBatchAccumulator.takePendingCollectionNow() {
+            let pending: SyncPreparedLocalObligationCollection?
+            do {
+                pending = try await syncBatchAccumulator.takePendingCollectionNow()
+            } catch {
+                syncBatchErrorMessage = Self.capturePreparationFailureMessage
+                throw error
+            }
+            if let collection = pending {
                 switch await durablyAdmitPreparedLocalCollection(collection) {
                 case .admitted:
                     capturedBatchIDs.formUnion(collection.batchIDs)
@@ -3208,7 +3223,17 @@ final class NotesViewModel: ObservableObject {
             await task.value
         }
 
-        if let collection = await syncBatchAccumulator.takePendingCollectionNow() {
+        let pending: SyncPreparedLocalObligationCollection?
+        do {
+            pending = try await syncBatchAccumulator.takePendingCollectionNow()
+        } catch {
+            syncBatchErrorMessage = Self.capturePreparationFailureMessage
+            return .terminal(.blocked(SyncBatchDrainFailure(
+                batchID: await syncBatchAccumulator.pendingBatchID(),
+                kind: .invalidMergePlan
+            )))
+        }
+        if let collection = pending {
             switch await durablyAdmitPreparedLocalCollection(collection) {
             case .admitted:
                 break
@@ -3235,8 +3260,18 @@ final class NotesViewModel: ObservableObject {
             break
         }
 
+        let remaining: SyncPreparedLocalObligationCollection?
+        do {
+            remaining = try await syncBatchAccumulator.takePendingCollectionNow()
+        } catch {
+            syncBatchErrorMessage = Self.capturePreparationFailureMessage
+            return .terminal(.blocked(SyncBatchDrainFailure(
+                batchID: await syncBatchAccumulator.pendingBatchID(),
+                kind: .invalidMergePlan
+            )))
+        }
         guard captureBoundary == nextSyncBatchCaptureID,
-              await syncBatchAccumulator.takePendingCollectionNow() == nil else {
+              remaining == nil else {
             return .retryablePending
         }
         return .ready
@@ -4258,10 +4293,18 @@ extension NotesViewModel: SyncConvergenceIncomingLocalBoundaryAdapter {
 
         for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             guard await syncBatchAccumulator.containsPendingBodyChange(for: noteID) else { continue }
-            guard let collection = await syncBatchAccumulator.takePendingCollectionIfAffecting(
-                noteID: noteID
-            ) else {
-                return nil
+            let collection: SyncPreparedLocalObligationCollection
+            do {
+                guard let prepared = try await syncBatchAccumulator.takePendingCollectionIfAffecting(
+                    noteID: noteID
+                ) else { return nil }
+                collection = prepared
+            } catch {
+                syncBatchErrorMessage = Self.capturePreparationFailureMessage
+                return .blocked(SyncBatchDrainFailure(
+                    batchID: await syncBatchAccumulator.pendingBatchID(),
+                    kind: .invalidMergePlan
+                ))
             }
             switch await durablyAdmitPreparedLocalCollection(collection) {
             case .admitted:
@@ -4301,10 +4344,20 @@ extension NotesViewModel: SyncConvergenceIncomingLocalBoundaryAdapter {
     ) async -> SyncConvergenceIncomingLocalBoundaryPreparation {
         for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             guard await syncBatchAccumulator.containsPendingBodyChange(for: noteID) else { continue }
-            guard let collection = await syncBatchAccumulator.takePendingCollectionIfAffecting(
-                noteID: noteID
-            ) else {
-                return .failed(.boundaryInvariantViolation(noteID: noteID))
+            let collection: SyncPreparedLocalObligationCollection
+            do {
+                guard let prepared = try await syncBatchAccumulator.takePendingCollectionIfAffecting(
+                    noteID: noteID
+                ) else {
+                    return .failed(.boundaryInvariantViolation(noteID: noteID))
+                }
+                collection = prepared
+            } catch {
+                syncBatchErrorMessage = Self.capturePreparationFailureMessage
+                return .cannotProceed(.blocked(SyncBatchDrainFailure(
+                    batchID: await syncBatchAccumulator.pendingBatchID(),
+                    kind: .invalidMergePlan
+                )))
             }
             switch await durablyAdmitPreparedLocalCollection(collection) {
             case .admitted:

@@ -357,7 +357,7 @@ struct MacIncomingBoundaryPreparer {
     let selectedNoteID: () -> UUID?
     let hasUnsavedChanges: () -> Bool
     let saveSelectedNoteForBoundary: (UUID) async -> MacIncomingBoundaryResult
-    let takePendingObligations: (UUID) async -> SyncPreparedLocalObligationCollection?
+    let takePendingObligations: (UUID) async throws -> SyncPreparedLocalObligationCollection?
 
     func prepare(affecting noteIDs: Set<UUID>) async -> MacIncomingBoundaryResult {
         for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
@@ -372,8 +372,12 @@ struct MacIncomingBoundaryPreparer {
                 }
             }
 
-            if let collection = await takePendingObligations(noteID) {
-                return .localObligations(collection)
+            do {
+                if let collection = try await takePendingObligations(noteID) {
+                    return .localObligations(collection)
+                }
+            } catch {
+                return .failed(.captureFailed(noteID: noteID))
             }
         }
         return .ready

@@ -206,8 +206,13 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         guard applicationSyncEnabled else { return }
         readyBatchTask = Task { [weak self, accumulator] in
             let stream = await accumulator.readyLocalObligations()
-            for await collection in stream {
-                await self?.handlePreparedLocalObligations(collection)
+            for await result in stream {
+                switch result {
+                case .success(let collection):
+                    await self?.handlePreparedLocalObligations(collection)
+                case .failure:
+                    self?.lastErrorMessage = Self.capturePreparationFailureMessage
+                }
             }
         }
     }
@@ -656,25 +661,35 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         adding capturedChanges: [SyncConvergenceCapturedLocalChange],
         affecting noteID: UUID,
         at date: Date = .now
-    ) async -> SyncPreparedLocalObligationCollection? {
+    ) async throws -> SyncPreparedLocalObligationCollection? {
         guard applicationSyncEnabled else { return nil }
         if !capturedChanges.isEmpty {
             localCaptureGeneration &+= 1
         }
-        let collection = await accumulator.recordAndPrepareBoundaryCollection(
-            adding: capturedChanges,
-            affecting: noteID,
-            at: date
-        )
-        await updateSequenceReservationIssue()
-        return collection
+        do {
+            let collection = try await accumulator.recordAndPrepareBoundaryCollection(
+                adding: capturedChanges,
+                affecting: noteID,
+                at: date
+            )
+            await updateSequenceReservationIssue()
+            return collection
+        } catch {
+            lastErrorMessage = Self.capturePreparationFailureMessage
+            throw error
+        }
     }
 
     func takePendingLocalObligationsIfAffecting(
         noteID: UUID
-    ) async -> SyncPreparedLocalObligationCollection? {
+    ) async throws -> SyncPreparedLocalObligationCollection? {
         guard applicationSyncEnabled else { return nil }
-        return await accumulator.takePendingObligationCollectionIfAffecting(noteID: noteID)
+        do {
+            return try await accumulator.takePendingObligationCollectionIfAffecting(noteID: noteID)
+        } catch {
+            lastErrorMessage = Self.capturePreparationFailureMessage
+            throw error
+        }
     }
 
     func admitPreparedLocalObligations(
@@ -716,6 +731,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
         return result
     }
+
+    private static let capturePreparationFailureMessage =
+        "Nearby sync cannot prepare pending local changes. Local edits remain retained; bootstrap is blocked."
 
     private func handlePreparedLocalObligations(
         _ collection: SyncPreparedLocalObligationCollection
@@ -1173,7 +1191,17 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
         let captureGeneration = localCaptureGeneration
 
-        if let collection = await accumulator.takePendingObligationCollectionNow() {
+        let pending: SyncPreparedLocalObligationCollection?
+        do {
+            pending = try await accumulator.takePendingObligationCollectionNow()
+        } catch {
+            lastErrorMessage = Self.capturePreparationFailureMessage
+            return .terminal(.blocked(SyncBatchDrainFailure(
+                batchID: await accumulator.pendingBatchID(),
+                kind: .invalidMergePlan
+            )))
+        }
+        if let collection = pending {
             switch await admitPreparedLocalObligations(collection) {
             case .admitted:
                 break
@@ -1198,8 +1226,18 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             break
         }
 
+        let remaining: SyncPreparedLocalObligationCollection?
+        do {
+            remaining = try await accumulator.takePendingObligationCollectionNow()
+        } catch {
+            lastErrorMessage = Self.capturePreparationFailureMessage
+            return .terminal(.blocked(SyncBatchDrainFailure(
+                batchID: await accumulator.pendingBatchID(),
+                kind: .invalidMergePlan
+            )))
+        }
         guard captureGeneration == localCaptureGeneration,
-              await accumulator.takePendingObligationCollectionNow() == nil else {
+              remaining == nil else {
             return .retryablePending
         }
         return .ready

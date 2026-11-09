@@ -14,7 +14,7 @@ actor MacSyncBatchAccumulator {
     private var preparedRetryTask: Task<Void, Never>?
     private var preparedRetryAttempt = 0
     private let preparedRetryDelays: [TimeInterval]
-    private var obligationContinuations: [UUID: AsyncStream<SyncPreparedLocalObligationCollection>.Continuation] = [:]
+    private var obligationContinuations: [UUID: AsyncStream<Result<SyncPreparedLocalObligationCollection, Error>>.Continuation] = [:]
 
     init(
         originDeviceID: MacSyncDeviceID,
@@ -44,9 +44,9 @@ actor MacSyncBatchAccumulator {
         preparedRetryTask?.cancel()
     }
 
-    func readyLocalObligations() -> AsyncStream<SyncPreparedLocalObligationCollection> {
+    func readyLocalObligations() -> AsyncStream<Result<SyncPreparedLocalObligationCollection, Error>> {
         let streamID = UUID()
-        let (stream, continuation) = AsyncStream.makeStream(of: SyncPreparedLocalObligationCollection.self)
+        let (stream, continuation) = AsyncStream.makeStream(of: Result<SyncPreparedLocalObligationCollection, Error>.self)
         obligationContinuations[streamID] = continuation
         continuation.onTermination = { [weak self] _ in
             Task { await self?.removeObligationContinuation(id: streamID) }
@@ -67,9 +67,9 @@ actor MacSyncBatchAccumulator {
         adding capturedChanges: [SyncConvergenceCapturedLocalChange],
         affecting noteID: UUID,
         at date: Date = .now
-    ) -> SyncPreparedLocalObligationCollection? {
+    ) throws -> SyncPreparedLocalObligationCollection? {
         appendCapturedChanges(capturedChanges, at: date)
-        return prepareCollection { pendingBatch in
+        return try prepareCollection { pendingBatch in
             pendingBatch.capturedChanges.contains { captured in
                 guard SyncConvergenceLocalEvidenceCapture.isBodyTextOperation(captured.change) else { return false }
                 return SyncConvergenceLocalEvidenceCapture.noteID(for: captured.change) == noteID
@@ -108,20 +108,26 @@ actor MacSyncBatchAccumulator {
     }
 
     func emitReadyBatches(at date: Date = .now) {
-        guard let collection = readyObligationCollectionIfAvailable(at: date) else { return }
+        let result: Result<SyncPreparedLocalObligationCollection, Error>
+        do {
+            guard let collection = try readyObligationCollectionIfAvailable(at: date) else { return }
+            result = .success(collection)
+        } catch {
+            result = .failure(error)
+        }
         for continuation in obligationContinuations.values {
-            continuation.yield(collection)
+            continuation.yield(result)
         }
     }
 
-    func takePendingObligationCollectionNow() -> SyncPreparedLocalObligationCollection? {
-        prepareCollection { _ in true }
+    func takePendingObligationCollectionNow() throws -> SyncPreparedLocalObligationCollection? {
+        try prepareCollection { _ in true }
     }
 
     func takePendingObligationCollectionIfAffecting(
         noteID: UUID
-    ) -> SyncPreparedLocalObligationCollection? {
-        prepareCollection { pendingBatch in
+    ) throws -> SyncPreparedLocalObligationCollection? {
+        try prepareCollection { pendingBatch in
             pendingBatch.capturedChanges.contains {
                 SyncConvergenceLocalEvidenceCapture.noteID(for: $0.change) == noteID
             }
@@ -145,28 +151,27 @@ actor MacSyncBatchAccumulator {
 
     func takeReadyObligationCollection(
         at date: Date = .now
-    ) -> SyncPreparedLocalObligationCollection? {
-        prepareCollection { pendingBatch in
+    ) throws -> SyncPreparedLocalObligationCollection? {
+        try prepareCollection { pendingBatch in
             date >= pendingBatch.readyAt
         }
     }
 
     private func readyObligationCollectionIfAvailable(
         at date: Date
-    ) -> SyncPreparedLocalObligationCollection? {
-        takeReadyObligationCollection(at: date)
+    ) throws -> SyncPreparedLocalObligationCollection? {
+        try takeReadyObligationCollection(at: date)
     }
 
     private func prepareCollection(
         when shouldPrepare: (PendingBatch) -> Bool
-    ) -> SyncPreparedLocalObligationCollection? {
+    ) throws -> SyncPreparedLocalObligationCollection? {
         if let preparedCollection {
             return preparedCollection
         }
-        guard let pendingBatch, shouldPrepare(pendingBatch),
-              let collection = try? makePreparedCollection(for: pendingBatch) else {
-            return nil
-        }
+        guard let pendingBatch, shouldPrepare(pendingBatch) else { return nil }
+        // Never turn an invalid captured batch into 'no pending work'.
+        let collection = try makePreparedCollection(for: pendingBatch)
         readinessTask?.cancel()
         readinessTask = nil
         self.pendingBatch = nil
@@ -177,10 +182,13 @@ actor MacSyncBatchAccumulator {
 
     private func makePreparedCollection(
         for pendingBatch: PendingBatch
-    ) throws -> SyncPreparedLocalObligationCollection? {
-        SyncPreparedLocalObligationCollection(
+    ) throws -> SyncPreparedLocalObligationCollection {
+        guard let collection = SyncPreparedLocalObligationCollection(
             try obligations(for: pendingBatch)
-        )
+        ) else {
+            throw SyncBatchDeliveryPartitionPlanner.PartitionError.invalidCompatibleRepresentation
+        }
+        return collection
     }
 
     func commitPreparedCollection(token: UUID) -> Bool {
@@ -230,7 +238,7 @@ actor MacSyncBatchAccumulator {
             return
         }
         for continuation in obligationContinuations.values {
-            continuation.yield(collection)
+            continuation.yield(.success(collection))
         }
     }
 
