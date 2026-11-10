@@ -145,7 +145,7 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
         let url = try makeMYR223ImportFile()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
 
-        let imported = try viewModel.importNotes(from: url)
+        let imported = try await viewModel.importNotes(from: url)
 
         try await waitUntil {
             controller.acceptedBatches
@@ -238,13 +238,13 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
         }
     }
 
-    func testImportCreatesOneRevisionZeroStatePerImportedNote() throws {
+    func testImportCreatesOneRevisionZeroStatePerImportedNote() async throws {
         let container = try makeContainer()
         let viewModel = makeViewModel(context: container.mainContext)
         let url = try makeImportFile(bodies: ["First", "Second \u{1F680}"])
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
 
-        let imported = try viewModel.importNotes(from: url)
+        let imported = try await viewModel.importNotes(from: url)
 
         XCTAssertEqual(imported.count, 2)
         for note in imported {
@@ -252,7 +252,7 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
         }
     }
 
-    func testImportFailureRollsBackAllImportedModelsAndStateRows() throws {
+    func testImportFailureRollsBackAllImportedModelsAndStateRows() async throws {
         let container = try makeContainer()
         let controller = MYR223SyncControllerSpy()
         let viewModel = makeViewModel(
@@ -263,7 +263,12 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
         let url = try makeImportFile(bodies: ["First", "Second"])
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
 
-        XCTAssertThrowsError(try viewModel.importNotes(from: url))
+        do {
+            _ = try await viewModel.importNotes(from: url)
+            XCTFail("An injected save failure must prevent import")
+        } catch MYR170PathTestError.injected {
+            // Expected: neither note authority nor publication was committed.
+        }
         XCTAssertTrue(try fetchNotes(in: container).isEmpty)
         XCTAssertTrue(try fetchStateRecords(in: container).isEmpty)
         XCTAssertTrue(controller.legacyChanges.isEmpty)
