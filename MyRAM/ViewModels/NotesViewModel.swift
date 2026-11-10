@@ -3679,7 +3679,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     @discardableResult
-    func importNotes(from exportURL: URL) throws -> [Note] {
+    func importNotes(from exportURL: URL) async throws -> [Note] {
         let didStartAccessing = exportURL.startAccessingSecurityScopedResource()
         defer {
             if didStartAccessing {
@@ -3695,22 +3695,79 @@ final class NotesViewModel: ObservableObject {
             throw NoteImportError.invalidFile
         }
 
-        guard manifest.format == "myram-note-export", manifest.version == 1 else {
+        guard manifest.format == "myram-note-export",
+              manifest.version == 1 || manifest.version == 2 else {
             throw NoteImportError.unsupportedFormat
+        }
+
+        // Reserve fresh detached mark identities before staging any SwiftData
+        // models. No await is permitted between insertion and the single save.
+        var preparedImports: [PreparedDetachedImport] = []
+        for record in manifest.notes where record.deletedAt == nil {
+            let note = Note(title: record.title, content: record.content)
+            let sequence = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+                noteID: note.id,
+                body: note.content
+            )
+            let formatting: PreparedStructuralFormattingEdit
+            if manifest.version == 2 {
+                guard let runs = record.formattingRuns else {
+                    throw NoteImportError.invalidFile
+                }
+                let projection = try Self.detachedFormattingProjection(
+                    runs: runs,
+                    body: record.content
+                )
+                formatting = try await NoteStructuralFormattingEditPlanner.prepare(
+                    sequence: sequence.state,
+                    currentMarkState: .empty,
+                    desiredProjection: projection,
+                    operationIDReserver: MyRAMSyncOperationIDAllocator.shared
+                )
+            } else {
+                // V1 is plain text; a mislabeled mark payload cannot be discarded.
+                guard record.formattingRuns == nil else {
+                    throw NoteImportError.invalidFile
+                }
+                formatting = PreparedStructuralFormattingEdit(
+                    finalMarkState: .empty,
+                    emittedOperations: []
+                )
+            }
+            preparedImports.append(PreparedDetachedImport(
+                record: record,
+                note: note,
+                sequence: sequence,
+                marks: formatting.finalMarkState,
+                operations: formatting.emittedOperations
+            ))
+        }
+        guard !preparedImports.isEmpty else {
+            throw NoteImportError.noImportableNotes
         }
 
         let importedNotes: [Note]
         do {
-            importedNotes = try manifest.notes.compactMap { try importNote(from: $0) }
-            guard !importedNotes.isEmpty else {
-                throw NoteImportError.noImportableNotes
+            importedNotes = try preparedImports.map {
+                try importNote(
+                    from: $0.record,
+                    note: $0.note,
+                    sequence: $0.sequence,
+                    marks: $0.marks
+                )
             }
             try saveContext()
         } catch {
             context.rollback()
             throw error
         }
-        publishImportedGraph(importedNotes)
+        let markOperations = Dictionary(uniqueKeysWithValues:
+            preparedImports.map { ($0.note.id, $0.operations) }
+        )
+        publishImportedGraph(
+            importedNotes,
+            markOperationsByNoteID: markOperations
+        )
         refreshCurrentFolderContent()
         selectNote(importedNotes[0])
         return importedNotes
@@ -3873,22 +3930,19 @@ final class NotesViewModel: ObservableObject {
             }
     }
 
-    private func importNote(from noteRecord: ExportManifestNote) throws -> Note? {
-        if noteRecord.deletedAt != nil {
-            return nil
-        }
-
+    private func importNote(
+        from noteRecord: ExportManifestNote,
+        note: Note,
+        sequence: PreparedInitialNoteSequenceState,
+        marks: SyncTextMarkState
+    ) throws -> Note {
         let folder = folder(forPath: noteRecord.folderPath)
-        let note = Note(title: noteRecord.title, content: noteRecord.content)
         note.createdAt = Self.date(from: noteRecord.createdAt) ?? .now
         note.modifiedAt = Self.date(from: noteRecord.modifiedAt) ?? .now
-        let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
-            noteID: note.id,
-            body: note.content
-        )
         _ = try NoteSequenceStateFullBodyIntegration.insertNewNote(
             note,
-            preparedState: prepared,
+            preparedState: sequence,
+            initialMarkState: marks,
             in: context
         )
         note.folder = folder
@@ -3925,7 +3979,10 @@ final class NotesViewModel: ObservableObject {
         return note
     }
 
-    private func publishImportedGraph(_ importedNotes: [Note]) {
+    private func publishImportedGraph(
+        _ importedNotes: [Note],
+        markOperationsByNoteID: [UUID: [SyncTextMarkOperation]]
+    ) {
         var publishedFolderIDs: Set<UUID> = []
 
         for note in importedNotes {
@@ -3942,10 +3999,26 @@ final class NotesViewModel: ObservableObject {
         }
 
         for note in importedNotes {
-            recordSyncBatchChange(SyncConvergenceCapturedLocalChange(
+            // One capture boundary owns creation and dependent formatting.
+            // The Slice 2 planner assigns separate durable V1/V2 and V3 IDs.
+            var capturedChanges = [SyncConvergenceCapturedLocalChange(
                 change: IPhoneSyncBatchCaptureHook.noteCreated(note),
                 evidence: nil
-            ))
+            )]
+            if let operations = markOperationsByNoteID[note.id],
+               !operations.isEmpty {
+                capturedChanges.append(SyncConvergenceCapturedLocalChange(
+                    change: .noteStructuralMarksChanged(
+                        SyncBatchNoteStructuralMarksChangedChange(
+                            noteID: note.id,
+                            operations: operations,
+                            modifiedAt: note.modifiedAt
+                        )
+                    ),
+                    evidence: nil
+                ))
+            }
+            recordSyncBatchChanges(capturedChanges)
             for pinnedText in note.pinnedThoughts {
                 recordPinnedThoughtSyncChange(pinnedText)
             }
