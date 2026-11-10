@@ -3955,6 +3955,75 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
+    private func detachedFormattingRuns(
+        for note: Note
+    ) throws -> [ExportManifestFormattingRun] {
+        let noteID = note.id
+        var descriptor = FetchDescriptor<NoteSequenceStateRecord>(
+            predicate: #Predicate { $0.noteID == noteID }
+        )
+        descriptor.fetchLimit = 2
+        let records = try context.fetch(descriptor)
+        guard records.count == 1,
+              let record = records.first,
+              record.markFormatVersion == NoteStructuralFormattingPersistence.schemaVersion else {
+            throw NoteExportError.structuralFormattingUnavailable
+        }
+        do {
+            let sequence = try NoteSequenceStatePersistenceCodec
+                .decodeStructurallyValidatedState(record: record, noteID: note.id)
+            guard NoteSequenceStateExactText.matches(sequence.visibleText, note.content) else {
+                throw NoteExportError.structuralFormattingUnavailable
+            }
+            let marks = try NoteStructuralFormattingPersistence.decode(
+                record: record,
+                pairedWith: sequence
+            )
+            return try marks.visibleProjection(in: sequence).map { span in
+                ExportManifestFormattingRun(
+                    startUTF16Offset: span.startUTF16Offset,
+                    utf16Length: span.utf16Length,
+                    assignments: Dictionary(uniqueKeysWithValues:
+                        SyncTextMarkKey.allCases.map {
+                            ($0.rawValue, span.assignments[$0] ?? .clear)
+                        }
+                    )
+                )
+            }
+        } catch {
+            throw NoteExportError.structuralFormattingUnavailable
+        }
+    }
+
+    private static func detachedFormattingProjection(
+        runs: [ExportManifestFormattingRun],
+        body: String
+    ) throws -> NoteStructuralFormattingProjection {
+        let knownKeys = Set(SyncTextMarkKey.allCases.map(\.rawValue))
+        var projectedRuns: [NoteStructuralFormattingProjectionRun] = []
+        projectedRuns.reserveCapacity(runs.count)
+        for run in runs {
+            guard Set(run.assignments.keys) == knownKeys else {
+                throw NoteImportError.invalidFile
+            }
+            let assignments = Dictionary(uniqueKeysWithValues:
+                run.assignments.compactMap { key, value -> (SyncTextMarkKey, SyncTextMarkAssignment)? in
+                    guard let key = SyncTextMarkKey(rawValue: key) else { return nil }
+                    return (key, value)
+                }
+            )
+            projectedRuns.append(NoteStructuralFormattingProjectionRun(
+                startUTF16Offset: run.startUTF16Offset,
+                utf16Length: run.utf16Length,
+                assignments: assignments
+            ))
+        }
+        return NoteStructuralFormattingProjection(
+            plainText: body,
+            runs: projectedRuns
+        )
+    }
+
     private func folder(forPath path: [String]) -> Folder? {
         var parent: Folder?
 
