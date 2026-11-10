@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import AppKit
 import SwiftData
 import XCTest
@@ -5,6 +6,47 @@ import XCTest
 
 @MainActor
 final class MacNotePersistenceAdapterTests: XCTestCase {
+    func testMYR227MacCanonicalSixMarkAdapterRoundTripPreservesUnicodeAndAssignments() throws {
+        let body = "A🚀e\u{301}"
+        let rgba = SyncTextMarkRGBAColor(red: 0, green: 0, blue: 255, alpha: 255)
+        let assignments: [SyncTextMarkKey: SyncTextMarkAssignment] = [
+            .bold: .enabled,
+            .italic: .enabled,
+            .underline: .enabled,
+            .strikethrough: .enabled,
+            .fontSize: .fontSizeMilliPoints(25_000),
+            .textColor: .textColor(rgba)
+        ]
+        let rangeLength = (body as NSString).length
+        let source = NoteStructuralFormattingProjection(
+            plainText: body,
+            runs: [NoteStructuralFormattingProjectionRun(
+                startUTF16Offset: 0,
+                utf16Length: rangeLength,
+                assignments: assignments
+            )]
+        )
+        let baseFont = NSFont.systemFont(ofSize: 24)
+        let rendered = MacStructuralFormattingAdapter.render(
+            projection: source,
+            baseBodyFont: baseFont
+        )
+        let reprojected = MacStructuralFormattingAdapter.project(
+            rendered,
+            baseBodyFont: baseFont
+        )
+
+        XCTAssertEqual(rendered.string, body)
+        XCTAssertEqual(rendered.length, rangeLength)
+        XCTAssertEqual(reprojected.plainText, body)
+        let span = try XCTUnwrap(reprojected.runs.only)
+        XCTAssertEqual(span.startUTF16Offset, 0)
+        XCTAssertEqual(span.utf16Length, rangeLength)
+        for key in SyncTextMarkKey.allCases {
+            XCTAssertEqual(span.assignments[key], assignments[key], "Lost \(key)")
+        }
+    }
+
     func testActivatedMacPersistenceRejectsLegacyPreparedEditWithoutChangingSequence() async throws {
         XCTAssertTrue(SyncBatchAnchoredPayloadCapability.isEnabled)
         let container = try makeInMemoryContainer()
