@@ -3665,7 +3665,17 @@ final class NotesViewModel: ObservableObject {
         }
 
         let exportTime = nowProvider()
-        return try Self.writeStructuredExportJSON(notes: nonDeletedNotes, exportedAt: exportTime)
+        // Export committed structural authority, never potentially stale RTF.
+        let formattingByNoteID = try Dictionary(uniqueKeysWithValues:
+            nonDeletedNotes.map { note in
+                (note.id, try detachedFormattingRuns(for: note))
+            }
+        )
+        return try Self.writeStructuredExportJSON(
+            notes: nonDeletedNotes,
+            exportedAt: exportTime,
+            formattingByNoteID: formattingByNoteID
+        )
     }
 
     @discardableResult
@@ -3756,7 +3766,8 @@ final class NotesViewModel: ObservableObject {
 
     nonisolated private static func writeStructuredExportJSON(
         notes: [Note],
-        exportedAt: Date
+        exportedAt: Date,
+        formattingByNoteID: [UUID: [ExportManifestFormattingRun]]
     ) throws -> [URL] {
         let exportRoot = try makeExportDirectory()
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -3812,14 +3823,15 @@ final class NotesViewModel: ObservableObject {
                     modifiedAt: iso8601Timestamp(from: note.modifiedAt),
                     deletedAt: note.deletedAt.map(iso8601Timestamp(from:)),
                     folderPath: folderPathSegments(for: note.folder),
-                    attachments: manifestAttachments
+                    attachments: manifestAttachments,
+                    formattingRuns: formattingByNoteID[note.id]
                 )
             )
         }
 
         let manifest = ExportManifest(
             format: "myram-note-export",
-            version: 1,
+            version: 2,
             exportedAt: iso8601Timestamp(from: exportedAt),
             notes: manifestNotes
         )
@@ -4502,6 +4514,22 @@ private struct ExportManifestNote: Codable {
     let deletedAt: String?
     let folderPath: [String]
     let attachments: [ExportManifestAttachment]
+    // V2 carries canonical visible marks, never source-device element IDs.
+    let formattingRuns: [ExportManifestFormattingRun]?
+}
+
+private struct ExportManifestFormattingRun: Codable, Sendable {
+    let startUTF16Offset: Int
+    let utf16Length: Int
+    let assignments: [String: SyncTextMarkAssignment]
+}
+
+private struct PreparedDetachedImport {
+    let record: ExportManifestNote
+    let note: Note
+    let sequence: PreparedInitialNoteSequenceState
+    let marks: SyncTextMarkState
+    let operations: [SyncTextMarkOperation]
 }
 
 private struct ExportManifestPinnedThought: Codable {
@@ -4523,6 +4551,7 @@ private struct ExportManifestAttachment: Codable {
 
 enum NoteExportError: LocalizedError {
     case noNotesSelected
+    case structuralFormattingUnavailable
     case failedToEncodeText
     case failedToEncodeManifest
     case failedToCreateArchive
@@ -4531,6 +4560,8 @@ enum NoteExportError: LocalizedError {
         switch self {
         case .noNotesSelected:
             "No notes were selected to export."
+        case .structuralFormattingUnavailable:
+            "The note's structural formatting is unavailable; export was stopped to prevent formatting loss."
         case .failedToEncodeText:
             "The note export could not be encoded as UTF-8."
         case .failedToEncodeManifest:
