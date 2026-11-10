@@ -514,7 +514,12 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         XCTAssertTrue(prepared.hasAnyAuthoritativeMutation)
         XCTAssertFalse(prepared.hasBodyMutation)
         XCTAssertTrue(prepared.hasFormattingMutation)
-        XCTAssertTrue(prepared.capturedChanges.isEmpty)
+        XCTAssertEqual(prepared.capturedChanges.count, 1)
+        guard case .noteStructuralMarksChanged(let capturedMarks) = prepared.capturedChanges.first?.change else {
+            return XCTFail("Formatting-only edits must publish their own structural-mark obligation")
+        }
+        XCTAssertEqual(capturedMarks.noteID, note.id)
+        XCTAssertFalse(capturedMarks.operations.isEmpty)
 
         try adapter.persistPreparedLocalNoteEdit(prepared)
 

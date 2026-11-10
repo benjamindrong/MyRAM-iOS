@@ -14,14 +14,14 @@ final class PendingSyncRecoveryCoordinator {
         case journalWriteFailed
         case replacementFailed
         case rollbackFailed
+        case capturedBatchesNotDurable([SyncBatchID])
         case pendingLocalEditsNotDurable
-        case capturedBatchNotDurable(SyncBatchID)
     }
 
     private let queueAdmin: PendingSyncQueueAdministrating
     private let localQueueSnapshot: () -> FileBackedSyncConvergenceLocalObligationQueueSnapshot
     private let replaceLocalObligations: ([SyncConvergenceLocalObligation]) async throws -> Void
-    private let flushReadyLocalBatch: () async throws -> SyncBatchID?
+    private let flushReadyLocalBatches: () async throws -> Set<SyncBatchID>
     private let journalStore: PendingSyncRecoveryJournalStore
     private let now: () -> Date
     private let transactionID: () -> UUID
@@ -30,7 +30,7 @@ final class PendingSyncRecoveryCoordinator {
         queueAdmin: PendingSyncQueueAdministrating,
         localQueueSnapshot: @escaping () -> FileBackedSyncConvergenceLocalObligationQueueSnapshot,
         replaceLocalObligations: @escaping ([SyncConvergenceLocalObligation]) async throws -> Void,
-        flushReadyLocalBatch: @escaping () async throws -> SyncBatchID?,
+        flushReadyLocalBatches: @escaping () async throws -> Set<SyncBatchID>,
         journalStore: PendingSyncRecoveryJournalStore = PendingSyncRecoveryJournalStore(),
         now: @escaping () -> Date = Date.init,
         transactionID: @escaping () -> UUID = UUID.init
@@ -38,7 +38,7 @@ final class PendingSyncRecoveryCoordinator {
         self.queueAdmin = queueAdmin
         self.localQueueSnapshot = localQueueSnapshot
         self.replaceLocalObligations = replaceLocalObligations
-        self.flushReadyLocalBatch = flushReadyLocalBatch
+        self.flushReadyLocalBatches = flushReadyLocalBatches
         self.journalStore = journalStore
         self.now = now
         self.transactionID = transactionID
@@ -50,7 +50,7 @@ final class PendingSyncRecoveryCoordinator {
         local: [SyncBatch],
         localEvidence: [SyncConvergenceLocalObligation]
     ) {
-        let capturedBatchID = try await flushReadyLocalBatch()
+        let capturedBatchIDs = try await flushReadyLocalBatches()
 
         let legacyHealth = await queueAdmin.legacyQueueHealth()
         guard legacyHealth.isRecoveryWritable else {
@@ -67,10 +67,17 @@ final class PendingSyncRecoveryCoordinator {
             throw RecoveryError.unhealthyLocalObligationQueue
         }
 
-        if let capturedBatchID,
-           !unsentSnapshot.pendingBatches.contains(where: { $0.id == capturedBatchID }),
-           !localSnapshot.obligations.map(\.batch).contains(where: { $0.id == capturedBatchID }) {
-            throw RecoveryError.capturedBatchNotDurable(capturedBatchID)
+        let durableBatchIDs = Set(
+            unsentSnapshot.pendingBatches.map(\.id)
+                + localSnapshot.obligations.map(\.batch.id)
+        )
+        let missingCapturedBatchIDs = capturedBatchIDs
+            .subtracting(durableBatchIDs)
+            .sorted { $0.uuidString < $1.uuidString }
+        guard missingCapturedBatchIDs.isEmpty else {
+            throw RecoveryError.capturedBatchesNotDurable(
+                missingCapturedBatchIDs
+            )
         }
 
         return (
@@ -202,7 +209,7 @@ final class PendingSyncRecoveryCoordinator {
                     }
                 case .noteCreated, .noteBodyTextInserted,
                      .noteBodyTextDeleted, .noteBodyReconciled,
-                     .noteLifecycleChanged:
+                     .noteLifecycleChanged, .noteStructuralMarksChanged:
                     // These may install an obsolete body or change lifecycle
                     // ownership; they need their own durable reconciliation.
                     throw RecoveryError.unresolvedLocalResolutionQueueWork

@@ -127,14 +127,45 @@ final class MacSyncConvergenceCoordinator {
     }
 
     func submitLocalObligation(_ obligation: SyncConvergenceLocalObligation) async {
-        guard (try? SyncBatchAnchoredPayloadPolicy.validateConvergence(obligation.batch)) != nil else {
+        guard let collection = SyncPreparedLocalObligationCollection([obligation]) else {
             return
         }
-        await handle(outcome: runtime.submitLocalObligation(obligation), sourceBatch: obligation.batch)
+        await submitLocalObligations(collection)
+    }
+
+    func submitLocalObligations(_ collection: SyncPreparedLocalObligationCollection) async {
+        guard collection.obligations.allSatisfy({
+            (try? SyncBatchAnchoredPayloadPolicy.validateConvergence($0.batch)) != nil
+        }) else {
+            return
+        }
+        await handle(
+            outcome: runtime.submitLocalObligations(collection),
+            sourceBatch: collection.primary.batch
+        )
+    }
+
+    func admitLocalObligations(
+        _ collection: SyncPreparedLocalObligationCollection
+    ) async -> SyncConvergenceLocalObligationCollectionAdmissionResult {
+        await runtime.admitLocalObligationCollection(collection)
+    }
+
+    func handleTerminalLocalAdmission(
+        _ outcome: SyncConvergenceRuntimeOutcome,
+        sourceBatch: SyncBatch?
+    ) async {
+        await handle(outcome: outcome, sourceBatch: sourceBatch)
     }
 
     func resumePendingWork() async {
-        await handle(outcome: runtime.resumePendingWork(), sourceBatch: nil)
+        _ = await resumePendingWorkOutcome()
+    }
+
+    func resumePendingWorkOutcome() async -> SyncConvergenceRuntimeOutcome {
+        let outcome = await runtime.resumePendingWork()
+        await handle(outcome: outcome, sourceBatch: nil)
+        return outcome
     }
 
     func resumePendingWorkAwaitingDrainOwnership() async -> SyncConvergenceDrainCompletion {
@@ -241,8 +272,33 @@ final class MacSyncIncomingLocalBoundaryAdapter: SyncConvergenceIncomingLocalBou
         switch await surface.prepareForIncomingBodyMutation(noteIDs) {
         case .ready:
             return .ready
-        case .localObligation(let obligation):
-            return .localObligation(obligation)
+        case .localObligations(let collection):
+            switch await surface.admitPreparedLocalObligations(collection) {
+            case .admitted:
+                return .durablyAdmittedLocalObligations(
+                    noteIDs: Set(
+                        collection.obligations.flatMap {
+                            $0.changes.map(\.noteID)
+                        }
+                    )
+                )
+            case .retryableCapacity:
+                return .cannotProceed(.blocked(
+                    SyncBatchDrainFailure(
+                        batchID: collection.primary.id,
+                        kind: .queueCapacity
+                    )
+                ))
+            case .retryablePersistenceFailure:
+                return .cannotProceed(.blocked(
+                    SyncBatchDrainFailure(
+                        batchID: collection.primary.id,
+                        kind: .queuePersistence
+                    )
+                ))
+            case .terminal(let outcome):
+                return .cannotProceed(outcome)
+            }
         case .staleLocalState(let noteID):
             return .failed(.localStateChanged(noteID: noteID))
         case .failed(let failure):
@@ -255,7 +311,7 @@ final class MacSyncIncomingLocalBoundaryAdapter: SyncConvergenceIncomingLocalBou
 
 enum MacIncomingBoundaryResult {
     case ready
-    case localObligation(SyncConvergenceLocalObligation)
+    case localObligations(SyncPreparedLocalObligationCollection)
     case staleLocalState(noteID: UUID)
     case failed(MacPendingSaveFailure)
     case invariantViolation(noteID: UUID)
@@ -275,6 +331,24 @@ private extension MacPendingSaveFailure {
 @MainActor
 struct MacSyncIncomingLocalBoundarySurface {
     let prepareForIncomingBodyMutation: (Set<UUID>) async -> MacIncomingBoundaryResult
+    let admitPreparedLocalObligations:
+        (SyncPreparedLocalObligationCollection) async
+            -> SyncConvergenceLocalObligationCollectionAdmissionResult
+
+    init(
+        prepareForIncomingBodyMutation:
+            @escaping (Set<UUID>) async -> MacIncomingBoundaryResult,
+        admitPreparedLocalObligations:
+            @escaping (SyncPreparedLocalObligationCollection) async
+                -> SyncConvergenceLocalObligationCollectionAdmissionResult = { collection in
+                    .terminal(.blocked(SyncBatchDrainFailure(
+                        batchID: collection.primary.id, kind: .queuePersistence
+                    )))
+                }
+    ) {
+        self.prepareForIncomingBodyMutation = prepareForIncomingBodyMutation
+        self.admitPreparedLocalObligations = admitPreparedLocalObligations
+    }
 }
 
 /// Performs the ordered Mac-side admission check before an incoming body mutation is planned.
@@ -283,7 +357,7 @@ struct MacIncomingBoundaryPreparer {
     let selectedNoteID: () -> UUID?
     let hasUnsavedChanges: () -> Bool
     let saveSelectedNoteForBoundary: (UUID) async -> MacIncomingBoundaryResult
-    let takePendingObligation: (UUID) async -> SyncConvergenceLocalObligation?
+    let takePendingObligations: (UUID) async throws -> SyncPreparedLocalObligationCollection?
 
     func prepare(affecting noteIDs: Set<UUID>) async -> MacIncomingBoundaryResult {
         for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
@@ -293,13 +367,17 @@ struct MacIncomingBoundaryPreparer {
                 case .ready:
                     // A no-body result only clears this note; later affected notes still need admission.
                     continue
-                case .localObligation, .staleLocalState, .failed, .invariantViolation:
+                case .localObligations, .staleLocalState, .failed, .invariantViolation:
                     return result
                 }
             }
 
-            if let obligation = await takePendingObligation(noteID) {
-                return .localObligation(obligation)
+            do {
+                if let collection = try await takePendingObligations(noteID) {
+                    return .localObligations(collection)
+                }
+            } catch {
+                return .failed(.captureFailed(noteID: noteID))
             }
         }
         return .ready
@@ -370,7 +448,7 @@ enum MacNoteSaveMutationKind {
 enum MacNoteSavePublicationOutcome {
     case none
     case ordinaryRecorded
-    case boundaryExtracted(SyncConvergenceLocalObligation?)
+    case boundaryExtracted(SyncPreparedLocalObligationCollection?)
 }
 
 enum MacNoteSaveOperationCompletion {
@@ -470,7 +548,7 @@ struct MacEditorSaveState {
 enum MacIncomingBoundaryCompletionPolicy {
     static func result(
         for completion: MacNoteSaveOperationCompletion,
-        obligation: SyncConvergenceLocalObligation?,
+        obligations: SyncPreparedLocalObligationCollection?,
         requestedAttemptStillOwnsEditor: Bool,
         completingAttemptStillOwnsEditor: Bool
     ) -> MacIncomingBoundaryResult {
@@ -480,8 +558,8 @@ enum MacIncomingBoundaryCompletionPolicy {
         case .supersededBeforeStart(let attempt):
             return .staleLocalState(noteID: attempt.noteID)
         case .completed(let attempt, let mutationKind, _):
-            if let obligation {
-                return .localObligation(obligation)
+            if let obligations {
+                return .localObligations(obligations)
             }
             if mutationKind == .body {
                 return .invariantViolation(noteID: attempt.noteID)

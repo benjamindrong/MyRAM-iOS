@@ -127,7 +127,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
         controller.invite(MyRAMDiscoveredPeer(peerID: Self.remotePeerID, deviceID: "remote-device", displayName: "Remote", isTrusted: true))
         XCTAssertEqual(transport.invitedPeerIDs, [Self.remotePeerID])
         var bootstrapPrepared = false
-        controller.onPrepareLocalOwnershipForBootstrap = { bootstrapPrepared = true }
+        controller.onPrepareLocalOwnershipForBootstrap = { bootstrapPrepared = true; return .ready }
         var incomingCaptured = false
         controller.onDurablyCaptureIncomingBatch = { _ in incomingCaptured = true; return true }
         var incomingApplied = false

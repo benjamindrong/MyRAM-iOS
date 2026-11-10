@@ -114,6 +114,45 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
         if let deletedAt = record.deletedAt { note.deletedAt = deletedAt }
     }
 
+    func updateStructuralMarks(
+        _ record: SyncConvergenceStructuralMarkUpdatedNoteRecord
+    ) throws {
+        let noteID = record.noteID
+        guard let note = try fetchOne(Note.self, #Predicate { $0.id == noteID }),
+              note.content == record.expectedSnapshot.body else {
+            throw SyncConvergenceTransactionFailure.staleAuthoritativeState(noteID: noteID)
+        }
+
+        do {
+            if record.finalMarkState != record.expectedSnapshot.markState {
+                _ = try NoteSequenceStateFullBodyIntegration
+                    .stageStructuralFormattingMutation(
+                        of: note,
+                        expected: record.expectedSnapshot,
+                        finalMarkState: record.finalMarkState,
+                        in: context
+                    )
+                // Presentation bytes are derived cache once structural formatting is
+                // authoritative. Invalidate them in the same transaction as the mark write.
+                note.richTextContentData = nil
+            } else {
+                guard try NoteSequenceStateFullBodyIntegration
+                    .loadMutationSnapshot(for: note, in: context)
+                    == record.expectedSnapshot else {
+                    throw SyncConvergenceTransactionFailure
+                        .staleAuthoritativeState(noteID: noteID)
+                }
+            }
+        } catch let failure as SyncConvergenceTransactionFailure {
+            throw failure
+        } catch {
+            throw SyncConvergenceTransactionFailure
+                .staleAuthoritativeState(noteID: noteID)
+        }
+
+        note.modifiedAt = max(note.modifiedAt, record.modifiedAt)
+    }
+
     func loadTitleWinner(noteID: UUID) throws -> SyncConvergenceTitleWinnerProjection? {
         try fetchOne(NoteTitleWinner.self, #Predicate { $0.noteID == noteID }).map {
             SyncConvergenceTitleWinnerProjection(

@@ -45,7 +45,7 @@ final class SyncBatchEnvelopeV2Tests: XCTestCase {
             in: SyncBatchEnvelopeCodec.encode(batch: anchoredBatch())
         )
         assertEnvelopeError(
-            .representationMismatch(schema: .v1, representation: .anchored),
+            .representationMismatch(schema: .v1, representation: .anchoredV2),
             decoding: anchoredAsV1
         )
 
@@ -54,7 +54,7 @@ final class SyncBatchEnvelopeV2Tests: XCTestCase {
             in: SyncBatchEnvelopeCodec.encode(batch: legacyBatch())
         )
         assertEnvelopeError(
-            .representationMismatch(schema: .v2, representation: .legacy),
+            .representationMismatch(schema: .v2, representation: .v1Compatible),
             decoding: legacyAsV2
         )
 
@@ -63,7 +63,7 @@ final class SyncBatchEnvelopeV2Tests: XCTestCase {
             in: SyncBatchEnvelopeCodec.encode(batch: metadataBatch())
         )
         assertEnvelopeError(
-            .representationMismatch(schema: .v2, representation: .none),
+            .representationMismatch(schema: .v2, representation: .v1Compatible),
             decoding: metadataAsV2
         )
 
@@ -74,7 +74,7 @@ final class SyncBatchEnvelopeV2Tests: XCTestCase {
     }
 
     func testUnsupportedIntegerVersionsFailBeforeNestedBatchDecode() {
-        for version in [0, -1, 3] {
+        for version in [0, -1, 4] {
             let data = Data(
                 "{\"schemaVersion\":\(version),\"batch\":\"malformed\"}".utf8
             )

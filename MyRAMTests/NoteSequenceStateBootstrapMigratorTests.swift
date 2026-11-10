@@ -2303,7 +2303,7 @@ final class MYR222DisconnectedConcurrentEditTests: XCTestCase {
             startsNetworking: false,
             transport: transport
         )
-        controller.onPrepareLocalOwnershipForBootstrap = {}
+        controller.onPrepareLocalOwnershipForBootstrap = { .ready }
         controller.localBootstrapOwnershipSnapshotProvider = {
             localQueue.snapshot()
         }
@@ -2360,7 +2360,7 @@ final class MYR222DisconnectedConcurrentEditTests: XCTestCase {
             startsNetworking: false,
             transport: transport
         )
-        controller.onPrepareLocalOwnershipForBootstrap = {}
+        controller.onPrepareLocalOwnershipForBootstrap = { .ready }
         controller.localBootstrapOwnershipSnapshotProvider = {
             localQueue.snapshot()
         }
@@ -2405,7 +2405,7 @@ final class MYR222DisconnectedConcurrentEditTests: XCTestCase {
             startsNetworking: false,
             transport: transport
         )
-        controller.onPrepareLocalOwnershipForBootstrap = {}
+        controller.onPrepareLocalOwnershipForBootstrap = { .ready }
         controller.localBootstrapOwnershipSnapshotProvider = {
             localQueue.snapshot()
         }

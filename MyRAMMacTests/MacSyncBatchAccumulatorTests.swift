@@ -1,8 +1,9 @@
+import AnchoredSequenceCore
 import XCTest
 @testable import MyRAMMac
 
 final class MacSyncBatchAccumulatorTests: XCTestCase {
-    func testChangesAppendToPendingBatchAndPreserveOrdering() async {
+    func testChangesAppendToPendingBatchAndPreserveOrdering() async throws {
         let accumulator = makeAccumulator()
         let firstChange = capturedTitleChange("First")
         let secondChange = capturedTitleChange("Second")
@@ -10,12 +11,12 @@ final class MacSyncBatchAccumulatorTests: XCTestCase {
 
         await accumulator.record(firstChange, at: start)
         await accumulator.record(secondChange, at: start.addingTimeInterval(1))
-        let batch = await accumulator.takeReadyBatch(at: start.addingTimeInterval(5))
+        let batch = try await accumulator.takeReadyObligationCollection(at: start.addingTimeInterval(5))?.primary.batch
 
         XCTAssertEqual(batch?.changes, [firstChange.change, secondChange.change])
     }
 
-    func testQuietWindowRearmsAndBatchIDStaysStable() async {
+    func testQuietWindowRearmsAndBatchIDStaysStable() async throws {
         let accumulator = makeAccumulator()
         let start = Date(timeIntervalSince1970: 200)
 
@@ -30,15 +31,15 @@ final class MacSyncBatchAccumulatorTests: XCTestCase {
         XCTAssertEqual(rearmedBatchID, originalBatchID)
         XCTAssertEqual(originalReadyAt, start.addingTimeInterval(3))
         XCTAssertEqual(rearmedReadyAt, start.addingTimeInterval(5))
-        let earlyBatch = await accumulator.takeReadyBatch(at: start.addingTimeInterval(4))
-        let readyBatch = await accumulator.takeReadyBatch(at: start.addingTimeInterval(5))
+        let earlyBatch = try await accumulator.takeReadyObligationCollection(at: start.addingTimeInterval(4))?.primary.batch
+        let readyBatch = try await accumulator.takeReadyObligationCollection(at: start.addingTimeInterval(5))?.primary.batch
         XCTAssertNil(earlyBatch)
         XCTAssertNotNil(readyBatch)
     }
 
     func testReadyBatchStreamYieldsAfterQuietWindow() async throws {
         let accumulator = makeAccumulator()
-        let stream = await accumulator.readyBatches()
+        let stream = await accumulator.readyLocalObligations()
         let nextBatchTask = Task {
             var iterator = stream.makeAsyncIterator()
             return await iterator.next()
@@ -48,11 +49,13 @@ final class MacSyncBatchAccumulatorTests: XCTestCase {
         await accumulator.record(capturedTitleChange("Ready"), at: start)
         await accumulator.emitReadyBatches(at: start.addingTimeInterval(3))
 
-        let batch = await nextBatchTask.value
+        let collection = try await nextBatchTask.value?.get()
+        XCTAssertEqual(collection?.obligations.count, 1)
+        let batch = collection?.primary.batch
         XCTAssertEqual(batch?.changes, [titleChange("Ready")])
     }
 
-    func testBatchSequenceIsAssignedWhenPendingBatchStarts() async {
+    func testBatchSequenceIsAssignedWhenPendingBatchStarts() async throws {
         let accumulator = MacSyncBatchAccumulator(
             originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000101")!,
             quietWindow: 3,
@@ -63,7 +66,7 @@ final class MacSyncBatchAccumulatorTests: XCTestCase {
 
         await accumulator.record(capturedTitleChange("First"), at: start)
         await accumulator.record(capturedTitleChange("Second"), at: start.addingTimeInterval(1))
-        let batch = await accumulator.takeReadyBatch(at: start.addingTimeInterval(5))
+        let batch = try await accumulator.takeReadyObligationCollection(at: start.addingTimeInterval(5))?.primary.batch
 
         XCTAssertEqual(batch?.batchSequence, 7)
     }
@@ -80,13 +83,15 @@ final class MacSyncBatchAccumulatorTests: XCTestCase {
             bodyHashCapabilityEnabled: true
         )
 
-        let obligation = await accumulator.recordAndTakeBoundaryObligation(
+        let collection = try await accumulator.recordAndPrepareBoundaryCollection(
             adding: captured,
             affecting: noteID,
             at: start
         )
+        let obligation = collection?.primary
+        try await commitAfterDurableAdmission(collection, accumulator: accumulator)
         await accumulator.emitReadyBatches(at: start.addingTimeInterval(5))
-        let replayed = await accumulator.takeReadyBatch(at: start.addingTimeInterval(5))
+        let replayed = try await accumulator.takeReadyObligationCollection(at: start.addingTimeInterval(5))?.primary.batch
 
         XCTAssertEqual(obligation?.batch.changes, captured.map(\.change))
         guard case .captured(let capturedChanges) = obligation?.evidence else {
@@ -109,11 +114,12 @@ final class MacSyncBatchAccumulatorTests: XCTestCase {
         )
 
         await accumulator.record(captured, at: start)
-        let obligation = await accumulator.recordAndTakeBoundaryObligation(
+        let collection = try await accumulator.recordAndPrepareBoundaryCollection(
             adding: [],
             affecting: noteID,
             at: start.addingTimeInterval(1)
         )
+        let obligation = collection?.primary
 
         guard case .captured(let capturedChanges) = obligation?.evidence else {
             return XCTFail("Expected captured evidence")
@@ -121,18 +127,19 @@ final class MacSyncBatchAccumulatorTests: XCTestCase {
         XCTAssertEqual(capturedChanges, captured)
     }
 
-    func testBoundaryRecordAndTakeLeavesMetadataOnlyPendingWhenNoBodyWorkAffectsNote() async {
+    func testBoundaryRecordAndTakeLeavesMetadataOnlyPendingWhenNoBodyWorkAffectsNote() async throws {
         let accumulator = makeAccumulator()
         let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000000303")!
         let start = Date(timeIntervalSince1970: 800)
         let title = SyncConvergenceCapturedLocalChange(change: titleChange("Only title"), evidence: nil)
 
-        let obligation = await accumulator.recordAndTakeBoundaryObligation(
+        let collection = try await accumulator.recordAndPrepareBoundaryCollection(
             adding: [title],
             affecting: noteID,
             at: start
         )
-        let ready = await accumulator.takeReadyBatch(at: start.addingTimeInterval(5))
+        let obligation = collection?.primary
+        let ready = try await accumulator.takeReadyObligationCollection(at: start.addingTimeInterval(5))?.primary.batch
 
         XCTAssertNil(obligation)
         XCTAssertEqual(ready?.changes, [title.change])
@@ -160,13 +167,15 @@ final class MacSyncBatchAccumulatorTests: XCTestCase {
         )
 
         await accumulator.record(first, at: firstDate)
-        let firstObligation = await accumulator.recordAndTakeBoundaryObligation(
+        let firstCollection = try await accumulator.recordAndPrepareBoundaryCollection(
             adding: [],
             affecting: noteID,
             at: firstDate.addingTimeInterval(1)
         )
+        let firstObligation = firstCollection?.primary
+        try await commitAfterDurableAdmission(firstCollection, accumulator: accumulator)
         await accumulator.record(second, at: secondDate)
-        let secondObligation = await accumulator.takeReadyBatch(at: secondDate.addingTimeInterval(5))
+        let secondObligation = try await accumulator.takeReadyObligationCollection(at: secondDate.addingTimeInterval(5))?.primary.batch
 
         XCTAssertEqual(firstObligation?.batch.changes, first.map(\.change))
         XCTAssertEqual(secondObligation?.changes, second.map(\.change))
@@ -194,15 +203,181 @@ final class MacSyncBatchAccumulatorTests: XCTestCase {
         )
 
         await accumulator.record(first, at: firstDate)
-        _ = await accumulator.recordAndTakeBoundaryObligation(
+        let firstCollection = try await accumulator.recordAndPrepareBoundaryCollection(
             adding: [],
             affecting: firstNoteID,
             at: firstDate.addingTimeInterval(1)
         )
+        try await commitAfterDurableAdmission(firstCollection, accumulator: accumulator)
         await accumulator.record(second, at: secondDate)
-        let secondObligation = await accumulator.takeReadyBatch(at: secondDate.addingTimeInterval(5))
+        let secondObligation = try await accumulator.takeReadyObligationCollection(at: secondDate.addingTimeInterval(5))?.primary.batch
 
         XCTAssertEqual(secondObligation?.changes, second.map(\.change))
+    }
+
+    func testMixedCapturePartitionsCompatibleThenSingleNoteV3BatchesInCanonicalNoteOrder() async throws {
+        let accumulator = MacSyncBatchAccumulator(
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000227300")!,
+            quietWindow: 3,
+            batchSequenceProvider: { .sequenceLess(.transientFailure) }
+        )
+        let noteA = UUID(uuidString: "00000000-0000-0000-0000-000000227301")!
+        let noteB = UUID(uuidString: "00000000-0000-0000-0000-000000227302")!
+        let a1 = try markOperation(counter: 1, logicalClock: 1)
+        let a2 = try markOperation(counter: 2, logicalClock: 2)
+        let b1 = try markOperation(counter: 3, logicalClock: 3)
+        let captured: [SyncConvergenceCapturedLocalChange] = [
+            capturedTitleChange("Compatible"),
+            structuralMarkChange(noteID: noteB, operation: b1, modifiedAt: Date(timeIntervalSince1970: 20)),
+            structuralMarkChange(noteID: noteA, operation: a2, modifiedAt: Date(timeIntervalSince1970: 30)),
+            structuralMarkChange(noteID: noteA, operation: a1, modifiedAt: Date(timeIntervalSince1970: 10))
+        ]
+
+        await accumulator.record(captured, at: Date(timeIntervalSince1970: 1))
+        let originalBatchID = await accumulator.pendingBatchID()
+        let obligations = try await accumulator.takePendingObligationCollectionNow()?.obligations ?? []
+
+        XCTAssertEqual(obligations.count, 3)
+        XCTAssertEqual(obligations.first?.id, originalBatchID)
+        XCTAssertEqual(Set(obligations.map(\.id)).count, 3)
+        XCTAssertEqual(
+            obligations.map { SyncBatchDeliveryPartitionPlanner.classification(of: $0.changes) },
+            [.v1Compatible, .structuralMarkV3, .structuralMarkV3]
+        )
+
+        guard case .noteStructuralMarksChanged(let firstMark) = obligations[1].changes.first,
+              case .noteStructuralMarksChanged(let secondMark) = obligations[2].changes.first else {
+            return XCTFail("Expected one structural-mark change per V3 batch")
+        }
+        XCTAssertEqual(firstMark.noteID, noteA)
+        XCTAssertEqual(firstMark.operations, [a1, a2])
+        XCTAssertEqual(firstMark.modifiedAt, Date(timeIntervalSince1970: 30))
+        XCTAssertEqual(secondMark.noteID, noteB)
+        XCTAssertEqual(secondMark.operations, [b1])
+        XCTAssertEqual(obligations[1].changes.count, 1)
+        XCTAssertEqual(obligations[2].changes.count, 1)
+    }
+
+    private func commitAfterDurableAdmission(
+        _ prepared: SyncPreparedLocalObligationCollection?,
+        accumulator: MacSyncBatchAccumulator
+    ) async throws {
+        let collection = try XCTUnwrap(prepared)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("local.json")
+        let queue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: fileURL)
+        try queue.enqueueAtomically(collection.obligations)
+        XCTAssertEqual(FileBackedSyncConvergenceLocalObligationQueue(fileURL: fileURL).pendingObligations,
+                       collection.obligations)
+        let committed = await accumulator.commitPreparedCollection(token: collection.token)
+        XCTAssertTrue(committed)
+    }
+
+
+    func testPartitionFailureCannotMasqueradeAsEmptyPendingCapture() async throws {
+        let accumulator = makeAccumulator()
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000227240")!
+        let modified = Date(timeIntervalSince1970: 99)
+        let legacy = MacSyncChange.noteBodyTextInserted(.init(
+            noteID: noteID, utf16Offset: 0, text: "a", modifiedAt: modified,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "")
+        ))
+        let anchored = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: noteID, utf16Offset: 0, text: "b", modifiedAt: modified,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: ""),
+            operationID: SyncOperationID(deviceID: noteID, localCounter: 1),
+            state: .empty
+        )
+        await accumulator.record([legacy, anchored].map {
+            SyncConvergenceCapturedLocalChange(change: $0, evidence: nil)
+        }, at: modified)
+        let originalID = await accumulator.pendingBatchID()
+        for _ in 0..<2 {
+            do {
+                _ = try await accumulator.takePendingObligationCollectionNow()
+                XCTFail("Invalid compatible mix must throw, not appear empty")
+            } catch let error as SyncBatchDeliveryPartitionPlanner.PartitionError {
+                XCTAssertEqual(error, .invalidCompatibleRepresentation)
+            }
+            let retainedID = await accumulator.pendingBatchID()
+            XCTAssertEqual(retainedID, originalID)
+        }
+        let stream = await accumulator.readyLocalObligations()
+        let next = Task {
+            var iterator = stream.makeAsyncIterator()
+            return await iterator.next()
+        }
+        await accumulator.emitReadyBatches(at: modified.addingTimeInterval(3))
+        guard let value = await next.value else { return XCTFail("Missing failure event") }
+        guard case .failure(let error) = value else { return XCTFail("Failure was not published") }
+        XCTAssertEqual(error as? SyncBatchDeliveryPartitionPlanner.PartitionError,
+                       .invalidCompatibleRepresentation)
+        let retainedID = await accumulator.pendingBatchID()
+        XCTAssertEqual(retainedID, originalID)
+        await accumulator.record(capturedTitleChange("Later"), at: modified.addingTimeInterval(4))
+        do {
+            _ = try await accumulator.takePendingObligationCollectionNow()
+            XCTFail("Later valid work cannot overwrite unresolved invalid work")
+        } catch let error as SyncBatchDeliveryPartitionPlanner.PartitionError {
+            XCTAssertEqual(error, .invalidCompatibleRepresentation)
+        }
+    }
+
+    func testConflictingRepeatedMarkIdentityDoesNotCommitOrDiscardPendingCapture() async throws {
+        let accumulator = makeAccumulator()
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000227241")!
+        let first = try markOperation(counter: 87, logicalClock: 1)
+        let conflicting = try markOperation(counter: 87, logicalClock: 2)
+        await accumulator.record([
+            structuralMarkChange(noteID: noteID, operation: first, modifiedAt: .now),
+            structuralMarkChange(noteID: noteID, operation: conflicting, modifiedAt: .now)
+        ])
+        let before = await accumulator.pendingBatchID()
+        do {
+            _ = try await accumulator.takePendingObligationCollectionNow()
+            XCTFail("Conflicting mark identity must fail closed")
+        } catch let error as SyncBatchDeliveryPartitionPlanner.PartitionError {
+            XCTAssertEqual(error, .conflictingStructuralMarkOperation(noteID: noteID))
+        }
+        let invalidCommit = await accumulator.commitPreparedCollection(token: UUID())
+        XCTAssertFalse(invalidCommit)
+        let after = await accumulator.pendingBatchID()
+        XCTAssertEqual(after, before)
+    }
+
+    private func markOperation(
+        counter: UInt64,
+        logicalClock: UInt64
+    ) throws -> SyncTextMarkOperation {
+        try SyncTextMarkOperation(
+            operationID: SyncOperationID(
+                deviceID: UUID(uuidString: "00000000-0000-0000-0000-000000227399")!,
+                localCounter: counter
+            ),
+            logicalClock: logicalClock,
+            key: .bold,
+            assignment: .enabled,
+            startAnchor: .empty,
+            endAnchor: .empty
+        )
+    }
+
+    private func structuralMarkChange(
+        noteID: UUID,
+        operation: SyncTextMarkOperation,
+        modifiedAt: Date
+    ) -> SyncConvergenceCapturedLocalChange {
+        SyncConvergenceCapturedLocalChange(
+            change: .noteStructuralMarksChanged(
+                SyncBatchNoteStructuralMarksChangedChange(
+                    noteID: noteID,
+                    operations: [operation],
+                    modifiedAt: modifiedAt
+                )
+            ),
+            evidence: nil
+        )
     }
 
     private func makeAccumulator() -> MacSyncBatchAccumulator {

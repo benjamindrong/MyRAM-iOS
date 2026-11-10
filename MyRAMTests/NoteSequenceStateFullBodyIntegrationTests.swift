@@ -68,6 +68,111 @@ final class NoteSequenceStateFullBodyIntegrationTests: XCTestCase {
         }
         XCTAssertEqual(fixture.note.content, "AB")
     }
+    func testAnchoredTextFromIncapablePeerPreservesMarksForLaterCapableReconciliation() throws {
+        let fixture = try makeSeededFixture(body: "AB", revision: 7)
+        let initial = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(
+                for: fixture.note,
+                in: fixture.context
+            )
+        let retainedMarks = try fullRangeMarkState(
+            key: .bold,
+            assignment: .enabled,
+            sequence: initial.state,
+            localCounter: 227_301
+        )
+        _ = try NoteSequenceStateFullBodyIntegration
+            .stageStructuralFormattingMutation(
+                of: fixture.note,
+                expected: initial,
+                finalMarkState: retainedMarks,
+                in: fixture.context
+            )
+        try fixture.context.save()
+
+        let beforeText = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(
+                for: fixture.note,
+                in: fixture.context
+            )
+        let textChange = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: fixture.note.id,
+            utf16Offset: 1,
+            text: "x",
+            modifiedAt: .now,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "AB"),
+            operationID: SyncOperationID(
+                deviceID: UUID(
+                    uuidString: "22700000-0000-0000-0000-000000000301"
+                )!,
+                localCounter: 1
+            ),
+            state: beforeText.state
+        )
+        guard case .noteBodyTextInsertedAnchored(let inserted) = textChange else {
+            return XCTFail("Expected anchored insertion")
+        }
+        let finalSequence = try SyncBatchAnchoredInsertReplay.applying(
+            inserted,
+            to: beforeText.state
+        ).sequenceState
+        _ = try NoteSequenceStateFullBodyIntegration
+            .stageSuppliedStateMutation(
+                of: fixture.note,
+                expected: beforeText,
+                newBody: finalSequence.visibleText,
+                finalState: finalSequence,
+                in: fixture.context
+            )
+        try fixture.context.save()
+
+        let afterIncapableText = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(
+                for: fixture.note,
+                in: fixture.context
+            )
+        XCTAssertEqual(afterIncapableText.markState, retainedMarks)
+
+        let laterMark = try SyncTextMarkOperation(
+            operationID: SyncOperationID(
+                deviceID: UUID(
+                    uuidString: "22700000-0000-0000-0000-000000000302"
+                )!,
+                localCounter: 1
+            ),
+            logicalClock: 1,
+            key: .italic,
+            assignment: .enabled,
+            startAnchor: afterIncapableText.state.operationAnchor(
+                atVisibleUTF16Offset: 0
+            ),
+            endAnchor: afterIncapableText.state.operationAnchor(
+                atVisibleUTF16Offset: afterIncapableText.state.visibleUTF16Count
+            )
+        )
+        let reconciledMarks = try afterIncapableText.markState.merging(
+            with: SyncTextMarkState(operations: [laterMark])
+        )
+        _ = try NoteSequenceStateFullBodyIntegration
+            .stageStructuralFormattingMutation(
+                of: fixture.note,
+                expected: afterIncapableText,
+                finalMarkState: reconciledMarks,
+                in: fixture.context
+            )
+        try fixture.context.save()
+
+        let final = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(
+                for: fixture.note,
+                in: fixture.context
+            )
+        XCTAssertEqual(final.body, "AxB")
+        XCTAssertEqual(final.markState, reconciledMarks)
+        XCTAssertTrue(final.markState.operations.contains(retainedMarks.operations[0]))
+        XCTAssertTrue(final.markState.operations.contains(laterMark))
+    }
+
     func testCombinedFormattingOnlyMutationAdvancesOnlyMarkRevision() throws {
         let fixture = try makeSeededFixture(body: "AB", revision: 7)
         let snapshot = try NoteSequenceStateFullBodyIntegration
@@ -584,6 +689,74 @@ final class NoteSequenceStateFullBodyIntegrationTests: XCTestCase {
         )
     }
 
+    func testPermanentDeletionRollsBackNoteAndStructuralFormattingOnSaveFailure() throws {
+        let fixture = try makeSeededFixture(body: "AB")
+        let snapshot = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(for: fixture.note, in: fixture.context)
+        let marks = try fullRangeMarkState(
+            key: .bold,
+            assignment: .enabled,
+            sequence: snapshot.state,
+            localCounter: 227_901
+        )
+        _ = try NoteSequenceStateFullBodyIntegration
+            .stageStructuralFormattingMutation(
+                of: fixture.note,
+                expected: snapshot,
+                finalMarkState: marks,
+                in: fixture.context
+            )
+        try fixture.context.save()
+
+        XCTAssertThrowsError(
+            try NoteSequenceStateFullBodyIntegration
+                .permanentlyDeleteNoteAndStructuralAuthority(
+                    fixture.note,
+                    in: fixture.context,
+                    saveContext: { _ in
+                        throw CocoaError(.fileWriteUnknown)
+                    }
+                )
+        )
+
+        let freshContext = ModelContext(fixture.container)
+        let restoredNote = try fetchNote(fixture.note.id, in: freshContext)
+        let restored = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(for: restoredNote, in: freshContext)
+        XCTAssertEqual(restored.markState, marks)
+    }
+
+    func testOrphanCleanupPreservesSoftDeletedNoteStructuralAuthority() throws {
+        let fixture = try makeSeededFixture(body: "Retained")
+        fixture.note.deletedAt = Date(timeIntervalSince1970: 227_902)
+        let orphanID = UUID(
+            uuidString: "22700000-0000-0000-0000-000000000903"
+        )!
+        let orphan = try NoteSequenceStateBootstrapPersistence
+            .prepareInitialState(
+                noteID: orphanID,
+                body: "Orphan"
+            )
+            .makeRevisionZeroRecord()
+        fixture.context.insert(orphan)
+        try fixture.context.save()
+
+        let removed = try NoteSequenceStateFullBodyIntegration
+            .stageOrphanedStructuralAuthorityCleanup(
+                in: fixture.context
+            )
+        try fixture.context.save()
+
+        XCTAssertEqual(removed, Set([orphanID]))
+        let recordIDs = Set(
+            try fetchRecords(in: fixture.context).map(\.noteID)
+        )
+        XCTAssertEqual(recordIDs, Set([fixture.note.id]))
+        XCTAssertNotNil(
+            try fetchNote(fixture.note.id, in: fixture.context).deletedAt
+        )
+    }
+
     func testReplaceBodyUsesExactUTF16RatherThanCanonicalStringEquality() throws {
         let fixture = try makeSeededFixture(body: "\u{E9}", revision: 2)
 
@@ -669,6 +842,137 @@ final class NoteSequenceStateFullBodyIntegrationTests: XCTestCase {
         XCTAssertEqual(decoded.notes.only?.statePayloadData, source.record.statePayloadData)
         XCTAssertEqual(decoded.notes.only?.revision, source.record.revision)
         XCTAssertEqual(decoded.notes.only?.payloadByteCount, source.record.payloadByteCount)
+    }
+
+    func testBootstrapSnapshotCarriesAndInstallsExactFormattingBaseline() throws {
+        let source = try makeSeededFixture(body: "AB", revision: 4)
+        let sourceSnapshot = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(for: source.note, in: source.context)
+        let markState = try fullRangeMarkState(
+            key: .bold,
+            assignment: .enabled,
+            sequence: sourceSnapshot.state,
+            localCounter: 227_201
+        )
+        _ = try NoteSequenceStateFullBodyIntegration
+            .stageStructuralFormattingMutation(
+                of: source.note,
+                expected: sourceSnapshot,
+                finalMarkState: markState,
+                in: source.context
+            )
+        try source.context.save()
+
+        let snapshot = try SyncPeerBootstrapSnapshotPersistence.build(
+            from: source.context
+        )
+        let noteSnapshot = try XCTUnwrap(snapshot.notes.only)
+
+        XCTAssertEqual(noteSnapshot.markFormatVersion, source.record.markFormatVersion)
+        XCTAssertEqual(noteSnapshot.markRevision, source.record.markRevision)
+        XCTAssertEqual(noteSnapshot.markStatePayloadData, source.record.markStatePayloadData)
+
+        let destination = try makeContainer()
+        let destinationContext = ModelContext(destination)
+        let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(
+            snapshot,
+            to: destinationContext
+        )
+        let destinationNote = try fetchNote(source.note.id, in: destinationContext)
+        let installed = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(for: destinationNote, in: destinationContext)
+
+        XCTAssertEqual(installed.markState, markState)
+        XCTAssertEqual(disposition.coveredFormattingNoteIDs, [source.note.id])
+    }
+
+    func testBootstrapStructuralMarkHistoryRequiresFormattingBaselineCoverage() throws {
+        let source = try makeSeededFixture(body: "AB")
+        let sourceSnapshot = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(for: source.note, in: source.context)
+        let markState = try fullRangeMarkState(
+            key: .italic,
+            assignment: .enabled,
+            sequence: sourceSnapshot.state,
+            localCounter: 227_202
+        )
+        _ = try NoteSequenceStateFullBodyIntegration
+            .stageStructuralFormattingMutation(
+                of: source.note,
+                expected: sourceSnapshot,
+                finalMarkState: markState,
+                in: source.context
+            )
+        try source.context.save()
+
+        let markBatch = SyncBatch(
+            id: UUID(uuidString: "22700000-0000-0000-0000-000000000202")!,
+            originDeviceID: UUID(uuidString: "22700000-0000-0000-0000-000000000203")!,
+            createdAt: Date(timeIntervalSince1970: 227_202),
+            batchSequence: 1,
+            changes: [
+                .noteStructuralMarksChanged(
+                    SyncBatchNoteStructuralMarksChangedChange(
+                        noteID: source.note.id,
+                        operations: markState.operations,
+                        modifiedAt: Date(timeIntervalSince1970: 227_202)
+                    )
+                )
+            ]
+        )
+        let fullSnapshot = try SyncPeerBootstrapSnapshotPersistence
+            .build(from: source.context)
+            .attachingHistoryCoverage(for: [markBatch])
+
+        let coveredDestination = try makeContainer()
+        let coveredDisposition = try SyncPeerBootstrapSnapshotPersistence.apply(
+            fullSnapshot,
+            to: ModelContext(coveredDestination)
+        )
+        XCTAssertTrue(coveredDisposition.coveredBatchIDs.isEmpty)
+        XCTAssertEqual(
+            coveredDisposition.coveredFormattingBatchIDs,
+            [markBatch.id]
+        )
+        XCTAssertEqual(
+            coveredDisposition.coveredFormattingNoteIDs,
+            [source.note.id]
+        )
+
+        let note = try XCTUnwrap(fullSnapshot.notes.only)
+        let legacyNote = SyncPeerBootstrapNoteSnapshot(
+            id: note.id,
+            title: note.title,
+            body: note.body,
+            isPinned: note.isPinned,
+            createdAt: note.createdAt,
+            modifiedAt: note.modifiedAt,
+            deletedAt: note.deletedAt,
+            folderID: note.folderID,
+            formatVersion: note.formatVersion,
+            revision: note.revision,
+            visibleUTF16Count: note.visibleUTF16Count,
+            tombstonedUTF16Count: note.tombstonedUTF16Count,
+            payloadByteCount: note.payloadByteCount,
+            statePayloadData: note.statePayloadData
+        )
+        let legacySnapshot = SyncPeerBootstrapSnapshot(
+            id: fullSnapshot.id,
+            folders: fullSnapshot.folders,
+            notes: [legacyNote],
+            historyCoverage: fullSnapshot.historyCoverage
+        )
+        let legacyDestination = try makeContainer()
+        let legacyDisposition = try SyncPeerBootstrapSnapshotPersistence.apply(
+            legacySnapshot,
+            to: ModelContext(legacyDestination)
+        )
+
+        XCTAssertTrue(legacyDisposition.coveredFormattingNoteIDs.isEmpty)
+        XCTAssertFalse(legacyDisposition.coveredBatchIDs.contains(markBatch.id))
+        XCTAssertFalse(
+            legacyDisposition.coveredFormattingBatchIDs.contains(markBatch.id)
+        )
     }
 
     func testBootstrapMissingNoteInstallsNoteAndExactSequenceStateAtomically() throws {
@@ -1654,7 +1958,10 @@ final class NoteSequenceStateFullBodyIntegrationTests: XCTestCase {
             visibleUTF16Count: note.visibleUTF16Count,
             tombstonedUTF16Count: note.tombstonedUTF16Count,
             payloadByteCount: note.payloadByteCount,
-            statePayloadData: note.statePayloadData
+            statePayloadData: note.statePayloadData,
+            markFormatVersion: note.markFormatVersion,
+            markRevision: note.markRevision,
+            markStatePayloadData: note.markStatePayloadData
         )
     }
 

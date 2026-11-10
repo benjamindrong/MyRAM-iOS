@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import CryptoKit
 import Foundation
 
@@ -36,6 +37,7 @@ enum SyncBatchChange: Codable, Equatable, Sendable {
     case noteBodyTextInsertedAnchored(SyncBatchNoteBodyTextInsertedAnchoredChange)
     case noteBodyTextDeletedAnchored(SyncBatchNoteBodyTextDeletedAnchoredChange)
     case noteBodyReconciled(SyncBatchNoteBodyReconciledChange)
+    case noteStructuralMarksChanged(SyncBatchNoteStructuralMarksChangedChange)
     case noteLifecycleChanged(SyncBatchNoteLifecycleChangedChange)
 }
 
@@ -108,6 +110,23 @@ struct SyncBatchNoteBodyReconciledChange: Codable, Equatable, Sendable {
     let replacementBody: String
     let replacementContentHash: String
     let modifiedAt: Date
+}
+
+struct SyncBatchNoteStructuralMarksChangedChange: Codable, Equatable, Sendable {
+    let noteID: SyncBatchNoteID
+    let operations: [SyncTextMarkOperation]
+    let modifiedAt: Date
+
+    init(
+        noteID: SyncBatchNoteID,
+        operations: [SyncTextMarkOperation],
+        modifiedAt: Date
+    ) {
+        precondition(!operations.isEmpty, "Structural-mark batches require at least one operation")
+        self.noteID = noteID
+        self.operations = operations
+        self.modifiedAt = modifiedAt
+    }
 }
 
 /// Transports only user-visible note lifecycle state. `deletedAt == nil` restores the note.
@@ -442,6 +461,8 @@ enum SyncBatchDrainFailureClassifier {
             switch queueError {
             case .capacityExceeded:
                 kind = .queueCapacity
+            case .invalidStructuralMarkObligation, .conflictingDuplicateIdentity:
+                kind = .invalidMergePlan
             case .persistenceFailed, .unhealthyPersistence:
                 kind = .queuePersistence
             }
@@ -613,7 +634,7 @@ struct SyncBatchPreflight {
                 if try workingBody(for: created.noteID) == nil {
                     workingBodies[created.noteID] = created.body
                 }
-            case .noteTitleChanged, .noteLifecycleChanged:
+            case .noteTitleChanged, .noteStructuralMarksChanged, .noteLifecycleChanged:
                 continue
             case .noteBodyTextInserted(let inserted):
                 guard var body = try workingBody(for: inserted.noteID) else { continue }
@@ -764,6 +785,8 @@ extension SyncBatchChange {
             change.noteID
         case .noteBodyReconciled(let change):
             change.noteID
+        case .noteStructuralMarksChanged(let change):
+            change.noteID
         case .noteLifecycleChanged(let change):
             change.noteID
         }
@@ -785,6 +808,8 @@ extension SyncBatchChange {
             change.modifiedAt
         case .noteBodyReconciled(let change):
             change.modifiedAt
+        case .noteStructuralMarksChanged(let change):
+            change.modifiedAt
         case .noteLifecycleChanged(let change):
             change.modifiedAt
         }
@@ -796,7 +821,7 @@ extension SyncBatchChange {
             .legacy
         case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
             .anchored
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteStructuralMarksChanged, .noteLifecycleChanged:
             .none
         }
     }
@@ -811,7 +836,7 @@ extension SyncBatchChange {
             change.baseContentHash
         case .noteBodyTextDeletedAnchored(let change):
             change.baseContentHash
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteStructuralMarksChanged, .noteLifecycleChanged:
             nil
         }
     }

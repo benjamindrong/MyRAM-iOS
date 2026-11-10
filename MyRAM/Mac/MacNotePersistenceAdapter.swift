@@ -179,12 +179,28 @@ final class MacNotePersistenceAdapter {
             initialState: snapshot.state,
             operationIDReserver: operationIDReserver
         )
-        let finalMarkState = try await NoteStructuralFormattingEditPlanner.prepare(
+        let formattingEdit = try await NoteStructuralFormattingEditPlanner.prepare(
             sequence: capture.finalState,
             currentMarkState: snapshot.markState,
             desiredProjection: formattingProjection,
             operationIDReserver: operationIDReserver
-        ).finalMarkState
+        )
+        let finalMarkState = formattingEdit.finalMarkState
+        let structuralMarkChange: SyncConvergenceCapturedLocalChange?
+        if formattingEdit.emittedOperations.isEmpty {
+            structuralMarkChange = nil
+        } else {
+            structuralMarkChange = SyncConvergenceCapturedLocalChange(
+                change: .noteStructuralMarksChanged(
+                    SyncBatchNoteStructuralMarksChangedChange(
+                        noteID: note.id,
+                        operations: formattingEdit.emittedOperations,
+                        modifiedAt: modifiedAt
+                    )
+                ),
+                evidence: nil
+            )
+        }
 
         return MacPreparedLocalNoteEdit(
             noteID: note.id,
@@ -196,7 +212,10 @@ final class MacNotePersistenceAdapter {
             proposedTitle: note.title,
             proposedBody: proposedBody,
             proposedRichTextContentData: proposedRichTextContentData,
-            capturedChanges: (titleChange.map { [$0] } ?? []) + capture.capturedChanges,
+            capturedChanges:
+                (titleChange.map { [$0] } ?? [])
+                + capture.capturedChanges
+                + (structuralMarkChange.map { [$0] } ?? []),
             hasTitleMutation: titleChange != nil,
             hasBodyMutation: !capture.capturedChanges.isEmpty,
             hasFormattingMutation: finalMarkState != snapshot.markState,

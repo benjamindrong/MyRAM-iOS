@@ -17,12 +17,12 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
     }
 
     func testFutureBatchSchemaIsRejectedByExactDecoder() {
-        let data = Data(#"{"schemaVersion":3,"batch":{}}"#.utf8)
+        let data = Data(#"{"schemaVersion":4,"batch":{}}"#.utf8)
 
         XCTAssertThrowsError(try SyncBatchEnvelopeCodec.decode(data)) {
             XCTAssertEqual(
                 $0 as? SyncBatchEnvelopeError,
-                .unsupportedSchemaVersion(3)
+                .unsupportedSchemaVersion(4)
             )
         }
     }

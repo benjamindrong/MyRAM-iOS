@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import Foundation
 
 enum SyncConvergencePlanningOutcome: Equatable {
@@ -150,6 +151,7 @@ struct SyncConvergenceNotePlan: Equatable {
     let noteID: UUID
     let creationEffect: SyncConvergenceCreationEffect?
     let bodyEffect: SyncConvergenceBodyEffect?
+    let structuralMarkEffect: SyncConvergenceStructuralMarkEffect?
     let titleEffect: SyncConvergenceTitleEffect?
     let lifecycleEffect: SyncConvergenceLifecycleEffect?
 
@@ -157,14 +159,31 @@ struct SyncConvergenceNotePlan: Equatable {
         noteID: UUID,
         creationEffect: SyncConvergenceCreationEffect?,
         bodyEffect: SyncConvergenceBodyEffect?,
+        structuralMarkEffect: SyncConvergenceStructuralMarkEffect? = nil,
         titleEffect: SyncConvergenceTitleEffect?,
         lifecycleEffect: SyncConvergenceLifecycleEffect? = nil
     ) {
         self.noteID = noteID
         self.creationEffect = creationEffect
         self.bodyEffect = bodyEffect
+        self.structuralMarkEffect = structuralMarkEffect
         self.titleEffect = titleEffect
         self.lifecycleEffect = lifecycleEffect
+    }
+}
+
+struct SyncConvergenceStructuralMarkEffect: Equatable {
+    let noteID: UUID
+    let expectedSnapshot: NoteSequenceStateMutationSnapshot
+    let finalMarkState: SyncTextMarkState
+    let operationIdentities: [OperationIdentityPayload]
+    let latestModifiedAt: Date
+    let preMarkDigest: String
+    let postMarkDigest: String
+    let resultEvidence: SyncConvergenceResultEvidence
+
+    var didChangeApplicationState: Bool {
+        finalMarkState != expectedSnapshot.markState
     }
 }
 
@@ -339,6 +358,7 @@ struct SyncConvergenceResultEvidence: Codable, Equatable, Sendable {
         case title
         case creation
         case lifecycle
+        case structuralMarks
     }
 
     let batchID: UUID
@@ -350,7 +370,13 @@ struct SyncConvergenceResultEvidence: Codable, Equatable, Sendable {
 }
 
 enum SyncConvergenceNoteEffectKindMembership {
-    static let supportedKinds: Set<String> = ["body", "creation", "title", "lifecycle"]
+    static let supportedKinds: Set<String> = [
+        "body",
+        "creation",
+        "title",
+        "lifecycle",
+        "structuralMarks"
+    ]
 
     static func validate(_ kinds: [String], expected: Set<String>? = nil) -> Bool {
         guard Set(kinds).count == kinds.count,
@@ -456,6 +482,13 @@ struct SyncConvergenceUpdatedNoteRecord: Equatable {
         self.modifiedAt = modifiedAt
         self.deletedAt = deletedAt
     }
+}
+
+struct SyncConvergenceStructuralMarkUpdatedNoteRecord: Equatable {
+    let noteID: UUID
+    let modifiedAt: Date
+    let expectedSnapshot: NoteSequenceStateMutationSnapshot
+    let finalMarkState: SyncTextMarkState
 }
 
 struct SyncConvergenceRetainedSnapshot: Equatable {
@@ -648,6 +681,9 @@ protocol SyncConvergencePersistenceTransaction {
     func insertNote(_ record: SyncConvergenceNewNoteRecord) throws
     func updateNote(_ record: SyncConvergenceUpdatedNoteRecord) throws
     func updateAnchoredNote(_ record: SyncConvergenceAnchoredUpdatedNoteRecord) throws
+    func updateStructuralMarks(
+        _ record: SyncConvergenceStructuralMarkUpdatedNoteRecord
+    ) throws
     func loadTitleWinner(noteID: UUID) throws -> SyncConvergenceTitleWinnerProjection?
     func insertOrUpdateTitleWinner(_ record: SyncConvergenceTitleWinnerRecord) throws
     func loadIncorporatedBatch(batchID: UUID) throws -> SyncConvergenceIncorporatedRootProjection?
@@ -676,6 +712,12 @@ protocol SyncConvergencePersistenceTransaction {
 
 extension SyncConvergencePersistenceTransaction {
     func updateAnchoredNote(_ record: SyncConvergenceAnchoredUpdatedNoteRecord) throws {
+        throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: record.noteID)
+    }
+
+    func updateStructuralMarks(
+        _ record: SyncConvergenceStructuralMarkUpdatedNoteRecord
+    ) throws {
         throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: record.noteID)
     }
 }

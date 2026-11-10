@@ -563,6 +563,49 @@ enum NoteSequenceStateFullBodyIntegration {
         )
     }
 
+    static func stagePermanentDeletion(
+        of note: Note,
+        in context: ModelContext
+    ) throws {
+        try requireManaged(note, in: context)
+        if let record = try fetchRecord(noteID: note.id, in: context) {
+            context.delete(record)
+        }
+        context.delete(note)
+    }
+
+    static func permanentlyDeleteNoteAndStructuralAuthority(
+        _ note: Note,
+        in context: ModelContext,
+        saveContext: (ModelContext) throws -> Void = { try $0.save() }
+    ) throws {
+        do {
+            try stagePermanentDeletion(of: note, in: context)
+            try saveContext(context)
+        } catch {
+            context.rollback()
+            throw error
+        }
+    }
+
+    @discardableResult
+    static func stageOrphanedStructuralAuthorityCleanup(
+        in context: ModelContext
+    ) throws -> Set<UUID> {
+        let noteIDs = Set(
+            try context.fetch(FetchDescriptor<Note>()).map(\.id)
+        )
+        let records = try context.fetch(
+            FetchDescriptor<NoteSequenceStateRecord>()
+        )
+        var removed: Set<UUID> = []
+        for record in records where !noteIDs.contains(record.noteID) {
+            removed.insert(record.noteID)
+            context.delete(record)
+        }
+        return removed
+    }
+
     static func replaceBody(
         of note: Note,
         with authoritativeBody: String,

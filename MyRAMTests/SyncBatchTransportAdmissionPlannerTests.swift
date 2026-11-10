@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import Foundation
 import MultipeerConnectivity
 import XCTest
@@ -115,6 +116,107 @@ final class SyncBatchTransportAdmissionPlannerTests: XCTestCase {
         )
     }
 
+    func testV3AdmissionAndRoutingMatrix() {
+        XCTAssertEqual(
+            SyncBatchTransportAdmissionPlanner.durableAdmission(
+                deliveryRepresentation: .structuralMarkV3,
+                activationEnabled: true,
+                structuralMarkEnabled: false
+            ),
+            .reject(.structuralMarkPayloadDisabled)
+        )
+        XCTAssertEqual(
+            SyncBatchTransportAdmissionPlanner.durableAdmission(
+                deliveryRepresentation: .structuralMarkV3,
+                activationEnabled: true,
+                structuralMarkEnabled: true
+            ),
+            .admitV3
+        )
+        XCTAssertEqual(
+            SyncBatchTransportAdmissionPlanner.outboundRouting(
+                deliveryRepresentation: .structuralMarkV3,
+                activationEnabled: true,
+                structuralMarkEnabled: false,
+                connectedPeers: [peer(index: 0, supportsStructuralMarks: true)]
+            ),
+            .withhold(.structuralMarkPayloadDisabled)
+        )
+        XCTAssertEqual(
+            SyncBatchTransportAdmissionPlanner.outboundRouting(
+                deliveryRepresentation: .structuralMarkV3,
+                activationEnabled: true,
+                structuralMarkEnabled: true,
+                connectedPeers: []
+            ),
+            .withhold(.noConnectedPeers)
+        )
+        XCTAssertEqual(
+            SyncBatchTransportAdmissionPlanner.outboundRouting(
+                deliveryRepresentation: .structuralMarkV3,
+                activationEnabled: true,
+                structuralMarkEnabled: true,
+                connectedPeers: [peer(index: 0)]
+            ),
+            .withhold(.peerLacksExplicitCurrentSessionStructuralMarkSupport)
+        )
+        XCTAssertEqual(
+            SyncBatchTransportAdmissionPlanner.outboundRouting(
+                deliveryRepresentation: .structuralMarkV3,
+                activationEnabled: true,
+                structuralMarkEnabled: true,
+                connectedPeers: [
+                    peer(index: 0),
+                    peer(index: 1, supportsStructuralMarks: true)
+                ]
+            ),
+            .sendToPeer(transportIndex: 1)
+        )
+        XCTAssertEqual(
+            SyncBatchTransportAdmissionPlanner.outboundRouting(
+                deliveryRepresentation: .structuralMarkV3,
+                activationEnabled: true,
+                structuralMarkEnabled: true,
+                connectedPeers: [
+                    peer(index: 0, supportsStructuralMarks: true),
+                    peer(index: 1, supportsStructuralMarks: true)
+                ]
+            ),
+            .withhold(.requiresExactlyOneStructuralMarkCapablePeer)
+        )
+
+        XCTAssertEqual(
+            SyncBatchTransportAdmissionPlanner.inboundAdmission(
+                schemaVersion: .v3,
+                activationEnabled: true,
+                hasExplicitCurrentSessionV2Support: true,
+                hasExplicitCurrentSessionStructuralMarkSupport: false,
+                structuralMarkEnabled: true
+            ),
+            .reject(.peerLacksExplicitCurrentSessionStructuralMarkSupport)
+        )
+        XCTAssertEqual(
+            SyncBatchTransportAdmissionPlanner.inboundAdmission(
+                schemaVersion: .v3,
+                activationEnabled: true,
+                hasExplicitCurrentSessionV2Support: true,
+                hasExplicitCurrentSessionStructuralMarkSupport: true,
+                structuralMarkEnabled: false
+            ),
+            .reject(.structuralMarkPayloadDisabled)
+        )
+        XCTAssertEqual(
+            SyncBatchTransportAdmissionPlanner.inboundAdmission(
+                schemaVersion: .v3,
+                activationEnabled: true,
+                hasExplicitCurrentSessionV2Support: true,
+                hasExplicitCurrentSessionStructuralMarkSupport: true,
+                structuralMarkEnabled: true
+            ),
+            .admitV3
+        )
+    }
+
     func testMixedRoutingIsWithheld() {
         XCTAssertEqual(
             SyncBatchTransportAdmissionPlanner.outboundRouting(
@@ -164,12 +266,14 @@ final class SyncBatchTransportAdmissionPlannerTests: XCTestCase {
     private func peer(
         index: Int,
         deviceID: String? = nil,
-        supportsV2: Bool = false
+        supportsV2: Bool = false,
+        supportsStructuralMarks: Bool = false
     ) -> SyncBatchTransportPeer {
         SyncBatchTransportPeer(
             transportIndex: index,
             stableDeviceID: deviceID ?? "peer-\(index)",
-            hasExplicitCurrentSessionV2Support: supportsV2
+            hasExplicitCurrentSessionV2Support: supportsV2,
+            hasExplicitCurrentSessionStructuralMarkSupport: supportsStructuralMarks
         )
     }
 }
@@ -290,11 +394,154 @@ final class MYR229QueueDrainRegressionTests: XCTestCase {
             [historical.id, newer.id]
         )
     }
+    func testIncapablePeerWithheldStructuralMarksDoNotBlockNewerCompatibleBatch() async throws {
+        let peer = MCPeerID(displayName: "Remote|myr-227-incapable-ios")
+        let transport = MYR229RecordingTransport(connectedPeers: [peer])
+        let controller = MyRAMSyncController(
+            unsentBatchQueueFileURL: nil,
+            pendingChangesFileURL: nil,
+            startsNetworking: false,
+            transport: transport
+        )
+        controller.recordBootstrapCapabilityForTesting(
+            nil,
+            forPeerDeviceID: "myr-227-incapable-ios"
+        )
+        let actorID = UUID(
+            uuidString: "22700000-0000-0000-0000-000000000901"
+        )!
+        let mark = try SyncTextMarkOperation(
+            operationID: SyncOperationID(
+                deviceID: actorID,
+                localCounter: 1
+            ),
+            logicalClock: 1,
+            key: .bold,
+            assignment: .enabled,
+            startAnchor: .empty,
+            endAnchor: .empty
+        )
+        let markBatch = SyncBatch(
+            id: UUID(uuidString: "22700000-0000-0000-0000-000000000902")!,
+            originDeviceID: actorID,
+            createdAt: Date(timeIntervalSince1970: 227_902),
+            batchSequence: 1,
+            changes: [
+                .noteStructuralMarksChanged(
+                    SyncBatchNoteStructuralMarksChangedChange(
+                        noteID: UUID(
+                            uuidString: "22700000-0000-0000-0000-000000000903"
+                        )!,
+                        operations: [mark],
+                        modifiedAt: Date(timeIntervalSince1970: 227_902)
+                    )
+                )
+            ]
+        )
+        let compatibleBatch = SyncBatch(
+            id: UUID(uuidString: "22700000-0000-0000-0000-000000000904")!,
+            originDeviceID: actorID,
+            createdAt: Date(timeIntervalSince1970: 227_904),
+            batchSequence: 2,
+            changes: []
+        )
+
+        try await controller.acceptLocalBatch(markBatch)
+        XCTAssertTrue(transport.sentBatchIDs.isEmpty)
+
+        try await controller.acceptLocalBatch(compatibleBatch)
+
+        XCTAssertEqual(transport.sentBatchIDs, [compatibleBatch.id])
+        XCTAssertEqual(
+            controller.unsentBatchQueueSnapshot().pendingBatches.map(\.id),
+            [markBatch.id, compatibleBatch.id]
+        )
+
+        let acknowledgementData = try MultipeerSyncMessageCoding.encode(
+            kind: .batchAcknowledgement,
+            payload: JSONEncoder().encode(
+                SyncBatchAcknowledgement(batchID: compatibleBatch.id)
+            )
+        )
+        let dummySession = MCSession(
+            peer: MCPeerID(displayName: "Local|local-device")
+        )
+        controller.session(
+            dummySession,
+            didReceive: acknowledgementData,
+            fromPeer: peer
+        )
+        await Task.yield()
+
+        XCTAssertEqual(
+            controller.unsentBatchQueueSnapshot().pendingBatches.map(\.id),
+            [markBatch.id]
+        )
+    }
 }
 
 @MainActor
 final class MYR232DeliveryLifecycleTests: XCTestCase {
     private let peer = MCPeerID(displayName: "Remote|myr-232-peer")
+
+    func testPendingStructuralMarkBatchSurvivesRestartAndSendsAfterCapabilityAppears() async throws {
+        let unsentURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR227-v3-restart-\(UUID().uuidString).json")
+        let firstPendingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR227-v3-pending-1-\(UUID().uuidString).json")
+        let secondPendingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR227-v3-pending-2-\(UUID().uuidString).json")
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: unsentURL)
+            try? FileManager.default.removeItem(at: firstPendingURL)
+            try? FileManager.default.removeItem(at: secondPendingURL)
+        }
+        let batch = try makeStructuralMarkBatch(idSuffix: 232_701)
+        let firstTransport = MYR229RecordingTransport(connectedPeers: [peer])
+        let firstController = MyRAMSyncController(
+            unsentBatchQueueFileURL: unsentURL,
+            pendingChangesFileURL: firstPendingURL,
+            startsNetworking: false,
+            transport: firstTransport
+        )
+        firstController.recordBootstrapCapabilityForTesting(
+            nil,
+            forPeerDeviceID: "myr-232-peer"
+        )
+
+        try await firstController.acceptLocalBatch(batch)
+
+        XCTAssertTrue(firstTransport.sentBatchIDs.isEmpty)
+        XCTAssertEqual(
+            firstController.unsentBatchQueueSnapshot().pendingBatches,
+            [batch]
+        )
+
+        let secondTransport = MYR229RecordingTransport(connectedPeers: [peer])
+        let secondController = MyRAMSyncController(
+            unsentBatchQueueFileURL: unsentURL,
+            pendingChangesFileURL: secondPendingURL,
+            startsNetworking: false,
+            transport: secondTransport
+        )
+        secondController.recordBootstrapCapabilityForTesting(
+            nil,
+            forPeerDeviceID: "myr-232-peer"
+        )
+        secondController.recordStructuralMarkCapabilityForTesting(
+            SyncBatchPeerCapabilityCodec.structuralMarkDiscoveryInfoValue,
+            forPeerDeviceID: "myr-232-peer"
+        )
+
+        secondController.flushAllOutboundWork()
+        await waitUntil { secondTransport.sentBatchIDs == [batch.id] }
+
+        XCTAssertEqual(secondTransport.sentBatchIDs, [batch.id])
+        XCTAssertEqual(
+            secondController.unsentBatchQueueSnapshot().pendingBatches,
+            [batch]
+        )
+    }
 
     func testRepeatedFlushWhileSendIsInFlightDoesNotMultiplyDelivery() async throws {
         let transport = MYR229RecordingTransport(connectedPeers: [peer])
@@ -435,6 +682,47 @@ final class MYR232DeliveryLifecycleTests: XCTestCase {
         )
         controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "myr-232-peer")
         return controller
+    }
+
+    private func makeStructuralMarkBatch(idSuffix: Int) throws -> SyncBatch {
+        let actorID = UUID(
+            uuidString: "22700000-0000-0000-0000-000000000950"
+        )!
+        let operation = try SyncTextMarkOperation(
+            operationID: SyncOperationID(
+                deviceID: actorID,
+                localCounter: UInt64(idSuffix)
+            ),
+            logicalClock: UInt64(idSuffix),
+            key: .italic,
+            assignment: .enabled,
+            startAnchor: .empty,
+            endAnchor: .empty
+        )
+        return SyncBatch(
+            id: UUID(
+                uuidString: String(
+                    format: "22700000-0000-0000-0000-%012d",
+                    idSuffix
+                )
+            )!,
+            originDeviceID: actorID,
+            createdAt: Date(timeIntervalSince1970: TimeInterval(idSuffix)),
+            batchSequence: UInt64(idSuffix),
+            changes: [
+                .noteStructuralMarksChanged(
+                    SyncBatchNoteStructuralMarksChangedChange(
+                        noteID: UUID(
+                            uuidString: "22700000-0000-0000-0000-000000000951"
+                        )!,
+                        operations: [operation],
+                        modifiedAt: Date(
+                            timeIntervalSince1970: TimeInterval(idSuffix)
+                        )
+                    )
+                )
+            ]
+        )
     }
 
     private func makeBatch(idSuffix: Int) -> SyncBatch {

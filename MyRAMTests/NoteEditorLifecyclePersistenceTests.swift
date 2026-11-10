@@ -351,7 +351,7 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
             resumesPendingConvergenceOnInit: false
         )
 
-        XCTAssertTrue(viewModel.commitNoteEdit(
+        XCTAssertFalse(viewModel.commitNoteEdit(
             note,
             title: "Same title",
             content: "Same body",
@@ -366,7 +366,7 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         XCTAssertEqual(persisted.modifiedAt, committedModifiedAt)
         XCTAssertEqual(persisted.title, "Same title")
         XCTAssertEqual(persisted.content, "Same body")
-        XCTAssertEqual(persisted.richTextContentData, Data("presentation-only".utf8))
+        XCTAssertNil(persisted.richTextContentData)
     }
 
     func testFormattingOnlyProductionCommitAdvancesMarksWithoutRecentTextGate() async throws {

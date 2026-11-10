@@ -36,12 +36,15 @@ enum PendingSyncRecoveryStatus: Equatable {
 private struct PreparedLocalNoteEdit {
     let titleChange: SyncConvergenceCapturedLocalChange?
     let bodyChanges: [SyncConvergenceCapturedLocalChange]
+    let structuralMarkChange: SyncConvergenceCapturedLocalChange?
     let structuralSnapshot: NoteSequenceStateMutationSnapshot?
     let finalStructuralState: SyncTextSequenceState?
     let finalStructuralMarkState: SyncTextMarkState?
 
     var capturedChanges: [SyncConvergenceCapturedLocalChange] {
-        (titleChange.map { [$0] } ?? []) + bodyChanges
+        (titleChange.map { [$0] } ?? [])
+            + bodyChanges
+            + (structuralMarkChange.map { [$0] } ?? [])
     }
 }
 
@@ -338,7 +341,8 @@ final class NotesViewModel: ObservableObject {
                 )?.lifecycle
             }
             bootstrapController.onPrepareLocalOwnershipForBootstrap = { [weak self] in
-                await self?.prepareLocalOwnershipForBootstrap()
+                guard let self else { return .retryablePending }
+                return await self.prepareLocalOwnershipForBootstrap()
             }
             bootstrapController.localBootstrapOwnershipSnapshotProvider = { [weak self] in
                 self?.pendingLocalConvergenceBatches.snapshot()
@@ -397,8 +401,13 @@ final class NotesViewModel: ObservableObject {
         )
         syncBatchReadyTask = Task { [weak self, syncBatchAccumulator] in
             let stream = await syncBatchAccumulator.readyBatches()
-            for await obligation in stream {
-                await self?.handleReadyLocalBatch(obligation)
+            for await result in stream {
+                switch result {
+                case .success(let collection):
+                    await self?.handleReadyLocalObligations(collection)
+                case .failure:
+                    self?.syncBatchErrorMessage = Self.capturePreparationFailureMessage
+                }
             }
         }
         syncConflicts = syncConflictService.activeConflicts()
@@ -483,7 +492,7 @@ final class NotesViewModel: ObservableObject {
                 }
                 try self.pendingLocalConvergenceBatches.replacePendingObligations(obligations)
             },
-            flushReadyLocalBatch: { nil }
+            flushReadyLocalBatches: { [] }
         )
     }
 
@@ -510,7 +519,7 @@ final class NotesViewModel: ObservableObject {
         guard await editorLifecyclePersistence.awaitAllDurableCompletion() else {
             throw PendingSyncRecoveryCoordinator.RecoveryError.pendingLocalEditsNotDurable
         }
-        await prepareLocalOwnershipForBootstrap()
+        _ = try await capturePendingLocalBatchesForRecovery()
         let migrator = await NoteSequenceStateBootstrapMigrator(container: context.container)
         guard let snapshot = try await migrator.validatedDivergenceSnapshot(noteID: noteID) else {
             throw NoteLocalDivergenceEvidenceStoreError.staleSnapshot
@@ -564,7 +573,7 @@ final class NotesViewModel: ObservableObject {
         guard await editorLifecyclePersistence.awaitAllDurableCompletion() else {
             throw PendingSyncRecoveryCoordinator.RecoveryError.pendingLocalEditsNotDurable
         }
-        await prepareLocalOwnershipForBootstrap()
+        _ = try await capturePendingLocalBatchesForRecovery()
         // An isolated SwiftData resolution cannot invalidate uncommitted
         // main-context changes. Flushes must be owned by their normal editor
         // lifecycle rather than silently rolled back by recovery.
@@ -1934,11 +1943,29 @@ final class NotesViewModel: ObservableObject {
 
     func permanentlyDeleteNote(_ note: Note) {
         guard mayMutateNote(note) else { return }
-        removeUndoHistoryReferencingDeletedNote(noteID: note.id)
-        context.delete(note)
-        try? context.save()
+        let noteID = note.id
+        do {
+            try NoteSequenceStateFullBodyIntegration
+                .permanentlyDeleteNoteAndStructuralAuthority(
+                    note,
+                    in: context
+                )
+        } catch {
+            syncBatchErrorMessage =
+                "Unable to permanently delete the note and its structural state."
+            return
+        }
+
+        removeUndoHistoryReferencingDeletedNote(noteID: noteID)
+        do {
+            try pendingLocalConvergenceBatches
+                .removeTerminalStructuralMarkObligations(for: noteID)
+        } catch {
+            syncBatchErrorMessage =
+                "The note was deleted, but pending formatting cleanup must retry."
+        }
         refreshCurrentFolderContent()
-        if currentNote?.id == note.id {
+        if currentNote?.id == noteID {
             currentNote = nil
             UserDefaults.standard.removeObject(forKey: "lastNoteID")
         }
@@ -2336,6 +2363,7 @@ final class NotesViewModel: ObservableObject {
         return PreparedLocalNoteEdit(
             titleChange: titleChange,
             bodyChanges: bodyChanges,
+            structuralMarkChange: nil,
             structuralSnapshot: nil,
             finalStructuralState: nil,
             finalStructuralMarkState: nil
@@ -2369,20 +2397,38 @@ final class NotesViewModel: ObservableObject {
             operationIDReserver: operationIDReserver
         )
         let finalMarkState: SyncTextMarkState
+        let structuralMarkChange: SyncConvergenceCapturedLocalChange?
         if let structuralFormattingProjection {
-            finalMarkState = try await NoteStructuralFormattingEditPlanner.prepare(
+            let formattingEdit = try await NoteStructuralFormattingEditPlanner.prepare(
                 sequence: capture.finalState,
                 currentMarkState: snapshot.markState,
                 desiredProjection: structuralFormattingProjection,
                 operationIDReserver: operationIDReserver
-            ).finalMarkState
+            )
+            finalMarkState = formattingEdit.finalMarkState
+            if formattingEdit.emittedOperations.isEmpty {
+                structuralMarkChange = nil
+            } else {
+                structuralMarkChange = SyncConvergenceCapturedLocalChange(
+                    change: .noteStructuralMarksChanged(
+                        SyncBatchNoteStructuralMarksChangedChange(
+                            noteID: note.id,
+                            operations: formattingEdit.emittedOperations,
+                            modifiedAt: modifiedAt
+                        )
+                    ),
+                    evidence: nil
+                )
+            }
         } else {
             finalMarkState = snapshot.markState
+            structuralMarkChange = nil
         }
 
         return PreparedLocalNoteEdit(
             titleChange: titleChange,
             bodyChanges: capture.capturedChanges,
+            structuralMarkChange: structuralMarkChange,
             structuralSnapshot: snapshot,
             finalStructuralState: capture.finalState,
             finalStructuralMarkState: finalMarkState
@@ -2390,7 +2436,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func recordPreparedLocalNoteEdit(_ edit: PreparedLocalNoteEdit) {
-        edit.capturedChanges.forEach(recordSyncBatchChange)
+        recordSyncBatchChanges(edit.capturedChanges)
     }
 
     private func legacyIncomingBodyMutationNoteIDs(in changes: [SyncChange]) -> Set<UUID> {
@@ -2418,18 +2464,24 @@ final class NotesViewModel: ObservableObject {
                 return payload.noteID
             case .noteBodyReconciled(let payload):
                 return payload.noteID
-            case .noteTitleChanged, .noteLifecycleChanged:
+            case .noteTitleChanged, .noteStructuralMarksChanged, .noteLifecycleChanged:
                 return nil
             }
         })
     }
 
     private func recordSyncBatchChange(_ capturedChange: SyncConvergenceCapturedLocalChange) {
-        guard !isApplyingRemoteSyncChange else { return }
+        recordSyncBatchChanges([capturedChange])
+    }
+
+    private func recordSyncBatchChanges(
+        _ capturedChanges: [SyncConvergenceCapturedLocalChange]
+    ) {
+        guard !isApplyingRemoteSyncChange, !capturedChanges.isEmpty else { return }
         nextSyncBatchCaptureID &+= 1
         let captureID = nextSyncBatchCaptureID
         let task = Task { [weak self, syncBatchAccumulator] in
-            await syncBatchAccumulator.record(capturedChange)
+            await syncBatchAccumulator.record(capturedChanges)
             if let issue = await syncBatchAccumulator.takeLastSequenceReservationIssue() {
                 self?.syncBatchErrorMessage = SyncBatchSequenceIssueDescription.message(for: issue)
             }
@@ -3091,41 +3143,144 @@ final class NotesViewModel: ObservableObject {
         await refreshPendingSyncStatusForLocalConvergenceMutation?()
     }
 
-    func capturePendingLocalBatchForRecovery() async -> SyncBatchID? {
-        guard let obligation = await syncBatchAccumulator.takePendingBatchNow() else {
-            await resumePendingConvergencePresentation()
-            return nil
-        }
-        let outcome = await syncConvergenceRuntime.submitLocalObligation(obligation)
-        await handleConvergenceRuntimeOutcome(outcome)
-        await resumePendingConvergencePresentation()
-        return obligation.id
+    private enum PreparedLocalAdmissionError: Error {
+        case retryable
+        case terminal
     }
 
-    private func prepareLocalOwnershipForBootstrap() async {
-        while true {
+    private static let capturePreparationFailureMessage =
+        "Nearby sync cannot prepare pending local changes. Local edits remain retained; sync recovery is blocked."
+
+    private func durablyAdmitPreparedLocalCollection(
+        _ collection: SyncPreparedLocalObligationCollection
+    ) async -> SyncConvergenceLocalObligationCollectionAdmissionResult {
+        let result = await syncConvergenceRuntime
+            .admitLocalObligationCollection(collection)
+        switch result {
+        case .admitted:
+            guard await syncBatchAccumulator.commitPreparedCollection(
+                token: collection.token
+            ) else {
+                return .terminal(.blocked(
+                    SyncBatchDrainFailure(
+                        batchID: collection.primary.id,
+                        kind: .queuePersistence
+                    )
+                ))
+            }
+        case .retryableCapacity, .retryablePersistenceFailure, .terminal:
+            await syncBatchAccumulator.reportPreparedCollectionAdmissionResult(
+                token: collection.token,
+                result: result
+            )
+        }
+        return result
+    }
+
+    func capturePendingLocalBatchesForRecovery() async throws -> Set<SyncBatchID> {
+        var capturedBatchIDs: Set<SyncBatchID> = []
+        // Recovery needs durable capture ownership, independently of whether
+        // suspended transport can drain. Never route work just to inspect it.
+        for _ in 0..<3 {
             let captureBoundary = nextSyncBatchCaptureID
-            let pendingCaptureTasks = syncBatchCaptureTasks
+            let tasks = syncBatchCaptureTasks
                 .filter { $0.key <= captureBoundary }
                 .sorted { $0.key < $1.key }
                 .map(\.value)
-            for task in pendingCaptureTasks {
-                await task.value
+            for task in tasks { await task.value }
+            let pending: SyncPreparedLocalObligationCollection?
+            do {
+                pending = try await syncBatchAccumulator.takePendingCollectionNow()
+            } catch {
+                syncBatchErrorMessage = Self.capturePreparationFailureMessage
+                throw error
             }
-
-            await resumePendingConvergencePresentation()
-            if let obligation = await syncBatchAccumulator.takePendingBatchNow() {
-                await handleReadyLocalBatch(obligation)
-                continue
+            if let collection = pending {
+                switch await durablyAdmitPreparedLocalCollection(collection) {
+                case .admitted:
+                    capturedBatchIDs.formUnion(collection.batchIDs)
+                case .retryableCapacity, .retryablePersistenceFailure:
+                    throw PreparedLocalAdmissionError.retryable
+                case .terminal(let outcome):
+                    await handleConvergenceRuntimeOutcome(outcome)
+                    throw PreparedLocalAdmissionError.terminal
+                }
             }
-
-            guard captureBoundary == nextSyncBatchCaptureID else { continue }
-            return
+            if captureBoundary == nextSyncBatchCaptureID { return capturedBatchIDs }
         }
+        throw PendingSyncRecoveryCoordinator.RecoveryError.pendingLocalEditsNotDurable
+    }
+
+    private func prepareLocalOwnershipForBootstrap()
+        async -> SyncBootstrapLocalOwnershipPreparationResult
+    {
+        let captureBoundary = nextSyncBatchCaptureID
+        let pendingCaptureTasks = syncBatchCaptureTasks
+            .filter { $0.key <= captureBoundary }
+            .sorted { $0.key < $1.key }
+            .map(\.value)
+        for task in pendingCaptureTasks {
+            await task.value
+        }
+
+        let pending: SyncPreparedLocalObligationCollection?
+        do {
+            pending = try await syncBatchAccumulator.takePendingCollectionNow()
+        } catch {
+            syncBatchErrorMessage = Self.capturePreparationFailureMessage
+            return .terminal(.blocked(SyncBatchDrainFailure(
+                batchID: await syncBatchAccumulator.pendingBatchID(),
+                kind: .invalidMergePlan
+            )))
+        }
+        if let collection = pending {
+            switch await durablyAdmitPreparedLocalCollection(collection) {
+            case .admitted:
+                break
+            case .retryableCapacity, .retryablePersistenceFailure:
+                return .retryablePending
+            case .terminal(let outcome):
+                await handleConvergenceRuntimeOutcome(outcome)
+                return .terminal(outcome)
+            }
+        }
+
+        let outcome = await syncConvergenceRuntime.resumePendingWork()
+        await handleConvergenceRuntimeOutcome(outcome)
+        switch outcome {
+        case .blocked(let failure) where failure.kind == .queueCapacity:
+            // The bootstrap snapshot freezes both queues, including local
+            // obligations waiting for unsent capacity or a peer baseline.
+            break
+        case .blocked, .quarantined:
+            return .terminal(outcome)
+        case .pending, .alreadyDraining:
+            return .retryablePending
+        case .drained, .deferred:
+            break
+        }
+
+        let remaining: SyncPreparedLocalObligationCollection?
+        do {
+            remaining = try await syncBatchAccumulator.takePendingCollectionNow()
+        } catch {
+            syncBatchErrorMessage = Self.capturePreparationFailureMessage
+            return .terminal(.blocked(SyncBatchDrainFailure(
+                batchID: await syncBatchAccumulator.pendingBatchID(),
+                kind: .invalidMergePlan
+            )))
+        }
+        guard captureBoundary == nextSyncBatchCaptureID,
+              remaining == nil else {
+            return .retryablePending
+        }
+        return .ready
     }
 
 #if DEBUG
-    func prepareLocalOwnershipForBootstrapForTesting() async {
+    func prepareLocalOwnershipForBootstrapForTesting()
+        async -> SyncBootstrapLocalOwnershipPreparationResult
+    {
         await prepareLocalOwnershipForBootstrap()
     }
 #endif
@@ -3142,15 +3297,20 @@ final class NotesViewModel: ObservableObject {
                 self.map { FileBackedSyncConvergenceLocalObligationQueueSnapshot(
                     obligations: $0.pendingLocalConvergenceBatches.pendingObligations,
                     health: $0.pendingLocalConvergenceBatches.snapshot().health
-                ) } ?? FileBackedSyncConvergenceLocalObligationQueueSnapshot(obligations: [], health: .fileMissing)
+                ) } ?? FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: [], health: .readFailed("Local queue owner unavailable")
+                )
             },
             replaceLocalObligations: { [weak self] obligations in
                 guard let self else { throw PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed }
                 try self.pendingLocalConvergenceBatches.replacePendingObligations(obligations)
                 await self.refreshPendingSyncStatusForLocalConvergenceMutation?()
             },
-            flushReadyLocalBatch: { [weak self] in
-                await self?.capturePendingLocalBatchForRecovery()
+            flushReadyLocalBatches: { [weak self] in
+                guard let self else {
+                    throw PendingSyncRecoveryCoordinator.RecoveryError.pendingLocalEditsNotDurable
+                }
+                return try await self.capturePendingLocalBatchesForRecovery()
             }
         )
 
@@ -3187,21 +3347,23 @@ final class NotesViewModel: ObservableObject {
         guard await editorLifecyclePersistence.awaitAllDurableCompletion() else {
             throw PendingSyncRecoveryCoordinator.RecoveryError.pendingLocalEditsNotDurable
         }
-        await prepareLocalOwnershipForBootstrap()
+        _ = try await capturePendingLocalBatchesForRecovery()
         let coordinator = PendingSyncRecoveryCoordinator(
             queueAdmin: syncController,
             localQueueSnapshot: { [weak self] in
                 self.map { FileBackedSyncConvergenceLocalObligationQueueSnapshot(
                     obligations: $0.pendingLocalConvergenceBatches.pendingObligations,
                     health: $0.pendingLocalConvergenceBatches.snapshot().health
-                ) } ?? FileBackedSyncConvergenceLocalObligationQueueSnapshot(obligations: [], health: .fileMissing)
+                ) } ?? FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: [], health: .readFailed("Local queue owner unavailable")
+                )
             },
             replaceLocalObligations: { [weak self] obligations in
                 guard let self else { throw PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed }
                 try self.pendingLocalConvergenceBatches.replacePendingObligations(obligations)
                 await self.refreshPendingSyncStatusForLocalConvergenceMutation?()
             },
-            flushReadyLocalBatch: { nil },
+            flushReadyLocalBatches: { [] },
             journalStore: journalStore
         )
         try await coordinator.rollbackIfNeededOnLaunch()
@@ -3225,7 +3387,7 @@ final class NotesViewModel: ObservableObject {
              SyncRecoveryStateBuilderError.invalidLegacyEntityID,
              SyncRecoveryStateBuilderError.targetCoverageMismatch:
             return "Reset is blocked because some queued sync work cannot be safely represented."
-        case PendingSyncRecoveryCoordinator.RecoveryError.capturedBatchNotDurable:
+        case PendingSyncRecoveryCoordinator.RecoveryError.capturedBatchesNotDurable:
             return "Reset is blocked because the latest edit was not saved into the pending sync queue."
         case PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed:
             return "Reset failed and rollback could not finish. Restart MyRAM before syncing again."
@@ -3234,10 +3396,21 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    private func handleReadyLocalBatch(_ obligation: SyncConvergenceLocalObligation) async {
+    private func handleReadyLocalObligations(
+        _ collection: SyncPreparedLocalObligationCollection
+    ) async {
         guard syncController?.applicationSyncEnabled != false else { return }
-        let outcome = await syncConvergenceRuntime.submitLocalObligation(obligation)
-        await handleConvergenceRuntimeOutcome(outcome)
+        switch await durablyAdmitPreparedLocalCollection(collection) {
+        case .admitted:
+            let outcome = await syncConvergenceRuntime.resumePendingWork()
+            await handleConvergenceRuntimeOutcome(outcome)
+        case .retryableCapacity, .retryablePersistenceFailure:
+            syncBatchErrorMessage =
+                "Nearby sync is waiting to durably save the latest local changes."
+            await refreshPendingSyncStatusForLocalConvergenceMutation?()
+        case .terminal(let outcome):
+            await handleConvergenceRuntimeOutcome(outcome)
+        }
     }
 
     func resumePendingConvergencePresentationIfNeeded() {
@@ -3292,7 +3465,8 @@ final class NotesViewModel: ObservableObject {
                 return SyncBatchDrainFailureClassifier.userMessage(
                     for: SyncBatchDrainFailure(batchID: item.batchID, kind: .mismatchedBase)
                 )
-            case .unsupportedReconciliation, .historyPressure, .missingFolderDependency:
+            case .unsupportedReconciliation, .historyPressure, .missingFolderDependency,
+                 .structuralMarkDependency:
                 continue
                 }
             case .anchoredDependency(_), .legacyLocalEvidenceStale,
@@ -4119,14 +4293,46 @@ extension NotesViewModel: SyncConvergenceIncomingLocalBoundaryAdapter {
 
         for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             guard await syncBatchAccumulator.containsPendingBodyChange(for: noteID) else { continue }
-            guard let obligation = await syncBatchAccumulator.takePendingObligationIfAffecting(noteID: noteID) else {
-                return nil
+            let collection: SyncPreparedLocalObligationCollection
+            do {
+                guard let prepared = try await syncBatchAccumulator.takePendingCollectionIfAffecting(
+                    noteID: noteID
+                ) else { return nil }
+                collection = prepared
+            } catch {
+                syncBatchErrorMessage = Self.capturePreparationFailureMessage
+                return .blocked(SyncBatchDrainFailure(
+                    batchID: await syncBatchAccumulator.pendingBatchID(),
+                    kind: .invalidMergePlan
+                ))
             }
-            let outcome = await syncConvergenceRuntime.admitPendingLocalObligationForIncomingMutation(obligation)
-            switch outcome {
-            case .ready, .evidenceRegistered:
-                continue
-            case .cannotProceed(let outcome):
+            switch await durablyAdmitPreparedLocalCollection(collection) {
+            case .admitted:
+                let affectedNoteIDs = Set(
+                    collection.obligations.flatMap { $0.changes.map(\.noteID) }
+                )
+                let outcome = await syncConvergenceRuntime
+                    .admitQueuedLocalObligationsForIncomingMutation(
+                        affecting: affectedNoteIDs
+                    )
+                if case .cannotProceed(let runtimeOutcome) = outcome {
+                    return runtimeOutcome
+                }
+            case .retryableCapacity:
+                return .blocked(
+                    SyncBatchDrainFailure(
+                        batchID: collection.primary.id,
+                        kind: .queueCapacity
+                    )
+                )
+            case .retryablePersistenceFailure:
+                return .blocked(
+                    SyncBatchDrainFailure(
+                        batchID: collection.primary.id,
+                        kind: .queuePersistence
+                    )
+                )
+            case .terminal(let outcome):
                 return outcome
             }
         }
@@ -4138,10 +4344,47 @@ extension NotesViewModel: SyncConvergenceIncomingLocalBoundaryAdapter {
     ) async -> SyncConvergenceIncomingLocalBoundaryPreparation {
         for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             guard await syncBatchAccumulator.containsPendingBodyChange(for: noteID) else { continue }
-            guard let obligation = await syncBatchAccumulator.takePendingObligationIfAffecting(noteID: noteID) else {
-                return .failed(.boundaryInvariantViolation(noteID: noteID))
+            let collection: SyncPreparedLocalObligationCollection
+            do {
+                guard let prepared = try await syncBatchAccumulator.takePendingCollectionIfAffecting(
+                    noteID: noteID
+                ) else {
+                    return .failed(.boundaryInvariantViolation(noteID: noteID))
+                }
+                collection = prepared
+            } catch {
+                syncBatchErrorMessage = Self.capturePreparationFailureMessage
+                return .cannotProceed(.blocked(SyncBatchDrainFailure(
+                    batchID: await syncBatchAccumulator.pendingBatchID(),
+                    kind: .invalidMergePlan
+                )))
             }
-            return .localObligation(obligation)
+            switch await durablyAdmitPreparedLocalCollection(collection) {
+            case .admitted:
+                return .durablyAdmittedLocalObligations(
+                    noteIDs: Set(
+                        collection.obligations.flatMap {
+                            $0.changes.map(\.noteID)
+                        }
+                    )
+                )
+            case .retryableCapacity:
+                return .cannotProceed(.blocked(
+                    SyncBatchDrainFailure(
+                        batchID: collection.primary.id,
+                        kind: .queueCapacity
+                    )
+                ))
+            case .retryablePersistenceFailure:
+                return .cannotProceed(.blocked(
+                    SyncBatchDrainFailure(
+                        batchID: collection.primary.id,
+                        kind: .queuePersistence
+                    )
+                ))
+            case .terminal(let outcome):
+                return .cannotProceed(outcome)
+            }
         }
         return .ready
     }

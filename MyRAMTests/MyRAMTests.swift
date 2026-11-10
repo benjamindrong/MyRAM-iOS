@@ -1,4 +1,5 @@
 import XCTest
+import AnchoredSequenceCore
 import NearbySyncCore
 import SwiftData
 import SwiftUI
@@ -2564,10 +2565,11 @@ final class MyRAMTests: XCTestCase {
 
         let outcome = await runtime.submitLocalObligation(obligation)
 
-        guard case .blocked(let failure) = outcome else {
-            return XCTFail("Expected invalid newly submitted captured obligation to be blocked")
+        guard case .quarantined(let work) = outcome else {
+            return XCTFail("Expected invalid newly submitted captured obligation to be quarantined")
         }
-        XCTAssertEqual(failure.kind, .localEvidenceContinuityViolation)
+        XCTAssertEqual(work.items.map(\.batchID), [obligation.id])
+        XCTAssertEqual(work.items.map(\.reason), [.localEvidenceContinuityViolation])
         XCTAssertTrue(localQueue.pendingObligations.isEmpty)
         XCTAssertTrue(try context.fetch(FetchDescriptor<RetainedBodyOperation>()).isEmpty)
     }
@@ -2655,9 +2657,11 @@ final class MyRAMTests: XCTestCase {
         XCTAssertNil(viewModel.syncBatchErrorMessage)
         await Task.yield()
         await Task.yield()
-        guard let obligationID = await viewModel.capturePendingLocalBatchForRecovery() else {
+        let capturedBatchIDs = try await viewModel.capturePendingLocalBatchesForRecovery()
+        guard capturedBatchIDs.count == 1, let obligationID = capturedBatchIDs.first else {
             return XCTFail("Expected replacement edit to enter the local obligation accumulator")
         }
+        _ = await viewModel.prepareLocalOwnershipForBootstrapForTesting()
         XCTAssertEqual(syncController.recordedBatches.count, 1)
         XCTAssertEqual(syncController.recordedBatches.first?.id, obligationID)
         XCTAssertEqual(syncController.recordedBatches.first?.changes.count, 2)
@@ -2707,8 +2711,8 @@ final class MyRAMTests: XCTestCase {
             return XCTFail("Bootstrap preflight must durably own the anchored insertion")
         }
         XCTAssertEqual(insertion.text, "operation 87")
-        let residualBatchID = await viewModel.capturePendingLocalBatchForRecovery()
-        XCTAssertNil(residualBatchID)
+        let residualBatchIDs = try await viewModel.capturePendingLocalBatchesForRecovery()
+        XCTAssertTrue(residualBatchIDs.isEmpty)
     }
 
     func testCommitNoteEditLargeReplacementRecordsCapturedEvidenceChain() async throws {
@@ -2738,9 +2742,11 @@ final class MyRAMTests: XCTestCase {
         XCTAssertNil(viewModel.syncBatchErrorMessage)
         await Task.yield()
         await Task.yield()
-        guard let pendingBatchID = await viewModel.capturePendingLocalBatchForRecovery() else {
+        let capturedBatchIDs = try await viewModel.capturePendingLocalBatchesForRecovery()
+        guard capturedBatchIDs.count == 1, let pendingBatchID = capturedBatchIDs.first else {
             return XCTFail("Expected large replacement to enter the local obligation accumulator")
         }
+        _ = await viewModel.prepareLocalOwnershipForBootstrapForTesting()
         XCTAssertEqual(syncController.recordedBatches.map(\.id), [pendingBatchID])
         XCTAssertEqual(syncController.recordedBatches.first?.changes.count, 2)
         let retainedOperations = try context.fetch(FetchDescriptor<RetainedBodyOperation>(
@@ -2810,8 +2816,8 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(originalSequenceRecord.markStatePayloadData, originalMarkPayload)
         XCTAssertEqual(viewModel.syncBatchErrorMessage, "Unable to save the latest edit.")
         XCTAssertFalse(viewModel.hasRecentTextEditForTesting(noteID: note.id))
-        let pendingBatchID = await viewModel.capturePendingLocalBatchForRecovery()
-        XCTAssertNil(pendingBatchID)
+        let pendingBatchIDs = try await viewModel.capturePendingLocalBatchesForRecovery()
+        XCTAssertTrue(pendingBatchIDs.isEmpty)
         XCTAssertTrue(syncController.recordedBatches.isEmpty)
         XCTAssertTrue(try context.fetch(FetchDescriptor<RetainedBodyOperation>()).isEmpty)
 
@@ -3982,8 +3988,8 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(refreshedNote.content, "Hello local remote")
         XCTAssertEqual(note.content, "Hello local remote")
         XCTAssertNil(viewModel.syncBatchErrorMessage)
-        let pendingBatchID = await viewModel.capturePendingLocalBatchForRecovery()
-        XCTAssertNil(pendingBatchID)
+        let pendingBatchIDs = try await viewModel.capturePendingLocalBatchesForRecovery()
+        XCTAssertTrue(pendingBatchIDs.isEmpty)
         let retainedOperations = try context.fetch(FetchDescriptor<RetainedBodyOperation>())
         let localRetainedOperations = retainedOperations.filter {
             $0.sourceRaw == SyncConvergenceRetainedOperationSource.local.rawValue
@@ -4098,6 +4104,54 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(localQueue.pendingBatches.map(\.id), [staleBatch.id])
         XCTAssertEqual(transport.acceptedBatches.map(\.id), [validBatch.id])
         XCTAssertEqual(try context.fetch(FetchDescriptor<RetainedBodyOperation>()).map(\.batchID), [validBatch.id])
+    }
+
+    func testStructuralMarkDependencyDoesNotBlockHealthyNoteFromSameOrigin() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let blockedNote = Note(title: "Blocked", content: "A")
+        let healthyNote = Note(title: "Before", content: "B")
+        for note in [blockedNote, healthyNote] {
+            context.insert(note)
+            try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        }
+        try context.save()
+        let originID = UUID()
+        let missingOperationID = SyncOperationID(deviceID: originID, localCounter: 1)
+        let missingElement = try SyncTextElementID(operationID: missingOperationID, elementOffset: 0)
+        let mark = try SyncTextMarkOperation(
+            operationID: SyncOperationID(deviceID: originID, localCounter: 2),
+            logicalClock: 2, key: .bold, assignment: .enabled,
+            startAnchor: .before(missingElement), endAnchor: .after(missingElement)
+        )
+        let blocked = SyncBatch(
+            id: UUID(), originDeviceID: originID, createdAt: .now, batchSequence: 1,
+            changes: [.noteStructuralMarksChanged(.init(
+                noteID: blockedNote.id, operations: [mark], modifiedAt: .now
+            ))]
+        )
+        let healthy = SyncBatch(
+            id: UUID(), originDeviceID: originID, createdAt: .now, batchSequence: 2,
+            changes: [.noteTitleChanged(.init(
+                noteID: healthyNote.id, title: "After", modifiedAt: .now
+            ))]
+        )
+        let queue = FileBackedSyncBatchQueue(fileURL: nil)
+        let runtime = SyncConvergenceRuntime(
+            context: context, convergenceQueue: queue,
+            localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
+            localBatchTransportAdapter: nil, presentationAdapter: CompletingPresentationAdapter()
+        )
+        guard case .deferred = await runtime.submitRemoteBatch(blocked) else {
+            return XCTFail("Missing mark lineage must defer")
+        }
+        guard case .deferred(let remaining) = await runtime.submitRemoteBatch(healthy) else {
+            return XCTFail("Only the mark dependency should remain pending")
+        }
+        XCTAssertEqual(remaining.incoming.map(\.batchID), [blocked.id])
+        XCTAssertEqual(healthyNote.title, "After")
+        XCTAssertEqual(blockedNote.content, "A")
+        XCTAssertEqual(queue.pendingBatches, [blocked])
     }
 
     func testDeferredIncomingBatchDoesNotBlockDisjointLaterBatch() async throws {
@@ -9746,7 +9800,7 @@ private final class SinglePendingLocalBoundaryAdapter: SyncConvergenceIncomingLo
         }
         takeCount += 1
         self.obligation = nil
-        return .localObligation(obligation)
+        return .localObligations(SyncPreparedLocalObligationCollection([obligation])!)
     }
 
     private static func affectedNoteIDs(in batch: SyncBatch) -> Set<UUID> {

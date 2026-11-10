@@ -372,13 +372,16 @@ struct MyRAMMacRootView: View {
                     saveSelectedNoteForBoundary: { noteID in
                         await saveNoteForIncomingBoundary(id: noteID, attributedContent: attributedText)
                     },
-                    takePendingObligation: { noteID in
-                        await syncController.recordAndTakeBoundaryObligation(
+                    takePendingObligations: { noteID in
+                        try await syncController.recordAndTakeBoundaryObligations(
                             adding: [],
                             affecting: noteID
                         )
                     }
                 ).prepare(affecting: noteIDs)
+            },
+            admitPreparedLocalObligations: { collection in
+                await syncController.admitPreparedLocalObligations(collection)
             }
         )
         syncConvergenceCoordinator = MacSyncConvergenceCoordinator(
@@ -866,12 +869,16 @@ struct MyRAMMacRootView: View {
             await syncController.record(prepared.capturedChanges, at: prepared.modifiedAt)
             publicationOutcome = .ordinaryRecorded
         case .incomingBoundary:
-            let obligation = await syncController.recordAndTakeBoundaryObligation(
-                adding: prepared.capturedChanges,
-                affecting: attempt.noteID,
-                at: prepared.modifiedAt
-            )
-            publicationOutcome = .boundaryExtracted(obligation)
+            do {
+                let obligations = try await syncController.recordAndTakeBoundaryObligations(
+                    adding: prepared.capturedChanges,
+                    affecting: attempt.noteID,
+                    at: prepared.modifiedAt
+                )
+                publicationOutcome = .boundaryExtracted(obligations)
+            } catch {
+                return .failed(attempt: attempt, failure: .captureFailed(noteID: attempt.noteID))
+            }
         }
 
         return .completed(
@@ -915,20 +922,27 @@ struct MyRAMMacRootView: View {
             return .staleLocalState(noteID: requestedAttempt.noteID)
         case .completed(let attempt, _, let publication):
             refreshNotesAfterSave()
-            let obligation: SyncConvergenceLocalObligation?
+            let obligations: SyncPreparedLocalObligationCollection?
             switch publication {
             case .boundaryExtracted(let extracted):
-                obligation = extracted
+                obligations = extracted
             case .ordinaryRecorded, .none:
                 // An ordinary save proves publication completed, not that no pending body evidence remains.
-                obligation = await syncController.recordAndTakeBoundaryObligation(
-                    adding: [],
-                    affecting: attempt.noteID
-                )
+                do {
+                    obligations = try await syncController.recordAndTakeBoundaryObligations(
+                        adding: [],
+                        affecting: attempt.noteID
+                    )
+                } catch {
+                    var state = editorSaveState
+                    state.setSaveError(for: attempt, failure: .captureFailed(noteID: attempt.noteID))
+                    applyEditorSaveState(state)
+                    return .failed(.captureFailed(noteID: attempt.noteID))
+                }
             }
             let result = MacIncomingBoundaryCompletionPolicy.result(
                 for: completion,
-                obligation: obligation,
+                obligations: obligations,
                 requestedAttemptStillOwnsEditor: stillOwnsEditorState(requestedAttempt),
                 completingAttemptStillOwnsEditor: stillOwnsEditorState(attempt)
             )

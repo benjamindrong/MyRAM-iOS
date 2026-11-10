@@ -177,6 +177,7 @@ enum SyncBatchAnchorlessCompatibilityEvaluator {
              .noteBodyTextInsertedAnchored,
              .noteBodyTextDeletedAnchored,
              .noteBodyReconciled,
+             .noteStructuralMarksChanged,
              .noteLifecycleChanged:
             return .notAnchorlessBodyOperation
         }
@@ -214,7 +215,7 @@ enum SyncBatchAnchorlessCompatibilityEvaluator {
             noteID = delete.noteID
             declaredBaseContentHash = delete.baseContentHash
         case .noteCreated, .noteTitleChanged, .noteBodyTextInsertedAnchored,
-             .noteBodyTextDeletedAnchored, .noteBodyReconciled, .noteLifecycleChanged:
+             .noteBodyTextDeletedAnchored, .noteBodyReconciled, .noteStructuralMarksChanged, .noteLifecycleChanged:
             return .notAnchorlessBodyOperation
         }
         guard let declaredBaseContentHash else {

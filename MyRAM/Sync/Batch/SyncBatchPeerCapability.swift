@@ -1,5 +1,19 @@
 import Foundation
 
+enum SyncStructuralMarkTransportSchemaVersion:
+    Int,
+    Codable,
+    CaseIterable,
+    Hashable,
+    Sendable
+{
+    case v1 = 1
+}
+
+enum SyncStructuralMarkTransportCapability {
+    static let isEnabled = true
+}
+
 struct SyncBatchPeerCapability: Equatable, Sendable {
     let schemas: Set<SyncBatchEnvelopeSchemaVersion>
 
@@ -49,6 +63,9 @@ enum SyncBatchPeerCapabilityCodec {
     static let discoveryInfoKey = "batch-schemas"
     static let bootstrapDiscoveryInfoKey = "bootstrap-snapshot"
     static let bootstrapDiscoveryInfoValue = "1"
+    static let structuralMarkDiscoveryInfoKey = "structural-mark-schema"
+    static let structuralMarkDiscoveryInfoValue =
+        String(SyncStructuralMarkTransportSchemaVersion.v1.rawValue)
 
     static var productionCapability: SyncBatchPeerCapability {
         SyncBatchAnchoredPayloadCapability.isEnabled ? .v1AndV2 : .v1Only
@@ -57,7 +74,8 @@ enum SyncBatchPeerCapabilityCodec {
     static var productionDiscoveryInfo: [String: String] {
         [
             discoveryInfoKey: encode(productionCapability),
-            bootstrapDiscoveryInfoKey: bootstrapDiscoveryInfoValue
+            bootstrapDiscoveryInfoKey: bootstrapDiscoveryInfoValue,
+            structuralMarkDiscoveryInfoKey: structuralMarkDiscoveryInfoValue
         ]
     }
 
@@ -161,6 +179,13 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
         case invitationContext
     }
 
+    enum StructuralMarkCapabilityEvidence: Equatable, Sendable {
+        case explicitlyUnsupported
+        case v1Supported
+
+        var supportsV1: Bool { self == .v1Supported }
+    }
+
     enum NormalizedEvidence: Equatable, Sendable {
         case valid(SyncBatchPeerCapability)
         case fallbackV1
@@ -179,10 +204,39 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
         [String: [EvidenceSource: NormalizedEvidence]] = [:]
     private var connectedSessionPeerDeviceIDs: Set<String> = []
     private var currentSessionV2PeerDeviceIDs: Set<String> = []
+    private var currentSessionStructuralMarkPeerDeviceIDs: Set<String> = []
+    private var structuralMarkDiscoveryEvidenceByPeerDeviceID:
+        [String: StructuralMarkCapabilityEvidence] = [:]
+    private var structuralMarkBootstrapEvidenceByPeerDeviceID:
+        [String: StructuralMarkCapabilityEvidence] = [:]
     private var bootstrapDiscoveryEvidenceByPeerDeviceID:
         [String: BootstrapCapabilityEvidence] = [:]
     private var bootstrapSessionEvidenceByPeerDeviceID:
         [String: BootstrapSessionEvidence] = [:]
+
+    mutating func recordStructuralMarkDiscoveryValue(
+        _ value: String?,
+        forPeerDeviceID peerDeviceID: String
+    ) {
+        structuralMarkDiscoveryEvidenceByPeerDeviceID[peerDeviceID] =
+            value == SyncBatchPeerCapabilityCodec.structuralMarkDiscoveryInfoValue
+                ? .v1Supported
+                : .explicitlyUnsupported
+        guard connectedSessionPeerDeviceIDs.contains(peerDeviceID) else { return }
+        recomputeCurrentSessionStructuralMarkSupport(forPeerDeviceID: peerDeviceID)
+    }
+
+    mutating func recordBootstrapStructuralMarkSchemaVersion(
+        _ version: Int?,
+        forPeerDeviceID peerDeviceID: String
+    ) {
+        structuralMarkBootstrapEvidenceByPeerDeviceID[peerDeviceID] =
+            version == SyncStructuralMarkTransportSchemaVersion.v1.rawValue
+                ? .v1Supported
+                : .explicitlyUnsupported
+        guard connectedSessionPeerDeviceIDs.contains(peerDeviceID) else { return }
+        recomputeCurrentSessionStructuralMarkSupport(forPeerDeviceID: peerDeviceID)
+    }
 
     mutating func recordBootstrapDiscoveryValue(
         _ value: String?,
@@ -249,6 +303,7 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
     ) {
         connectedSessionPeerDeviceIDs.insert(peerDeviceID)
         recomputeCurrentSessionV2Support(forPeerDeviceID: peerDeviceID)
+        recomputeCurrentSessionStructuralMarkSupport(forPeerDeviceID: peerDeviceID)
     }
 
     mutating func clearCurrentSessionEvidence(
@@ -256,6 +311,7 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
     ) {
         connectedSessionPeerDeviceIDs.remove(peerDeviceID)
         currentSessionV2PeerDeviceIDs.remove(peerDeviceID)
+        currentSessionStructuralMarkPeerDeviceIDs.remove(peerDeviceID)
         bootstrapDiscoveryEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
         bootstrapSessionEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
     }
@@ -264,6 +320,9 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
         evidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
         connectedSessionPeerDeviceIDs.remove(peerDeviceID)
         currentSessionV2PeerDeviceIDs.remove(peerDeviceID)
+        currentSessionStructuralMarkPeerDeviceIDs.remove(peerDeviceID)
+        structuralMarkDiscoveryEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        structuralMarkBootstrapEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
         bootstrapDiscoveryEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
         bootstrapSessionEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
     }
@@ -292,6 +351,12 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
         forPeerDeviceID peerDeviceID: String
     ) -> Bool {
         currentSessionV2PeerDeviceIDs.contains(peerDeviceID)
+    }
+
+    func hasExplicitCurrentSessionStructuralMarkSupport(
+        forPeerDeviceID peerDeviceID: String
+    ) -> Bool {
+        currentSessionStructuralMarkPeerDeviceIDs.contains(peerDeviceID)
     }
 
     mutating func hasExplicitCurrentSessionBootstrapV1Support(
@@ -341,5 +406,20 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
         } else {
             currentSessionV2PeerDeviceIDs.remove(peerDeviceID)
         }
+    }
+
+    private mutating func recomputeCurrentSessionStructuralMarkSupport(
+        forPeerDeviceID peerDeviceID: String
+    ) {
+        let evidence = [
+            structuralMarkDiscoveryEvidenceByPeerDeviceID[peerDeviceID],
+            structuralMarkBootstrapEvidenceByPeerDeviceID[peerDeviceID]
+        ].compactMap { $0 }
+        guard !evidence.isEmpty,
+              evidence.allSatisfy(\.supportsV1) else {
+            currentSessionStructuralMarkPeerDeviceIDs.remove(peerDeviceID)
+            return
+        }
+        currentSessionStructuralMarkPeerDeviceIDs.insert(peerDeviceID)
     }
 }

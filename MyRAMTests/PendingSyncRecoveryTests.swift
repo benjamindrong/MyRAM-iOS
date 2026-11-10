@@ -402,7 +402,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
                 )
             },
             replaceLocalObligations: { local = $0 },
-            flushReadyLocalBatch: { nil }
+            flushReadyLocalBatches: { [] }
         )
         let incoming = makeBatch(idSuffix: 253)
         let healthyIncoming = FileBackedSyncBatchQueueSnapshot(
@@ -463,7 +463,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
                 )
             },
             replaceLocalObligations: { _ in },
-            flushReadyLocalBatch: { nil }
+            flushReadyLocalBatches: { [] }
         )
         let matchingIncoming = FileBackedSyncBatchQueueSnapshot(
             pendingBatches: [outbound, outbound], health: .healthy
@@ -512,7 +512,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
                 )
             },
             replaceLocalObligations: { local = $0 },
-            flushReadyLocalBatch: { nil }
+            flushReadyLocalBatches: { [] }
         )
         let preimage = try await coordinator.captureLocalResolutionQueueOwnership(
             incomingSnapshot: incoming
@@ -565,7 +565,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
                 )
             },
             replaceLocalObligations: { _ in },
-            flushReadyLocalBatch: { nil }
+            flushReadyLocalBatches: { [] }
         )
         let incoming = FileBackedSyncBatchQueueSnapshot(
             pendingBatches: [], health: .healthy
@@ -615,7 +615,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
                 )
             },
             replaceLocalObligations: { _ in },
-            flushReadyLocalBatch: { nil }
+            flushReadyLocalBatches: { [] }
         )
         let incoming = FileBackedSyncBatchQueueSnapshot(
             pendingBatches: [remote], health: .healthy
@@ -683,7 +683,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
             replaceLocalObligations: { _ in
                 XCTFail("Existing operation owners must never be replaced")
             },
-            flushReadyLocalBatch: { nil }
+            flushReadyLocalBatches: { [] }
         )
         let emptyIncoming = FileBackedSyncBatchQueueSnapshot(
             pendingBatches: [], health: .healthy
@@ -776,7 +776,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
             replaceLocalObligations: { _ in
                 XCTFail("A pending local obligation must not be replaced")
             },
-            flushReadyLocalBatch: { nil }
+            flushReadyLocalBatches: { [] }
         )
         let incoming = FileBackedSyncBatchQueueSnapshot(
             pendingBatches: [], health: .healthy
@@ -1194,7 +1194,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
             replaceLocalObligations: { batches in
                 localBatches = batches.map(\.batch)
             },
-            flushReadyLocalBatch: { nil },
+            flushReadyLocalBatches: { [] },
             journalStore: PendingSyncRecoveryJournalStore(fileURL: fileURL),
             now: { Date(timeIntervalSince1970: 100) },
             transactionID: { UUID(uuidString: "00000000-0000-0000-0000-000000160506")! }
@@ -1240,7 +1240,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
                 queueAdmin: admin,
                 localQueueSnapshot: { FileBackedSyncConvergenceLocalObligationQueueSnapshot(obligations: local.map(SyncConvergenceLocalObligation.init(legacyBatch:)), health: .healthy) },
                 replaceLocalObligations: { local = $0.map(\.batch) },
-                flushReadyLocalBatch: { nil },
+                flushReadyLocalBatches: { [] },
                 journalStore: store
             )
         }
@@ -1308,7 +1308,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
                 FileBackedSyncConvergenceLocalObligationQueueSnapshot(obligations: local, health: .healthy)
             },
             replaceLocalObligations: { local = $0 },
-            flushReadyLocalBatch: { nil },
+            flushReadyLocalBatches: { [] },
             journalStore: store
         )
         try await coordinator.rollbackIfNeededOnLaunch()
@@ -1345,7 +1345,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
                     FileBackedSyncConvergenceLocalObligationQueueSnapshot(obligations: local, health: .healthy)
                 },
                 replaceLocalObligations: { local = $0 },
-                flushReadyLocalBatch: { nil },
+                flushReadyLocalBatches: { [] },
                 journalStore: store
             )
         }
@@ -1387,7 +1387,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
             queueAdmin: admin,
             localQueueSnapshot: { FileBackedSyncConvergenceLocalObligationQueueSnapshot(obligations: queue.pendingObligations, health: queue.snapshot().health) },
             replaceLocalObligations: { try queue.replacePendingObligations($0) },
-            flushReadyLocalBatch: { nil }, journalStore: store
+            flushReadyLocalBatches: { [] }, journalStore: store
         )
         try await coordinator.rollbackIfNeededOnLaunch()
         let reloaded = FileBackedSyncConvergenceLocalObligationQueue(fileURL: queueURL, limit: 1)
@@ -1439,7 +1439,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
             replaceLocalObligations: { batches in
                 localBatches = batches.map(\.batch)
             },
-            flushReadyLocalBatch: { nil },
+            flushReadyLocalBatches: { [] },
             journalStore: PendingSyncRecoveryJournalStore(fileURL: fileURL),
             now: { Date(timeIntervalSince1970: 100) },
             transactionID: { UUID(uuidString: "00000000-0000-0000-0000-000000160001")! }
@@ -1492,9 +1492,9 @@ final class PendingSyncRecoveryTests: XCTestCase {
             replaceLocalObligations: { batches in
                 localBatches = batches.map(\.batch)
             },
-            flushReadyLocalBatch: {
+            flushReadyLocalBatches: {
                 didFlushLocal = true
-                return nil
+                return []
             },
             journalStore: PendingSyncRecoveryJournalStore(fileURL: fileURL),
             now: { Date(timeIntervalSince1970: 100) },
@@ -1544,7 +1544,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
                 FileBackedSyncConvergenceLocalObligationQueueSnapshot(obligations: [], health: .healthy)
             },
             replaceLocalObligations: { _ in },
-            flushReadyLocalBatch: { capturedBatchID }
+            flushReadyLocalBatches: { [capturedBatchID] }
         )
 
         do {
@@ -1553,9 +1553,116 @@ final class PendingSyncRecoveryTests: XCTestCase {
         } catch {
             XCTAssertEqual(
                 error as? PendingSyncRecoveryCoordinator.RecoveryError,
-                .capturedBatchNotDurable(capturedBatchID)
+                .capturedBatchesNotDurable([capturedBatchID])
             )
         }
+    }
+
+    func testPrepareSnapshotsAcceptsCapturedSiblingIDsAcrossUnsentAndLocalQueues() async throws {
+        let compatible = makeBatch(idSuffix: 160_611)
+        let firstMark = makeBatch(idSuffix: 160_612)
+        let secondMark = makeBatch(idSuffix: 160_613)
+        let admin = FakePendingSyncQueueAdmin(
+            legacySnapshot: SyncQueueSnapshot(),
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: [compatible],
+                health: .healthy
+            )
+        )
+        let coordinator = PendingSyncRecoveryCoordinator(
+            queueAdmin: admin,
+            localQueueSnapshot: {
+                FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: [firstMark, secondMark].map(SyncConvergenceLocalObligation.init(legacyBatch:)),
+                    health: .healthy
+                )
+            },
+            replaceLocalObligations: { _ in },
+            flushReadyLocalBatches: {
+                [compatible.id, firstMark.id, secondMark.id]
+            }
+        )
+
+        let snapshots = try await coordinator.prepareSnapshots()
+
+        XCTAssertEqual(snapshots.unsent.map(\.id), [compatible.id])
+        XCTAssertEqual(
+            snapshots.local.map(\.id),
+            [firstMark.id, secondMark.id]
+        )
+    }
+
+    func testPrepareSnapshotsReportsEveryMissingCapturedSiblingInUUIDOrder() async throws {
+        let present = makeBatch(idSuffix: 160_621)
+        let missingLow = UUID(
+            uuidString: "00000000-0000-0000-0000-000000160622"
+        )!
+        let missingHigh = UUID(
+            uuidString: "00000000-0000-0000-0000-000000160623"
+        )!
+        let admin = FakePendingSyncQueueAdmin(
+            legacySnapshot: SyncQueueSnapshot(),
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: [present],
+                health: .healthy
+            )
+        )
+        let coordinator = PendingSyncRecoveryCoordinator(
+            queueAdmin: admin,
+            localQueueSnapshot: {
+                FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: [],
+                    health: .healthy
+                )
+            },
+            replaceLocalObligations: { _ in },
+            flushReadyLocalBatches: {
+                [missingHigh, present.id, missingLow]
+            }
+        )
+
+        do {
+            _ = try await coordinator.prepareSnapshots()
+            XCTFail("Expected complete sibling durability validation")
+        } catch {
+            XCTAssertEqual(
+                error as? PendingSyncRecoveryCoordinator.RecoveryError,
+                .capturedBatchesNotDurable([missingLow, missingHigh])
+            )
+        }
+    }
+
+    func testOneMissingCapturedSiblingLeavesFullEvidenceQueuesAndJournalUntouched() async throws {
+        let fileURL = temporaryJournalURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        let unsent = makeBatch(idSuffix: 160_631)
+        let local = SyncConvergenceLocalObligation(legacyBatch: makeBatch(idSuffix: 160_632))
+        let missingID = UUID()
+        let admin = FakePendingSyncQueueAdmin(
+            legacySnapshot: SyncQueueSnapshot(),
+            unsentSnapshot: .init(pendingBatches: [unsent], health: .healthy)
+        )
+        let originalLocal = FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+            obligations: [local], health: .healthy
+        )
+        var replacementAttempted = false
+        let journal = PendingSyncRecoveryJournalStore(fileURL: fileURL)
+        let coordinator = PendingSyncRecoveryCoordinator(
+            queueAdmin: admin, localQueueSnapshot: { originalLocal },
+            replaceLocalObligations: { _ in replacementAttempted = true },
+            flushReadyLocalBatches: { [unsent.id, local.id, missingID] }, journalStore: journal
+        )
+        do {
+            _ = try await coordinator.prepareSnapshots()
+            XCTFail("Every sibling must have a durable owner")
+        } catch {
+            XCTAssertEqual(error as? PendingSyncRecoveryCoordinator.RecoveryError,
+                           .capturedBatchesNotDurable([missingID]))
+        }
+        XCTAssertFalse(replacementAttempted)
+        XCTAssertEqual(admin.unsentSnapshot.pendingBatches, [unsent])
+        XCTAssertEqual(originalLocal.obligations, [local])
+        XCTAssertNil(try journal.load())
     }
 
     private func temporaryJournalURL() -> URL {
