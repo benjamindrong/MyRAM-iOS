@@ -378,6 +378,47 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
                 return mark.noteID == newNote.id && mark.operations.count == 6
             }
         }
+        let creation = try XCTUnwrap(controller.acceptedBatches.first {
+            $0.changes.contains {
+                if case .noteCreated(let payload) = $0 {
+                    return payload.noteID == newNote.id
+                }
+                return false
+            }
+        })
+        let formatting = try XCTUnwrap(controller.acceptedBatches.first {
+            $0.changes.contains {
+                if case .noteStructuralMarksChanged(let payload) = $0 {
+                    return payload.noteID == newNote.id
+                }
+                return false
+            }
+        })
+        XCTAssertNotEqual(creation.id, formatting.id)
+        XCTAssertFalse(creation.changes.contains {
+            if case .noteStructuralMarksChanged = $0 { return true }
+            return false
+        })
+
+        // If the one import save fails, neither the revision-zero record nor
+        // the marks can escape into durable state or outbound publication.
+        let failingContainer = try makeContainer()
+        let failingController = MYR223SyncControllerSpy()
+        let failing = makeViewModel(
+            context: failingContainer.mainContext,
+            syncController: failingController,
+            saveContext: { throw MYR170PathTestError.injected }
+        )
+        do {
+            _ = try await failing.importNotes(from: archive)
+            XCTFail("Formatted import must not publish after a failed save")
+        } catch MYR170PathTestError.injected {
+            // Expected.
+        }
+        XCTAssertTrue(try fetchNotes(in: failingContainer).isEmpty)
+        XCTAssertTrue(try fetchStateRecords(in: failingContainer).isEmpty)
+        XCTAssertTrue(failingController.acceptedBatches.isEmpty)
+        XCTAssertTrue(failingController.legacyChanges.isEmpty)
     }
 
     func testDetachedMYR227V2RejectsMissingFormattingBeforeAnyCommitOrPublication() async throws {
