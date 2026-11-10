@@ -8606,7 +8606,7 @@ final class MyRAMTests: XCTestCase {
         let importContainer = try makeContainer(isStoredInMemoryOnly: true)
         let importVM = NotesViewModel(context: importContainer.mainContext)
 
-        let importedNotes = try importVM.importNotes(from: exportURL)
+        let importedNotes = try await importVM.importNotes(from: exportURL)
         let importedNote = try XCTUnwrap(importedNotes.first)
 
         XCTAssertEqual(importedNote.title, "Imported Plan")
