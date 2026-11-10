@@ -4,6 +4,52 @@ import AnchoredSequenceCore
 @testable import MyRAM
 
 final class EditorFormattingMutationApplierTests: XCTestCase {
+    @MainActor
+    func testMYR227IPhoneCanonicalSixMarkAdapterRoundTripPreservesUnicodeAndAssignments() throws {
+        let body = "A🚀e\u{301}"
+        let rgba = SyncTextMarkRGBAColor(red: 0, green: 0, blue: 255, alpha: 255)
+        let assignments: [SyncTextMarkKey: SyncTextMarkAssignment] = [
+            .bold: .enabled,
+            .italic: .enabled,
+            .underline: .enabled,
+            .strikethrough: .enabled,
+            .fontSize: .fontSizeMilliPoints(25_000),
+            .textColor: .textColor(rgba)
+        ]
+        let rangeLength = (body as NSString).length
+        let source = NoteStructuralFormattingProjection(
+            plainText: body,
+            runs: [NoteStructuralFormattingProjectionRun(
+                startUTF16Offset: 0,
+                utf16Length: rangeLength,
+                assignments: assignments
+            )]
+        )
+        let baseFont = UIFont.systemFont(ofSize: 24)
+        let traits = UITraitCollection(userInterfaceStyle: .light)
+        let rendered = EditorStructuralFormattingAdapter.render(
+            projection: source,
+            baseBodyFont: baseFont,
+            traitCollection: traits
+        )
+        let reprojected = EditorStructuralFormattingAdapter.project(
+            rendered,
+            baseBodyFont: baseFont,
+            traitCollection: traits
+        )
+
+        XCTAssertEqual(rendered.string, body)
+        XCTAssertEqual(rendered.length, rangeLength)
+        XCTAssertEqual(reprojected.plainText, body)
+        XCTAssertEqual(reprojected.runs.count, 1)
+        let span = try XCTUnwrap(reprojected.runs.first)
+        XCTAssertEqual(span.startUTF16Offset, 0)
+        XCTAssertEqual(span.utf16Length, rangeLength)
+        for key in SyncTextMarkKey.allCases {
+            XCTAssertEqual(span.assignments[key], assignments[key], "Lost \(key)")
+        }
+    }
+
     func testAppliesTraitPlanToSelectedAttributedText() throws {
         let attributedText = NSMutableAttributedString(
             string: "Bold",
