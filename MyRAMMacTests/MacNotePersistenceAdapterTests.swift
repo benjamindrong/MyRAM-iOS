@@ -39,7 +39,8 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         XCTAssertEqual(rendered.string, body)
         XCTAssertEqual(rendered.length, rangeLength)
         XCTAssertEqual(reprojected.plainText, body)
-        let span = try XCTUnwrap(reprojected.runs.only)
+        XCTAssertEqual(reprojected.runs.count, 1)
+        let span = try XCTUnwrap(reprojected.runs.first)
         XCTAssertEqual(span.startUTF16Offset, 0)
         XCTAssertEqual(span.utf16Length, rangeLength)
         for key in SyncTextMarkKey.allCases {
