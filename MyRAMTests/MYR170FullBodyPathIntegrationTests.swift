@@ -364,6 +364,25 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
             !originalIDs.contains($0.operationID)
         })
 
+        // The persisted, fresh structural baseline survives independently of
+        // any pending publication task or live peer connection.
+        let bootstrap = try SyncPeerBootstrapSnapshotPersistence.build(
+            from: targetContainer.mainContext
+        )
+        let bootstrapNote = try XCTUnwrap(bootstrap.notes.first { $0.id == newNote.id })
+        XCTAssertEqual(
+            bootstrapNote.markFormatVersion,
+            NoteStructuralFormattingPersistence.schemaVersion
+        )
+        XCTAssertEqual(bootstrapNote.markRevision, saved.markRevision)
+        XCTAssertEqual(
+            bootstrapNote.markStatePayloadData,
+            try NoteStructuralFormattingPersistence.encode(
+                state: saved.markState,
+                pairedWith: saved.state
+            )
+        )
+
         // MYR-223 creation and dependent V3 marks use the same local capture
         // owner, with Slice 2 assigning distinct durable delivery identities.
         try await waitUntil {
