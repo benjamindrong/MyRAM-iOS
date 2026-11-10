@@ -471,6 +471,7 @@ enum NoteSequenceStateFullBodyIntegration {
     static func insertNewNote(
         _ note: Note,
         preparedState: PreparedInitialNoteSequenceState,
+        initialMarkState: SyncTextMarkState = .empty,
         in context: ModelContext
     ) throws -> NoteSequenceStateFullBodyIntegrationResult {
         guard preparedState.noteID == note.id else {
@@ -486,7 +487,17 @@ enum NoteSequenceStateFullBodyIntegration {
             throw NoteSequenceStateStoreError.stateAlreadyExists(note.id)
         }
 
-        let record = preparedState.makeRevisionZeroRecord()
+        // A detached import must persist its fresh structural marks with its
+        // revision-zero sequence baseline, before MYR-223 publishes creation.
+        // Validation/encoding precedes every model insertion.
+        let markPayload = try NoteStructuralFormattingPersistence.encode(
+            state: initialMarkState,
+            pairedWith: preparedState.state
+        )
+        let record = preparedState.makeRevisionZeroRecord(
+            markRevision: initialMarkState.operations.isEmpty ? 0 : 1,
+            markStatePayloadData: markPayload
+        )
         context.insert(note)
         context.insert(record)
         return .inserted(revision: 0)
