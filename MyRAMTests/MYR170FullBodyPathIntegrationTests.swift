@@ -275,6 +275,144 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
         XCTAssertTrue(controller.acceptedBatches.isEmpty)
     }
 
+    func testDetachedMYR227V2RoundTripPreservesEveryCanonicalMarkWithFreshIDs() async throws {
+        let sourceContainer = try makeContainer()
+        let sourceViewModel = makeViewModel(context: sourceContainer.mainContext)
+        let body = "A🚀e\u{301}"
+        let sourceNote = try sourceViewModel.importMarkdownDocument(
+            ImportedMarkdownDocument(source: body, suggestedTitle: "Formatted")
+        )
+        let original = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: sourceNote,
+            in: sourceContainer.mainContext
+        )
+        let originalDeviceID = UUID(
+            uuidString: "00000000-0000-0000-0000-000000002273"
+        )!
+        let sourceAssignments: [(SyncTextMarkKey, SyncTextMarkAssignment)] = [
+            (.bold, .enabled),
+            (.italic, .enabled),
+            (.underline, .enabled),
+            (.strikethrough, .enabled),
+            (.fontSize, .fontSizeMilliPoints(25_000)),
+            (.textColor, .textColor(SyncTextMarkRGBAColor(
+                red: 24, green: 58, blue: 132, alpha: 255
+            )))
+        ]
+        let operations = try sourceAssignments.enumerated().map { index, entry in
+            try SyncTextMarkOperation(
+                operationID: SyncOperationID(
+                    deviceID: originalDeviceID,
+                    localCounter: UInt64(index + 1)
+                ),
+                logicalClock: 1,
+                key: entry.0,
+                assignment: entry.1,
+                startAnchor: original.state.operationAnchor(atVisibleUTF16Offset: 0),
+                endAnchor: original.state.operationAnchor(
+                    atVisibleUTF16Offset: original.state.visibleUTF16Count
+                )
+            )
+        }
+        let marks = try SyncTextMarkState(operations: operations)
+        _ = try NoteSequenceStateFullBodyIntegration.stageStructuralFormattingMutation(
+            of: sourceNote,
+            expected: original,
+            finalMarkState: marks,
+            in: sourceContainer.mainContext
+        )
+        try sourceContainer.mainContext.save()
+
+        let urls = try sourceViewModel.exportNotesForSharing([sourceNote])
+        let archive = try XCTUnwrap(urls.first { $0.pathExtension == "myram" })
+        defer { try? FileManager.default.removeItem(
+            at: archive.deletingLastPathComponent()
+        ) }
+        let exportedJSON = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: archive))
+                as? [String: Any]
+        )
+        XCTAssertEqual(exportedJSON["version"] as? Int, 2)
+
+        let targetContainer = try makeContainer()
+        let controller = MYR223SyncControllerSpy()
+        let target = makeViewModel(
+            context: targetContainer.mainContext,
+            syncController: controller,
+            syncBatchQuietWindow: 0
+        )
+        let imported = try await target.importNotes(from: archive)
+        let newNote = try XCTUnwrap(imported.first)
+        XCTAssertEqual(imported.count, 1)
+        XCTAssertNotEqual(newNote.id, sourceNote.id)
+        XCTAssertEqual(Array(newNote.content.utf16), Array(body.utf16))
+        XCTAssertNil(newNote.richTextContentData)
+
+        let saved = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: newNote,
+            in: targetContainer.mainContext
+        )
+        XCTAssertEqual(saved.revision, 0)
+        XCTAssertEqual(saved.markRevision, 1)
+        XCTAssertEqual(saved.markState.operations.count, 6)
+        XCTAssertEqual(
+            try saved.markState.visibleProjection(in: saved.state),
+            try marks.visibleProjection(in: original.state)
+        )
+        let originalIDs = Set(marks.operations.map(\.operationID))
+        XCTAssertTrue(saved.markState.operations.allSatisfy {
+            !originalIDs.contains($0.operationID)
+        })
+
+        // MYR-223 creation and dependent V3 marks use the same local capture
+        // owner, with Slice 2 assigning distinct durable delivery identities.
+        try await waitUntil {
+            let changes = controller.acceptedBatches.flatMap(\.changes)
+            return changes.contains { change in
+                guard case .noteCreated(let created) = change else { return false }
+                return created.noteID == newNote.id
+            } && changes.contains { change in
+                guard case .noteStructuralMarksChanged(let mark) = change else {
+                    return false
+                }
+                return mark.noteID == newNote.id && mark.operations.count == 6
+            }
+        }
+    }
+
+    func testDetachedMYR227V2RejectsMissingFormattingBeforeAnyCommitOrPublication() async throws {
+        let container = try makeContainer()
+        let controller = MYR223SyncControllerSpy()
+        let viewModel = makeViewModel(
+            context: container.mainContext,
+            syncController: controller
+        )
+        let url = try makeImportFile(bodies: ["Must remain unimported"])
+        defer { try? FileManager.default.removeItem(
+            at: url.deletingLastPathComponent()
+        ) }
+        var document = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: url))
+                as? [String: Any]
+        )
+        document["version"] = 2
+        // A V2 archive without canonical formatting is invalid, not plain text.
+        let data = try JSONSerialization.data(withJSONObject: document)
+        try data.write(to: url, options: .atomic)
+
+        do {
+            _ = try await viewModel.importNotes(from: url)
+            XCTFail("A V2 archive with missing marks must be rejected")
+        } catch NoteImportError.invalidFile {
+            // Expected: rejection precedes every SwiftData insertion.
+        }
+
+        XCTAssertTrue(try fetchNotes(in: container).isEmpty)
+        XCTAssertTrue(try fetchStateRecords(in: container).isEmpty)
+        XCTAssertTrue(controller.acceptedBatches.isEmpty)
+        XCTAssertTrue(controller.legacyChanges.isEmpty)
+    }
+
     func testRestoreNoteReestablishesCurrentBodyStateBeforeLifecyclePublication() throws {
         let fixture = try makeLifecycleFixture()
         fixture.note.deletedAt = Date()
