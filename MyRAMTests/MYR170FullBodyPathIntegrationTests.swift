@@ -440,6 +440,105 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
         XCTAssertTrue(failingController.legacyChanges.isEmpty)
     }
 
+    func testMYR227ImportedFormattingRecoversAcrossRestartWithoutCapturedQueue() async throws {
+        // Exercise actual .myram V2 import, then abandon its unflushed local
+        // accumulator to model a crash after the save and before publication.
+        // Reconnect bootstrap is responsible for the committed note and marks.
+        let source = try makeContainer()
+        let sourceVM = makeViewModel(context: source.mainContext)
+        let note = try sourceVM.importMarkdownDocument(
+            ImportedMarkdownDocument(source: "A🚀B", suggestedTitle: "Restarted import")
+        )
+        let initial = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: note,
+            in: source.mainContext
+        )
+        let operation = try SyncTextMarkOperation(
+            operationID: SyncOperationID(
+                deviceID: UUID(uuidString: "22700000-0000-0000-0000-000000003002")!,
+                localCounter: 1
+            ),
+            logicalClock: 1,
+            key: .bold,
+            assignment: .enabled,
+            startAnchor: initial.state.operationAnchor(atVisibleUTF16Offset: 0),
+            endAnchor: initial.state.operationAnchor(
+                atVisibleUTF16Offset: initial.state.visibleUTF16Count
+            )
+        )
+        _ = try NoteSequenceStateFullBodyIntegration.stageStructuralFormattingMutation(
+            of: note,
+            expected: initial,
+            finalMarkState: SyncTextMarkState(operations: [operation]),
+            in: source.mainContext
+        )
+        try source.mainContext.save()
+        let exportFiles = try sourceVM.exportNotesForSharing([note])
+        let archive = try XCTUnwrap(exportFiles.first { $0.pathExtension == "myram" })
+        defer { try? FileManager.default.removeItem(
+            at: archive.deletingLastPathComponent()
+        ) }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR227-V2-Restart-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let storeURL = root.appendingPathComponent("imported.store")
+        let schema = Schema(MyRAMModelRegistry.models)
+        func openImportedStore() throws -> ModelContainer {
+            let configuration = ModelConfiguration(
+                "MYR227-V2-Restart",
+                schema: schema,
+                url: storeURL,
+                cloudKitDatabase: .none
+            )
+            return try ModelContainer(for: schema, configurations: configuration)
+        }
+
+        var newNoteID: UUID?
+        do {
+            let importerStore = try openImportedStore()
+            // No transport or durable local queue is provided: the save must
+            // survive even if the post-commit task never reaches queue capture.
+            let importer = makeViewModel(context: importerStore.mainContext)
+            let imported = try await importer.importNotes(from: archive)
+            newNoteID = try XCTUnwrap(imported.first).id
+        }
+
+        let reopened = try openImportedStore()
+        let snapshot = try SyncPeerBootstrapSnapshotPersistence.build(
+            from: reopened.mainContext
+        )
+        let importedNoteID = try XCTUnwrap(newNoteID)
+        let included = try XCTUnwrap(
+            snapshot.notes.first(where: { $0.id == importedNoteID })
+        )
+        XCTAssertEqual(included.markRevision, 1)
+        XCTAssertNotNil(included.markStatePayloadData)
+
+        let receiver = try makeContainer()
+        let result = try SyncPeerBootstrapSnapshotPersistence.apply(
+            snapshot,
+            to: receiver.mainContext
+        )
+        XCTAssertEqual(result.coveredFormattingNoteIDs, [importedNoteID])
+        let received = try XCTUnwrap(receiver.mainContext.fetch(
+            FetchDescriptor<Note>(
+                predicate: #Predicate { $0.id == importedNoteID }
+            )
+        ).first)
+        let loaded = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: received,
+            in: receiver.mainContext
+        )
+        XCTAssertEqual(received.content, "A🚀B")
+        XCTAssertEqual(loaded.markState.operations.count, 1)
+        XCTAssertEqual(loaded.markState.operations.first?.key, .bold)
+        XCTAssertEqual(loaded.markState.operations.first?.assignment, .enabled)
+        XCTAssertEqual(loaded.revision, 0)
+        XCTAssertEqual(loaded.markRevision, 1)
+    }
+
     func testDetachedMYR227V2RejectsMissingFormattingBeforeAnyCommitOrPublication() async throws {
         let container = try makeContainer()
         let controller = MYR223SyncControllerSpy()
