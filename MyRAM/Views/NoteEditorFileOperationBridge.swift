@@ -184,7 +184,7 @@ struct ExternalImportURLRouter {
         markdownCoordinator: MarkdownImportOperationCoordinator,
         flushBridge: NoteEditorFileOperationBridge,
         importMarkdown: (ImportedMarkdownDocument) throws -> MarkdownResult,
-        importMyRAM: (URL) throws -> MyRAMResult
+        importMyRAM: (URL) async throws -> MyRAMResult
     ) async throws -> ExternalImportRoutingResult<MarkdownResult, MyRAMResult> {
         let didStartAccessing = url.startAccessingSecurityScopedResource()
         let kind = classifier.kind(for: url)
@@ -201,7 +201,7 @@ struct ExternalImportURLRouter {
                 consume: importMarkdown
             ))
         case .myram:
-            return try .myram(importMyRAM(url))
+            return try .myram(await importMyRAM(url))
         case .unsupported:
             throw ExternalImportRoutingError.unsupportedFileType
         }
