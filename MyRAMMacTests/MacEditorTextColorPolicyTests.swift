@@ -49,8 +49,8 @@ final class MacEditorTextColorPolicyTests: XCTestCase {
 
         let normalized = MacEditorTextColorPolicy.normalizedForDisplay(text)
 
-        XCTAssertEqual(normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, .textColor)
-        XCTAssertEqual(normalized.attribute(.autoTextColorDisplay, at: 0, effectiveRange: nil) as? Bool, true)
+        XCTAssertEqual(normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, .systemRed)
+        XCTAssertNil(normalized.attribute(.autoTextColorDisplay, at: 0, effectiveRange: nil))
         XCTAssertNotNil(normalized.attribute(.font, at: 0, effectiveRange: nil))
         XCTAssertEqual(normalized.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle, paragraphStyle)
         XCTAssertEqual(normalized.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int, NSUnderlineStyle.single.rawValue)
