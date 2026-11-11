@@ -99,6 +99,26 @@ final class MyRAMSyncControllerTests: XCTestCase {
         XCTAssertEqual(transport.invitedPeerIDs, [currentPeer])
     }
 
+    func testMYR227RegisteredVerificationServiceRequiresExactIdentity() throws {
+        let registrations = MyRAMSyncRuntimeConfiguration.verificationServicesByBundleID
+        XCTAssertEqual(registrations["com.northsignalstudio.myram.myr227.verification"], "myr227-sync")
+        let valid = try MyRAMSyncRuntimeConfiguration(
+            bundleIdentifier: "com.northsignalstudio.myram.myr227.verification",
+            bonjourServices: ["_myr227-sync._tcp"], transportOnlyValue: nil
+        )
+        XCTAssertTrue(valid.applicationSyncEnabled)
+        XCTAssertTrue(valid.recordsTransportDiagnostics)
+        XCTAssertEqual(valid.verificationServiceType, "myr227-sync")
+        XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+            bundleIdentifier: "com.northsignalstudio.myram.myr227.verification",
+            bonjourServices: ["_myram-verify._tcp"], transportOnlyValue: nil
+        ))
+        XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+            bundleIdentifier: "com.northsignalstudio.myram.verification",
+            bonjourServices: ["_myr227-sync._tcp"], transportOnlyValue: nil
+        ))
+    }
+
     func testMYR233TransportOnlyRetainsDiscoveryAndRejectsSyncWithoutMutatingQueues() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

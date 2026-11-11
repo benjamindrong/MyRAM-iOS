@@ -1,0 +1,23 @@
+{
+  "environment": "verification",
+  "display_name": "MyRAM MYR-227 Verification",
+  "storage_root_name": "MyRAM MYR227 Verification",
+  "swiftdata_store_name": "MyRAM_MYR227_Verification",
+  "multipeer_service_type": "myr227-sync",
+  "bonjour_service": "_myr227-sync._tcp",
+  "ios": {
+    "app_bundle_identifier": "com.northsignalstudio.myram.myr227.verification",
+    "widget_bundle_identifier": "com.northsignalstudio.myram.myr227.verification.widget",
+    "widget_app_group_identifier": "group.com.northsignalstudio.myram.myr227.verification.widget",
+    "url_scheme": "myram-myr227-verification",
+    "export_type_identifier": "com.northsignalstudio.myram.myr227.verification.export",
+    "export_filename_extension": "myram-myr227-verification",
+    "export_mime_type": "application/vnd.northsignalstudio.myram-myr227-verification"
+  },
+  "macos": {
+    "app_bundle_identifier": "com.northsignalstudio.myram.mac.myr227.verification",
+    "widget_bundle_identifier": "com.northsignalstudio.myram.mac.myr227.verification.widget",
+    "widget_app_group_identifier": "group.com.northsignalstudio.myram.mac.myr227.verification.widget",
+    "url_scheme": "myram-mac-myr227-verification"
+  }
+}

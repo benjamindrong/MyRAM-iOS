@@ -7,16 +7,21 @@ import CryptoKit
 struct MyRAMSyncRuntimeConfiguration {
     static let transportOnlyKey = "MyRAMVerificationTransportOnly"
     static let offlineRestoreKey = "MyRAMVerificationOfflineRestore"
-    static let verificationBundleIDs: Set<String> = [
-        "com.northsignalstudio.myram.verification",
-        "com.northsignalstudio.myram.mac.verification"
+    // A bundle may advertise only the service assigned to its registered verification profile.
+    static let verificationServicesByBundleID: [String: String] = [
+        "com.northsignalstudio.myram.verification": "myram-verify",
+        "com.northsignalstudio.myram.mac.verification": "myram-verify",
+        "com.northsignalstudio.myram.myr227.verification": "myr227-sync",
+        "com.northsignalstudio.myram.mac.myr227.verification": "myr227-sync"
     ]
+    static let verificationBundleIDs = Set(verificationServicesByBundleID.keys)
 
     enum ConfigurationError: Error {
         case transportOnlyRequiresVerificationIdentity
         case invalidTransportOnlyValue
         case offlineRestoreRequiresVerificationIdentity
         case invalidOfflineRestoreValue
+        case invalidVerificationNamespace
     }
 
     enum AdmissionError: Error { case applicationSyncDisabled }
@@ -25,11 +30,17 @@ struct MyRAMSyncRuntimeConfiguration {
 
     let applicationSyncEnabled: Bool
     let recordsTransportDiagnostics: Bool
+    let verificationServiceType: String?
     let isOfflineRestoreVerification: Bool
 
     init(bundleIdentifier: String?, bonjourServices: [String]?, transportOnlyValue: Any?, offlineRestoreValue: Any? = nil) throws {
-        let isolated = Self.verificationBundleIDs.contains(bundleIdentifier ?? "")
-            && bonjourServices == ["_myram-verify._tcp"]
+        let registeredService = Self.verificationServicesByBundleID[bundleIdentifier ?? ""]
+        // An incomplete verification identity cannot silently use production networking.
+        if let registeredService, bonjourServices != ["_\(registeredService)._tcp"] {
+            throw ConfigurationError.invalidVerificationNamespace
+        }
+        let isolated = registeredService != nil
+        verificationServiceType = registeredService
         recordsTransportDiagnostics = isolated
         if let offlineRestoreValue {
             guard isolated else { throw ConfigurationError.offlineRestoreRequiresVerificationIdentity }

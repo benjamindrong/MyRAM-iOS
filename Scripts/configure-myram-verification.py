@@ -12,6 +12,11 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+VERIFICATION_PROFILES = {
+    "default": "myram-verification-identities.json",
+    "myr227": "myr227-verification-identities.json",
+}
+
 PRODUCTION = {
     "ios_app_bundle_ids": [
         "com.northsignalstudio.myram.dev",
@@ -99,8 +104,10 @@ def run_git(root: Path, *args: str, check: bool = True) -> str:
     return result.stdout.strip()
 
 
-def load_identity(root: Path) -> dict[str, Any]:
-    path = root / "Scripts" / "myram-verification-identities.json"
+def load_identity(root: Path, profile: str = "default") -> dict[str, Any]:
+    if profile not in VERIFICATION_PROFILES:
+        fail(f"Unknown Verification profile: {profile}")
+    path = root / "Scripts" / VERIFICATION_PROFILES[profile]
     try:
         identity = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -169,6 +176,34 @@ def load_identity(root: Path) -> dict[str, Any]:
     overlap = production_values & verification_values
     if overlap:
         fail(f"Verification identities collide with Production: {sorted(overlap)}")
+
+    # Reject cross-campaign identity reuse before transforming any source file.
+    selected_values = verification_values | {
+        identity["display_name"], identity["bonjour_service"],
+        ios["export_type_identifier"], ios["export_filename_extension"], ios["export_mime_type"],
+    }
+    for other_profile, filename in VERIFICATION_PROFILES.items():
+        if other_profile == profile:
+            continue
+        try:
+            other = json.loads((root / "Scripts" / filename).read_text(encoding="utf-8"))
+            other_ios, other_mac = other["ios"], other["macos"]
+            other_values = {
+                other["display_name"], other["storage_root_name"],
+                other["swiftdata_store_name"], other["multipeer_service_type"],
+                other["bonjour_service"],
+                other_ios["app_bundle_identifier"], other_ios["widget_bundle_identifier"],
+                other_ios["widget_app_group_identifier"], other_ios["url_scheme"],
+                other_ios["export_type_identifier"], other_ios["export_filename_extension"],
+                other_ios["export_mime_type"],
+                other_mac["app_bundle_identifier"], other_mac["widget_bundle_identifier"],
+                other_mac["widget_app_group_identifier"], other_mac["url_scheme"],
+            }
+        except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+            fail(f"Invalid {other_profile} Verification profile: {error}")
+        collisions = selected_values & other_values
+        if collisions:
+            fail(f"Verification profiles {profile} and {other_profile} collide: {sorted(collisions)}")
     if ios["widget_app_group_identifier"] == macos["widget_app_group_identifier"]:
         fail("iOS and macOS Verification App Groups must remain platform-isolated.")
 
@@ -372,17 +407,6 @@ def configure_storage_roots(root: Path, identity: dict[str, Any]) -> None:
 
 
 def configure_runtime_identities(root: Path, identity: dict[str, Any]) -> None:
-    service = identity["multipeer_service_type"]
-    for relative in (
-        "MyRAM/Sync/MyRAMSyncController.swift",
-        "MyRAM/Mac/Sync/MacSyncBatchController.swift",
-    ):
-        replace_required(
-            root / relative,
-            'private let serviceType = "myram-sync"',
-            f'private let serviceType = "{service}"',
-        )
-
     deep_link = root / "MyRAM" / "WidgetShared" / "MyRAMWidgetDeepLink.swift"
     replace_required(
         deep_link,
@@ -403,7 +427,7 @@ def configure_runtime_identities(root: Path, identity: dict[str, Any]) -> None:
     )
 
 
-def audit(root: Path, identity: dict[str, Any], source_sha: str, fixture: dict[str, Any] | None = None, transport_only: bool = False) -> dict[str, Any]:
+def audit(root: Path, identity: dict[str, Any], source_sha: str, fixture: dict[str, Any] | None = None, transport_only: bool = False, profile: str = "default") -> dict[str, Any]:
     project = root / "MyRAM.xcodeproj" / "project.pbxproj"
     project_text = project.read_text(encoding="utf-8")
     ios = identity["ios"]
@@ -437,9 +461,9 @@ def audit(root: Path, identity: dict[str, Any], source_sha: str, fixture: dict[s
         "MyRAM/Mac/Sync/MacSyncBatchController.swift",
     ):
         text = (root / relative).read_text(encoding="utf-8")
-        expected = f'private let serviceType = "{identity["multipeer_service_type"]}"'
-        if expected not in text or 'private let serviceType = "myram-sync"' in text:
-            fail(f"{relative}: Multipeer namespace isolation audit failed.")
+        if ('private let serviceType = "myram-sync"' not in text
+                or 'configuration.verificationServiceType ?? serviceType' not in text):
+            fail(f"{relative}: Service must be selected by the registered Verification profile.")
 
     deep_link_text = (
         root / "MyRAM" / "WidgetShared" / "MyRAMWidgetDeepLink.swift"
@@ -513,6 +537,7 @@ def audit(root: Path, identity: dict[str, Any], source_sha: str, fixture: dict[s
 
     return {
         "source_candidate_sha": source_sha,
+        "profile": profile,
         "transport_mode": "transportOnly" if transport_only else "application",
         "fixture_identity": fixture,
         "environment": identity["environment"],
@@ -570,18 +595,19 @@ def main() -> int:
     )
     parser.add_argument("--fixture-manifest", type=Path, help="Approved fixture manifest; binds peer identities only inside Verification apps.")
     parser.add_argument("--transport-only", action="store_true", help="Disable application sync inside the existing isolated Verification MPC owners.")
+    parser.add_argument("--profile", choices=sorted(VERIFICATION_PROFILES), default="default", help="Registered Verification profile.")
     args = parser.parse_args()
     root = args.root.resolve()
 
     try:
         source_sha = require_disposable_detached_worktree(root)
-        identity = load_identity(root)
+        identity = load_identity(root, args.profile)
         fixture = load_fixture_identity(args.fixture_manifest)
         configure_project(root, identity)
         configure_plists(root, identity, fixture, args.transport_only)
         configure_storage_roots(root, identity)
         configure_runtime_identities(root, identity)
-        report = audit(root, identity, source_sha, fixture, args.transport_only)
+        report = audit(root, identity, source_sha, fixture, args.transport_only, args.profile)
         rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
         if args.manifest_output:
             args.manifest_output.parent.mkdir(parents=True, exist_ok=True)

@@ -338,7 +338,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     ) {
         let configuration = MyRAMSyncRuntimeConfiguration.current(bundle: configurationBundle)
         // Only validated Verification identities may bind the isolated MPC service.
-        let effectiveServiceType = configuration.recordsTransportDiagnostics ? "myram-verify" : serviceType
+        let effectiveServiceType = configuration.verificationServiceType ?? serviceType
         runtimeConfiguration = configuration
         transportDiagnostics = MyRAMSyncTransportDiagnostics(configuration: configuration)
         let deviceName = MyRAMDeviceIdentity.currentDisplayName()
