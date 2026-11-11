@@ -206,6 +206,9 @@ public struct SyncTextSequenceState: Equatable, Sendable {
     private let materializedVisibleUTF16Count: Int
     private let materializedTombstonedUTF16Count: Int
     private let anchorResolutionIndex: SyncTextSequenceAnchorResolutionIndex
+    // Validated at construction; reuse across every mark range lookup, including
+    // retained tombstones, rather than reconstructing the layout per mark.
+    private let structuralMarkGapPositions: [SyncTextSequenceGap: Int]
 
     /// Kept internal so complexity tests can prove traversal work without timing assertions.
     let validationMetrics: SyncTextSequenceTraversalMetrics
@@ -236,6 +239,7 @@ public struct SyncTextSequenceState: Equatable, Sendable {
         self.materializedVisibleUTF16Count = validation.visibleUTF16Count
         self.materializedTombstonedUTF16Count = validation.tombstonedUTF16Count
         self.anchorResolutionIndex = anchorResolutionIndex
+        self.structuralMarkGapPositions = validation.structuralMarkGapPositions
         self.validationMetrics = validation.metrics
     }
 
@@ -246,6 +250,9 @@ public struct SyncTextSequenceState: Equatable, Sendable {
     public var visibleText: String { materializedVisibleText }
     public var visibleUTF16Count: Int { materializedVisibleUTF16Count }
     public var tombstonedUTF16Count: Int { materializedTombstonedUTF16Count }
+
+    /// Deterministic complexity regression surface for the immutable mark index.
+    var structuralMarkGapPositionCount: Int { structuralMarkGapPositions.count }
 
     public func visibility(
         of elementID: SyncTextElementID
@@ -847,16 +854,13 @@ public struct SyncTextSequenceState: Equatable, Sendable {
         startAnchor: SyncOperationAnchor,
         endAnchor: SyncOperationAnchor
     ) throws -> (start: Int, end: Int) {
-        let layout = try SyncTextSequenceStateValidator.projectStructuralLayout(
-            runs: runs
-        )
         let startGap = Self.structuralGap(forMarkAnchor: startAnchor)
         let endGap = Self.structuralGap(forMarkAnchor: endAnchor)
 
-        guard let start = layout.gapPositions[startGap] else {
+        guard let start = structuralMarkGapPositions[startGap] else {
             throw SyncTextMarkRangeFailure.invalidAnchor(startAnchor)
         }
-        guard let end = layout.gapPositions[endGap] else {
+        guard let end = structuralMarkGapPositions[endGap] else {
             throw SyncTextMarkRangeFailure.invalidAnchor(endAnchor)
         }
         guard start < end else {
@@ -1323,6 +1327,7 @@ private struct SyncTextSequenceValidationResult {
     let visibleText: String
     let visibleUTF16Count: Int
     let tombstonedUTF16Count: Int
+    let structuralMarkGapPositions: [SyncTextSequenceGap: Int]
     let metrics: SyncTextSequenceTraversalMetrics
 }
 
@@ -1380,7 +1385,7 @@ private enum SyncTextSequenceStateValidator {
 
         let gapIndex = makeGapIndex(runs)
         var metrics = SyncTextSequenceTraversalMetrics()
-        let structuralSpans = try deriveStructuralSpans(
+        let structuralLayout = try deriveStructuralLayout(
             runs: runs,
             scalarSpans: scalarSpans,
             gapIndex: gapIndex,
@@ -1394,7 +1399,7 @@ private enum SyncTextSequenceStateValidator {
             legalBoundaries: legalBoundaries
         )
         try compareProjection(
-            structuralSpans,
+            structuralLayout.spans,
             fragments: fragments,
             metrics: &metrics
         )
@@ -1403,6 +1408,7 @@ private enum SyncTextSequenceStateValidator {
             fragments: fragments,
             runs: runs,
             runIndex: runIndex,
+            structuralMarkGapPositions: structuralLayout.gapPositions,
             metrics: metrics
         )
     }
@@ -1515,20 +1521,6 @@ private enum SyncTextSequenceStateValidator {
         return result.mapValues {
             SyncOperationIDSameAnchorSiblingOrder.orderedRunIndices($0, runs: runs)
         }
-    }
-
-    private static func deriveStructuralSpans(
-        runs: [SyncTextSequenceRun],
-        scalarSpans: [[SyncTextSequenceScalarSpan]],
-        gapIndex: [SyncTextSequenceGap: [Int]],
-        metrics: inout SyncTextSequenceTraversalMetrics
-    ) throws -> [SyncTextSequenceStructuralSpan] {
-        try deriveStructuralLayout(
-            runs: runs,
-            scalarSpans: scalarSpans,
-            gapIndex: gapIndex,
-            metrics: &metrics
-        ).spans
     }
 
     private static func deriveStructuralLayout(
@@ -1722,6 +1714,7 @@ private enum SyncTextSequenceStateValidator {
         fragments: [SyncTextSequenceFragment],
         runs: [SyncTextSequenceRun],
         runIndex: [SyncOperationID: Int],
+        structuralMarkGapPositions: [SyncTextSequenceGap: Int],
         metrics: SyncTextSequenceTraversalMetrics
     ) throws -> SyncTextSequenceValidationResult {
         var visibleText = ""
@@ -1755,6 +1748,7 @@ private enum SyncTextSequenceStateValidator {
             visibleText: visibleText,
             visibleUTF16Count: visibleCount,
             tombstonedUTF16Count: tombstonedCount,
+            structuralMarkGapPositions: structuralMarkGapPositions,
             metrics: metrics
         )
     }
