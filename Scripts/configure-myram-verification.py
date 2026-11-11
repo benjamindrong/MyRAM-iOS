@@ -15,6 +15,7 @@ from typing import Any
 VERIFICATION_PROFILES = {
     "default": "myram-verification-identities.json",
     "myr227": "myr227-verification-identities.json",
+    "myr227test": "myr227-test-verification-identities.json",
 }
 
 PRODUCTION = {
@@ -26,6 +27,11 @@ PRODUCTION = {
         "com.northsignalstudio.myram.dev.widget",
         "com.northsignalstudio.myram.widget",
     ],
+    "ios_test_bundle_ids": [
+        "com.northsignalstudio.myram.tests",
+        "com.northsignalstudio.myram.uitests",
+    ],
+    "mac_test_bundle_ids": ["com.northsignalstudio.myram.mac.tests"],
     "ios_app_groups": [
         "group.com.northsignalstudio.myram.dev.widget",
         "group.com.northsignalstudio.myram.widget",
@@ -147,7 +153,14 @@ def load_identity(root: Path, profile: str = "default") -> dict[str, Any]:
             if not values.get(key):
                 fail(f"Verification manifest {platform}.{key} is required.")
 
+    test_ids = {ios.get("test_bundle_identifier"), ios.get("ui_test_bundle_identifier"),
+                macos.get("test_bundle_identifier")} - {None}
+    if profile == "myr227test" and len(test_ids) != 3:
+        fail("Dedicated test profile requires distinct iOS test, UI test, and Mac test bundle IDs.")
+
     production_values = {
+        *PRODUCTION["ios_test_bundle_ids"],
+        *PRODUCTION["mac_test_bundle_ids"],
         *PRODUCTION["ios_app_bundle_ids"],
         *PRODUCTION["ios_widget_bundle_ids"],
         *PRODUCTION["ios_app_groups"],
@@ -172,6 +185,7 @@ def load_identity(root: Path, profile: str = "default") -> dict[str, Any]:
         identity["multipeer_service_type"],
         ios["url_scheme"],
         macos["url_scheme"],
+        *test_ids,
     }
     overlap = production_values & verification_values
     if overlap:
@@ -181,6 +195,7 @@ def load_identity(root: Path, profile: str = "default") -> dict[str, Any]:
     selected_values = verification_values | {
         identity["display_name"], identity["bonjour_service"],
         ios["export_type_identifier"], ios["export_filename_extension"], ios["export_mime_type"],
+        *test_ids,
     }
     for other_profile, filename in VERIFICATION_PROFILES.items():
         if other_profile == profile:
@@ -198,7 +213,9 @@ def load_identity(root: Path, profile: str = "default") -> dict[str, Any]:
                 other_ios["export_mime_type"],
                 other_mac["app_bundle_identifier"], other_mac["widget_bundle_identifier"],
                 other_mac["widget_app_group_identifier"], other_mac["url_scheme"],
-            }
+                other_ios.get("test_bundle_identifier"), other_ios.get("ui_test_bundle_identifier"),
+                other_mac.get("test_bundle_identifier"),
+            } - {None}
         except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
             fail(f"Invalid {other_profile} Verification profile: {error}")
         collisions = selected_values & other_values
@@ -299,6 +316,16 @@ def configure_project(root: Path, identity: dict[str, Any]) -> None:
         )
         for old in PRODUCTION["mac_app_groups"]
     )
+
+    if "test_bundle_identifier" in ios:
+        replacements.extend([
+            ("PRODUCT_BUNDLE_IDENTIFIER = com.northsignalstudio.myram.tests;",
+             f"PRODUCT_BUNDLE_IDENTIFIER = {ios['test_bundle_identifier']};"),
+            ("PRODUCT_BUNDLE_IDENTIFIER = com.northsignalstudio.myram.uitests;",
+             f"PRODUCT_BUNDLE_IDENTIFIER = {ios['ui_test_bundle_identifier']};"),
+            ("PRODUCT_BUNDLE_IDENTIFIER = com.northsignalstudio.myram.mac.tests;",
+             f"PRODUCT_BUNDLE_IDENTIFIER = {macos['test_bundle_identifier']};"),
+        ])
 
     for old, new in replacements:
         replace_required(project, old, new)
@@ -455,6 +482,15 @@ def audit(root: Path, identity: dict[str, Any], source_sha: str, fixture: dict[s
     ):
         if value not in project_text:
             fail(f"Generated project is missing Verification identity {value}.")
+
+    if "test_bundle_identifier" in ios:
+        for value in (ios["test_bundle_identifier"], ios["ui_test_bundle_identifier"],
+                      macos["test_bundle_identifier"]):
+            if f"PRODUCT_BUNDLE_IDENTIFIER = {value};" not in project_text:
+                fail(f"Generated project missing test-only identity {value}.")
+        for old in (*PRODUCTION["ios_test_bundle_ids"], *PRODUCTION["mac_test_bundle_ids"]):
+            if f"PRODUCT_BUNDLE_IDENTIFIER = {old};" in project_text:
+                fail(f"Generated project retains Production test identity {old}.")
 
     for relative in (
         "MyRAM/Sync/MyRAMSyncController.swift",

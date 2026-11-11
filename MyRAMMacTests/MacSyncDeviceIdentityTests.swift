@@ -264,7 +264,7 @@ final class MacSyncDeviceIdentityTests: XCTestCase {
 
     func testMYR227VerificationNamespaceDoesNotOverlapMYR233() throws {
         let registrations = MyRAMSyncRuntimeConfiguration.verificationServicesByBundleID
-        XCTAssertEqual(Set(registrations.values), Set(["myram-verify", "myr227-sync"]))
+        XCTAssertEqual(Set(registrations.values), Set(["myram-verify", "myr227-sync", "myr227-test"]))
         for id in ["com.northsignalstudio.myram.myr227.verification",
                    "com.northsignalstudio.myram.mac.myr227.verification"] {
             XCTAssertEqual(registrations[id], "myr227-sync")
