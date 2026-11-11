@@ -27,14 +27,14 @@ final class MacEditorTextColorPolicyTests: XCTestCase {
         XCTAssertTrue(text.isEqual(to: normalizedAgain))
     }
 
-    func testDisplayNormalizationReplacesStoredForegroundWithSuppliedDefault() {
+    func testDisplayNormalizationPreservesExplicitStoredForeground() {
         let text = NSMutableAttributedString(string: "Auto")
         text.addAttribute(.foregroundColor, value: NSColor.systemRed, range: NSRange(location: 0, length: text.length))
 
         let normalized = MacEditorTextColorPolicy.normalizedForDisplay(text, defaultTextColor: .textColor)
 
-        XCTAssertEqual(normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, .textColor)
-        XCTAssertEqual(normalized.attribute(.autoTextColorDisplay, at: 0, effectiveRange: nil) as? Bool, true)
+        XCTAssertEqual(normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, .systemRed)
+        XCTAssertNil(normalized.attribute(.autoTextColorDisplay, at: 0, effectiveRange: nil))
     }
 
     func testDisplayNormalizationPreservesNonColorAttributes() {
@@ -56,7 +56,7 @@ final class MacEditorTextColorPolicyTests: XCTestCase {
         XCTAssertEqual(normalized.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int, NSUnderlineStyle.single.rawValue)
     }
 
-    func testMixedStoredColorsBecomeAutoDisplayColor() {
+    func testMixedStoredColorsPreserveExplicitColorAndDefaultToAutomaticForUncoloredText() {
         let text = NSMutableAttributedString(string: "AB")
         text.addAttribute(.foregroundColor, value: NSColor.systemBlue, range: NSRange(location: 1, length: 1))
 
@@ -64,8 +64,58 @@ final class MacEditorTextColorPolicyTests: XCTestCase {
 
         XCTAssertEqual(normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, .textColor)
         XCTAssertEqual(normalized.attribute(.autoTextColorDisplay, at: 0, effectiveRange: nil) as? Bool, true)
-        XCTAssertEqual(normalized.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor, .textColor)
-        XCTAssertEqual(normalized.attribute(.autoTextColorDisplay, at: 1, effectiveRange: nil) as? Bool, true)
+        XCTAssertEqual(normalized.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor, .systemBlue)
+        XCTAssertNil(normalized.attribute(.autoTextColorDisplay, at: 1, effectiveRange: nil))
+    }
+
+    func testColorPanelSelectionRemovesStaleAutoMarkerAndSurvivesPersistence() {
+        let original = MacEditorTextColorPolicy.normalizedForDisplay(
+            NSAttributedString(string: "Color")
+        )
+        let selected = NSMutableAttributedString(attributedString: original)
+        let explicit = NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)
+        selected.addAttribute(
+            .foregroundColor, value: explicit,
+            range: NSRange(location: 0, length: selected.length)
+        )
+        XCTAssertEqual(
+            selected.attribute(.autoTextColorDisplay, at: 0, effectiveRange: nil) as? Bool,
+            true
+        )
+
+        let normalized = MacEditorTextColorPolicy.normalizedForDisplay(selected)
+        XCTAssertEqual(
+            normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
+            explicit
+        )
+        XCTAssertNil(normalized.attribute(.autoTextColorDisplay, at: 0, effectiveRange: nil))
+        XCTAssertTrue(
+            normalized.isEqual(to: MacEditorTextColorPolicy.normalizedForDisplay(normalized))
+        )
+        let persisted = MacEditorTextColorPolicy.sanitizedForPersistence(normalized)
+        XCTAssertEqual(
+            persisted.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
+            explicit
+        )
+    }
+
+    func testAutomaticColorStillTracksDefaultAcrossAppearanceRefresh() {
+        let inherited = MacEditorTextColorPolicy.normalizedForDisplay(
+            NSAttributedString(string: "Auto")
+        )
+        let refreshed = MacEditorTextColorPolicy.normalizedForDisplay(
+            inherited, defaultTextColor: .labelColor
+        )
+        // The automatic marker is preserved, but a newly chosen semantic
+        // default is supplied instead of turning inherited text into explicit color.
+        XCTAssertEqual(
+            refreshed.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
+            .labelColor
+        )
+        XCTAssertEqual(
+            refreshed.attribute(.autoTextColorDisplay, at: 0, effectiveRange: nil) as? Bool,
+            true
+        )
     }
 
     func testPersistenceRemovesAutoForegroundAndMarkerOnly() {
@@ -114,9 +164,19 @@ final class MacEditorTextColorPolicyTests: XCTestCase {
         XCTAssertEqual(attributes[.font] as? NSFont, NSFont.systemFont(ofSize: 17))
     }
 
-    func testAutoTypingAttributesRefresh() {
+    func testColorPanelTypingAttributesBecomeExplicitWhenAutoMarkerLingers() {
         let attributes = MacEditorTextColorPolicy.normalizedTypingAttributes([
             .foregroundColor: NSColor.systemRed,
+            .autoTextColorDisplay: true
+        ])
+
+        XCTAssertEqual(attributes[.foregroundColor] as? NSColor, .systemRed)
+        XCTAssertNil(attributes[.autoTextColorDisplay])
+    }
+
+    func testAutomaticTypingAttributesRefreshWhenColorIsStillDefault() {
+        let attributes = MacEditorTextColorPolicy.normalizedTypingAttributes([
+            .foregroundColor: NSColor.textColor,
             .autoTextColorDisplay: true
         ])
 

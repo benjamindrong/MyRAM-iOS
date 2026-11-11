@@ -8,13 +8,21 @@ enum MacEditorTextColorPolicy {
     ) -> NSAttributedString {
         let mutable = NSMutableAttributedString(attributedString: attributedText)
         let fullRange = NSRange(location: 0, length: mutable.length)
-        // Stored RTF colors override NSTextView's dynamic textColor. Color is display-only
-        // in the native editor, so retain every other attribute and repaint with AppKit's
-        // semantic text color for the current appearance.
-        mutable.removeAttribute(.foregroundColor, range: fullRange)
-        mutable.removeAttribute(.autoTextColorDisplay, range: fullRange)
-        mutable.addAttribute(.foregroundColor, value: defaultTextColor, range: fullRange)
-        mutable.addAttribute(.autoTextColorDisplay, value: true, range: fullRange)
+        // Only inherited/default text follows the current system appearance.
+        // Explicit pasted colors and color-panel selections must survive refresh.
+        // AppKit can leave our auto marker on a range after changing its foreground;
+        // the changed foreground makes that range explicit, not automatic.
+        attributedText.enumerateAttributes(in: fullRange) { attributes, range, _ in
+            let color = attributes[.foregroundColor] as? NSColor
+            let isAuto = (attributes[.autoTextColorDisplay] as? Bool) == true
+            if isAuto, let color,
+               !color.isEqual(defaultTextColor), !color.isEqual(NSColor.textColor) {
+                mutable.removeAttribute(.autoTextColorDisplay, range: range)
+            } else if color == nil || isAuto {
+                mutable.addAttribute(.foregroundColor, value: defaultTextColor, range: range)
+                mutable.addAttribute(.autoTextColorDisplay, value: true, range: range)
+            }
+        }
         return mutable
     }
 
@@ -35,7 +43,11 @@ enum MacEditorTextColorPolicy {
     ) -> [NSAttributedString.Key: Any] {
         var normalized = attributes
         let isAuto = (attributes[.autoTextColorDisplay] as? Bool) == true
-        if attributes[.foregroundColor] == nil || isAuto {
+        if isAuto, let color = attributes[.foregroundColor] as? NSColor,
+           !color.isEqual(defaultTextColor), !color.isEqual(NSColor.textColor) {
+            // The color panel changed this typing color; stop treating it as inherited.
+            normalized.removeValue(forKey: .autoTextColorDisplay)
+        } else if attributes[.foregroundColor] == nil || isAuto {
             normalized[.foregroundColor] = defaultTextColor
             normalized[.autoTextColorDisplay] = true
         }

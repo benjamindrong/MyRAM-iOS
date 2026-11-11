@@ -18,8 +18,9 @@ enum MacStructuralFormattingAdapter {
         }
 
         var runs: [NoteStructuralFormattingProjectionRun] = []
-        let fullRange = NSRange(location: 0, length: attributedText.length)
-        attributedText.enumerateAttributes(in: fullRange) { attributes, range, _ in
+        let normalized = MacEditorTextColorPolicy.normalizedForDisplay(attributedText)
+        let fullRange = NSRange(location: 0, length: normalized.length)
+        normalized.enumerateAttributes(in: fullRange) { attributes, range, _ in
             let font = attributes[.font] as? NSFont ?? baseBodyFont
             let traits = font.fontDescriptor.symbolicTraits
             runs.append(NoteStructuralFormattingProjectionRun(
