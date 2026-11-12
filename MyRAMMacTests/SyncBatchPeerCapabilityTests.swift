@@ -444,6 +444,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
 
     func testDiscoveryLossDuringActiveMacBootstrapKeepsSameSnapshotRetryAlive() async throws {
         let peer = MCPeerID(displayName: "Remote|lost-discovery-mac")
+        let retrySent = expectation(description: "Bootstrap snapshot retransmitted after discovery loss")
         var attemptedSnapshots: [SyncPeerBootstrapSnapshot] = []
         let controller = try makeController(
             connectedPeersProvider: { [peer] },
@@ -453,6 +454,9 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
                 attemptedSnapshots.append(
                     try JSONDecoder().decode(SyncPeerBootstrapSnapshot.self, from: message.payload)
                 )
+                if attemptedSnapshots.count == 2 {
+                    retrySent.fulfill()
+                }
             }
         )
         controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "lost-discovery-mac")
@@ -468,7 +472,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         let browser = MCNearbyServiceBrowser(peer: localPeerID, serviceType: "myram-sync")
 
         controller.browser(browser, lostPeer: peer)
-        try await Task.sleep(nanoseconds: 25_000_000)
+        await fulfillment(of: [retrySent], timeout: 2.0)
 
         XCTAssertGreaterThan(attemptedSnapshots.count, attemptsBeforeLoss)
         XCTAssertEqual(Set(attemptedSnapshots.map(\.id)), Set([snapshotID]))
