@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: bash Scripts/create-myram-verification-worktree.sh [--path PATH] [--fixture-manifest PATH] [--transport-only]
+Usage: bash Scripts/create-myram-verification-worktree.sh [--path PATH] [--profile default|myr227|myr227test] [--fixture-manifest PATH] [--transport-only]
 
 Creates a detached sibling worktree at the current candidate HEAD and converts
 only that disposable checkout into the isolated "MyRAM Verification" variant.
@@ -15,6 +15,7 @@ EOF
 }
 
 requested_path=""
+profile="default"
 fixture_manifest=""
 transport_only=false
 while [[ $# -gt 0 ]]; do
@@ -22,6 +23,12 @@ while [[ $# -gt 0 ]]; do
     --path)
       [[ $# -ge 2 ]] || { echo "Missing value for --path" >&2; exit 2; }
       requested_path="$2"
+      shift 2
+      ;;
+    --profile)
+      [[ $# -ge 2 ]] || { echo "Missing value for --profile" >&2; exit 2; }
+      profile="$2"
+      case "$profile" in default|myr227|myr227test) ;; *) echo "Unknown Verification profile: $profile" >&2; exit 2;; esac
       shift 2
       ;;
     --fixture-manifest)
@@ -49,7 +56,7 @@ repo_root="$(git rev-parse --show-toplevel)"
 candidate_sha="$(git -C "$repo_root" rev-parse HEAD)"
 short_sha="${candidate_sha:0:12}"
 repo_parent="$(dirname "$repo_root")"
-worktree_path="${requested_path:-$repo_parent/MyRAM-iOS-Verification-$short_sha}"
+worktree_path="${requested_path:-$repo_parent/MyRAM-iOS-Verification-$profile-$short_sha}"
 
 case "$worktree_path" in
   "$repo_root"|"$repo_root/"*)
@@ -73,7 +80,7 @@ cleanup_on_error() {
 trap cleanup_on_error EXIT
 
 git -C "$repo_root" worktree add --detach "$worktree_path" "$candidate_sha"
-configure_args=(--root "$worktree_path" --manifest-output "$worktree_path/MYR-221-VERIFICATION-IDENTITY.json")
+configure_args=(--root "$worktree_path" --profile "$profile" --manifest-output "$worktree_path/MYR-221-VERIFICATION-IDENTITY.json")
 if [[ -n "$fixture_manifest" ]]; then
   configure_args+=(--fixture-manifest "$fixture_manifest")
 fi
@@ -87,6 +94,7 @@ trap - EXIT
 cat <<EOF
 MYR-221 Verification worktree prepared.
 Source candidate: $candidate_sha
+Verification profile: $profile
 Worktree: $worktree_path
 Installed app name: MyRAM Verification
 iOS scheme to build: MyRAM

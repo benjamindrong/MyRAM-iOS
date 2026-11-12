@@ -374,6 +374,82 @@ final class SyncTextMarkStateTests: XCTestCase {
         }
     }
 
+    func testMYR227LargeFormattedPasteDeleteThenSpaceEditReusesImmutableMarkGapIndex() throws {
+        let rootID = operation(0)
+        let text = String(repeating: "a🧩", count: 4_096)
+        let original = try rootState(operationID: rootID, text: text)
+        let length = text.utf16.count
+        let start = try original.operationAnchor(atVisibleUTF16Offset: 0)
+        let end = try original.operationAnchor(atVisibleUTF16Offset: length)
+        let keys = SyncTextMarkKey.allCases
+
+        let operations = try (1...256).map { index -> SyncTextMarkOperation in
+            let key = keys[(index - 1) % keys.count]
+            let assignment: SyncTextMarkAssignment
+            switch key {
+            case .fontSize: assignment = .fontSizeMilliPoints(12_000)
+            case .textColor:
+                assignment = .textColor(SyncTextMarkRGBAColor(
+                    red: 64, green: 128, blue: 192, alpha: 255
+                ))
+            default: assignment = .enabled
+            }
+            return try mark(
+                operation(UInt64(index)), clock: UInt64(index), key: key,
+                assignment: assignment, start: start, end: end
+            )
+        }
+        let marks = try SyncTextMarkState(operations: operations)
+        let baselineMetrics = original.validationMetrics
+        XCTAssertEqual(original.structuralMarkGapPositionCount, 8_194)
+        XCTAssertNoThrow(try marks.validating(against: original))
+        XCTAssertNoThrow(try marks.validating(against: original))
+        XCTAssertEqual(original.validationMetrics, baselineMetrics)
+
+        let tombstone = try SyncTextSequenceFragment(
+            operationID: rootID, startOffset: 0, utf16Length: length,
+            visibility: .tombstone
+        )
+        let deleted = try SyncTextSequenceState(
+            runs: original.runs, fragments: [tombstone]
+        )
+        XCTAssertEqual(deleted.visibleText, "")
+        XCTAssertEqual(deleted.tombstonedUTF16Count, length)
+        XCTAssertEqual(deleted.structuralMarkGapPositionCount,
+                       original.structuralMarkGapPositionCount)
+        XCTAssertNoThrow(try marks.validating(against: deleted))
+
+        let lastElement = try SyncTextElementID(
+            operationID: rootID, elementOffset: length - 1
+        )
+        let newID = operation(1_000)
+        let space = try SyncTextSequenceRun(
+            operationID: newID,
+            origin: SyncTextInsertionOrigin(
+                leftElementID: lastElement, rightElementID: nil
+            ),
+            text: " "
+        )
+        let edited = try SyncTextSequenceState(
+            runs: original.runs + [space],
+            fragments: [
+                tombstone,
+                try SyncTextSequenceFragment(
+                    operationID: newID, startOffset: 0, utf16Length: 1,
+                    visibility: .visible
+                )
+            ]
+        )
+        XCTAssertEqual(edited.visibleText, " ")
+        XCTAssertEqual(edited.tombstonedUTF16Count, length)
+        XCTAssertNoThrow(try marks.validating(against: edited))
+        XCTAssertNoThrow(try marks.validating(against: edited))
+        XCTAssertEqual(
+            try edited.markRangePositions(startAnchor: start, endAnchor: end).end,
+            length
+        )
+    }
+
     func testCanonicalFontSizeValidationUsesFrozenBounds() throws {
         let sequence = try rootState(text: "A")
         let start = try sequence.operationAnchor(atVisibleUTF16Offset: 0)

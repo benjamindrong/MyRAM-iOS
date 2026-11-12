@@ -142,7 +142,12 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         }
 
         private func publishCurrentText(from textView: NSTextView) {
-            attributedText.wrappedValue = NSAttributedString(attributedString: textView.attributedString())
+            // Resolve a color-panel change before the save callback observes the
+            // bound attributes; otherwise a stale automatic-color marker would
+            // turn the user's explicit color into a structural .clear operation.
+            attributedText.wrappedValue = MacEditorTextColorPolicy.normalizedForDisplay(
+                textView.attributedString()
+            )
             onTextChanged()
         }
 

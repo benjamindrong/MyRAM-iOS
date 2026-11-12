@@ -2003,7 +2003,7 @@ struct NotesListView: View {
                 markdownCoordinator: markdownImportCoordinator,
                 flushBridge: editorFileOperationBridge,
                 importMarkdown: vm.importMarkdownDocument,
-                importMyRAM: { try vm.importNotes(from: $0).first }
+                importMyRAM: { try await vm.importNotes(from: $0).first }
             )
             switch result {
             case .markdown(let note):

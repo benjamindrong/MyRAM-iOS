@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import MyRAMMac
 
@@ -144,6 +145,43 @@ final class MacEditorSyncBridgeTests: XCTestCase {
         textView.textStorage?.replaceCharacters(in: NSRange(location: 5, length: 0), with: "?")
 
         XCTAssertEqual(changeCount, 1)
+    }
+
+    func testColorPanelEditPublishesExplicitColorWithoutStaleAutomaticMarker() {
+        let initial = MacEditorTextColorPolicy.normalizedForDisplay(
+            NSAttributedString(string: "Color")
+        )
+        let textView = makeTextView("Color")
+        textView.textStorage?.setAttributedString(initial)
+
+        var captured: NSAttributedString?
+        let binding = Binding<NSAttributedString>(
+            get: { captured ?? initial },
+            set: { captured = $0 }
+        )
+        var notificationCount = 0
+        let coordinator = MacTextViewRepresentable.Coordinator(
+            attributedText: binding,
+            syncBridge: MacEditorSyncBridge(),
+            onTextChanged: { notificationCount += 1 }
+        )
+        coordinator.textView = textView
+        textView.textStorage?.delegate = coordinator
+        coordinator.register(textView)
+
+        let color = NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)
+        textView.textStorage?.addAttribute(
+            .foregroundColor,
+            value: color,
+            range: NSRange(location: 0, length: 5)
+        )
+
+        XCTAssertEqual(notificationCount, 1)
+        XCTAssertEqual(
+            captured?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
+            color
+        )
+        XCTAssertNil(captured?.attribute(.autoTextColorDisplay, at: 0, effectiveRange: nil))
     }
 
     func testRemoteMutationClearsUndoManager() {

@@ -231,19 +231,47 @@ final class MacSyncDeviceIdentityTests: XCTestCase {
     }
 
     func testMYR233TransportOnlyRequiresExactVerificationIdentityAndNamespace() throws {
-        for id in MyRAMSyncRuntimeConfiguration.verificationBundleIDs {
-            let mode = try MyRAMSyncRuntimeConfiguration(bundleIdentifier: id, bonjourServices: ["_myram-verify._tcp"], transportOnlyValue: true)
+        for (id, service) in MyRAMSyncRuntimeConfiguration.verificationServicesByBundleID {
+            let bonjour = ["_\(service)._tcp"]
+            let mode = try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: id, bonjourServices: bonjour, transportOnlyValue: true
+            )
             XCTAssertFalse(mode.applicationSyncEnabled)
             XCTAssertThrowsError(try mode.requireApplicationSync())
             XCTAssertTrue(mode.recordsTransportDiagnostics)
-            for namespace in [nil, ["_myram-sync._tcp"], ["_myram-verify._tcp", "_myram-sync._tcp"]] as [[String]?] {
-                XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(bundleIdentifier: id, bonjourServices: namespace, transportOnlyValue: true))
+            XCTAssertEqual(mode.verificationServiceType, service)
+            for namespace in [nil, ["_myram-sync._tcp"], ["_myram-verify._tcp"], ["_myr227-sync._tcp"]] as [[String]?] {
+                if namespace == bonjour { continue }
+                XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                    bundleIdentifier: id, bonjourServices: namespace, transportOnlyValue: true
+                ))
+                // A recognized Verification bundle must fail even without an opt-in flag.
+                XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                    bundleIdentifier: id, bonjourServices: namespace, transportOnlyValue: nil
+                ))
             }
-            XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(bundleIdentifier: id, bonjourServices: ["_myram-verify._tcp"], transportOnlyValue: "true"))
-            let normal = try MyRAMSyncRuntimeConfiguration(bundleIdentifier: id, bonjourServices: ["_myram-verify._tcp"], transportOnlyValue: nil)
+            XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: id, bonjourServices: bonjour, transportOnlyValue: "true"
+            ))
+            let normal = try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: id, bonjourServices: bonjour, transportOnlyValue: nil
+            )
             XCTAssertTrue(normal.applicationSyncEnabled)
             XCTAssertTrue(normal.recordsTransportDiagnostics)
             XCTAssertNoThrow(try normal.requireApplicationSync())
+        }
+    }
+
+    func testMYR227VerificationNamespaceDoesNotOverlapMYR233() throws {
+        let registrations = MyRAMSyncRuntimeConfiguration.verificationServicesByBundleID
+        XCTAssertEqual(Set(registrations.values), Set(["myram-verify", "myr227-sync", "myr227-test"]))
+        for id in ["com.northsignalstudio.myram.myr227.verification",
+                   "com.northsignalstudio.myram.mac.myr227.verification"] {
+            XCTAssertEqual(registrations[id], "myr227-sync")
+            XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: id, bonjourServices: ["_myram-verify._tcp"],
+                transportOnlyValue: nil
+            ))
         }
     }
 
@@ -255,7 +283,8 @@ final class MacSyncDeviceIdentityTests: XCTestCase {
                 transportOnlyValue: nil, offlineRestoreValue: true
             ))
         }
-        for identifier in MyRAMSyncRuntimeConfiguration.verificationBundleIDs {
+        for (identifier, service) in MyRAMSyncRuntimeConfiguration.verificationServicesByBundleID {
+            let bonjour = ["_\(service)._tcp"]
             for namespace in [nil, ["_myram-sync._tcp"]] as [[String]?] {
                 XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
                     bundleIdentifier: identifier, bonjourServices: namespace,
@@ -263,17 +292,17 @@ final class MacSyncDeviceIdentityTests: XCTestCase {
                 ))
             }
             XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
-                bundleIdentifier: identifier, bonjourServices: ["_myram-verify._tcp"],
+                bundleIdentifier: identifier, bonjourServices: bonjour,
                 transportOnlyValue: nil, offlineRestoreValue: "true"
             ))
             let enabled = try MyRAMSyncRuntimeConfiguration(
-                bundleIdentifier: identifier, bonjourServices: ["_myram-verify._tcp"],
+                bundleIdentifier: identifier, bonjourServices: bonjour,
                 transportOnlyValue: nil, offlineRestoreValue: true
             )
             XCTAssertTrue(enabled.isOfflineRestoreVerification)
             XCTAssertTrue(enabled.applicationSyncEnabled)
             let normal = try MyRAMSyncRuntimeConfiguration(
-                bundleIdentifier: identifier, bonjourServices: ["_myram-verify._tcp"],
+                bundleIdentifier: identifier, bonjourServices: bonjour,
                 transportOnlyValue: nil
             )
             XCTAssertFalse(normal.isOfflineRestoreVerification)

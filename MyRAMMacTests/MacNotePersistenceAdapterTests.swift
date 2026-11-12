@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import AppKit
 import SwiftData
 import XCTest
@@ -5,6 +6,48 @@ import XCTest
 
 @MainActor
 final class MacNotePersistenceAdapterTests: XCTestCase {
+    func testMYR227MacCanonicalSixMarkAdapterRoundTripPreservesUnicodeAndAssignments() throws {
+        let body = "A🚀e\u{301}"
+        let rgba = SyncTextMarkRGBAColor(red: 0, green: 0, blue: 255, alpha: 255)
+        let assignments: [SyncTextMarkKey: SyncTextMarkAssignment] = [
+            .bold: .enabled,
+            .italic: .enabled,
+            .underline: .enabled,
+            .strikethrough: .enabled,
+            .fontSize: .fontSizeMilliPoints(25_000),
+            .textColor: .textColor(rgba)
+        ]
+        let rangeLength = (body as NSString).length
+        let source = NoteStructuralFormattingProjection(
+            plainText: body,
+            runs: [NoteStructuralFormattingProjectionRun(
+                startUTF16Offset: 0,
+                utf16Length: rangeLength,
+                assignments: assignments
+            )]
+        )
+        let baseFont = NSFont.systemFont(ofSize: 24)
+        let rendered = MacStructuralFormattingAdapter.render(
+            projection: source,
+            baseBodyFont: baseFont
+        )
+        let reprojected = MacStructuralFormattingAdapter.project(
+            rendered,
+            baseBodyFont: baseFont
+        )
+
+        XCTAssertEqual(rendered.string, body)
+        XCTAssertEqual(rendered.length, rangeLength)
+        XCTAssertEqual(reprojected.plainText, body)
+        XCTAssertEqual(reprojected.runs.count, 1)
+        let span = try XCTUnwrap(reprojected.runs.first)
+        XCTAssertEqual(span.startUTF16Offset, 0)
+        XCTAssertEqual(span.utf16Length, rangeLength)
+        for key in SyncTextMarkKey.allCases {
+            XCTAssertEqual(span.assignments[key], assignments[key], "Lost \(key)")
+        }
+    }
+
     func testActivatedMacPersistenceRejectsLegacyPreparedEditWithoutChangingSequence() async throws {
         XCTAssertTrue(SyncBatchAnchoredPayloadCapability.isEnabled)
         let container = try makeInMemoryContainer()
@@ -486,6 +529,60 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         shouldFail = false
         try adapter.persistPreparedLocalNoteEdit(prepared)
         XCTAssertEqual(note.content, "After")
+    }
+
+    func testMYR227MacColorPickerExplicitColorPublishesAndPersistsStructuralMark() async throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let note = Note(title: "Colored", content: "Same")
+        context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: note, in: context
+        )
+        try context.save()
+
+        let text = NSMutableAttributedString(string: "Same")
+        let fullRange = NSRange(location: 0, length: text.length)
+        // Replicate AppKit's foreground-only replacement on auto-colored text.
+        text.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
+        text.addAttribute(.autoTextColorDisplay, value: true, range: fullRange)
+        let explicit = NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)
+        text.addAttribute(.foregroundColor, value: explicit, range: fullRange)
+
+        let adapter = MacNotePersistenceAdapter(context: context)
+        let prepared = try await adapter.prepareProductionLocalNoteEdit(
+            noteID: note.id, proposedAttributedContent: text
+        )
+        XCTAssertTrue(prepared.hasFormattingMutation)
+        XCTAssertFalse(prepared.hasBodyMutation)
+        XCTAssertEqual(prepared.capturedChanges.count, 1)
+        guard case .noteStructuralMarksChanged(let captured) = prepared.capturedChanges.first?.change else {
+            return XCTFail("Explicit color must publish a structural mark without changing text")
+        }
+        let expected = SyncTextMarkAssignment.textColor(
+            SyncTextMarkRGBAColor(red: 255, green: 0, blue: 0, alpha: 255)
+        )
+        XCTAssertTrue(captured.operations.contains {
+            $0.key == .textColor && $0.assignment == expected
+        })
+        try adapter.persistPreparedLocalNoteEdit(prepared)
+
+        let record = try XCTUnwrap(
+            context.fetch(FetchDescriptor<NoteSequenceStateRecord>()).first
+        )
+        let sequence = try NoteSequenceStatePersistenceCodec
+            .decodeStructurallyValidatedState(record: record, noteID: note.id)
+        let marks = try NoteStructuralFormattingPersistence.decode(
+            record: record, pairedWith: sequence
+        )
+        let assignments = try XCTUnwrap(marks.visibleProjection(in: sequence).first).assignments
+        XCTAssertEqual(assignments[.textColor], expected)
+        XCTAssertEqual(
+            MacStructuralFormattingAdapter.project(
+                adapter.attributedContent(for: note)
+            ).runs.first?.assignments[.textColor],
+            expected
+        )
     }
 
     func testPrepareAndPersistFormattingOnlyEditMutatesMarksWithoutBodySync() async throws {

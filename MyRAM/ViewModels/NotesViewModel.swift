@@ -3665,11 +3665,21 @@ final class NotesViewModel: ObservableObject {
         }
 
         let exportTime = nowProvider()
-        return try Self.writeStructuredExportJSON(notes: nonDeletedNotes, exportedAt: exportTime)
+        // Export committed structural authority, never potentially stale RTF.
+        let formattingByNoteID = try Dictionary(uniqueKeysWithValues:
+            nonDeletedNotes.map { note in
+                (note.id, try detachedFormattingRuns(for: note))
+            }
+        )
+        return try Self.writeStructuredExportJSON(
+            notes: nonDeletedNotes,
+            exportedAt: exportTime,
+            formattingByNoteID: formattingByNoteID
+        )
     }
 
     @discardableResult
-    func importNotes(from exportURL: URL) throws -> [Note] {
+    func importNotes(from exportURL: URL) async throws -> [Note] {
         let didStartAccessing = exportURL.startAccessingSecurityScopedResource()
         defer {
             if didStartAccessing {
@@ -3685,22 +3695,79 @@ final class NotesViewModel: ObservableObject {
             throw NoteImportError.invalidFile
         }
 
-        guard manifest.format == "myram-note-export", manifest.version == 1 else {
+        guard manifest.format == "myram-note-export",
+              manifest.version == 1 || manifest.version == 2 else {
             throw NoteImportError.unsupportedFormat
+        }
+
+        // Reserve fresh detached mark identities before staging any SwiftData
+        // models. No await is permitted between insertion and the single save.
+        var preparedImports: [PreparedDetachedImport] = []
+        for record in manifest.notes where record.deletedAt == nil {
+            let note = Note(title: record.title, content: record.content)
+            let sequence = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+                noteID: note.id,
+                body: note.content
+            )
+            let formatting: PreparedStructuralFormattingEdit
+            if manifest.version == 2 {
+                guard let runs = record.formattingRuns else {
+                    throw NoteImportError.invalidFile
+                }
+                let projection = try Self.detachedFormattingProjection(
+                    runs: runs,
+                    body: record.content
+                )
+                formatting = try await NoteStructuralFormattingEditPlanner.prepare(
+                    sequence: sequence.state,
+                    currentMarkState: .empty,
+                    desiredProjection: projection,
+                    operationIDReserver: MyRAMSyncOperationIDAllocator.shared
+                )
+            } else {
+                // V1 is plain text; a mislabeled mark payload cannot be discarded.
+                guard record.formattingRuns == nil else {
+                    throw NoteImportError.invalidFile
+                }
+                formatting = PreparedStructuralFormattingEdit(
+                    finalMarkState: .empty,
+                    emittedOperations: []
+                )
+            }
+            preparedImports.append(PreparedDetachedImport(
+                record: record,
+                note: note,
+                sequence: sequence,
+                marks: formatting.finalMarkState,
+                operations: formatting.emittedOperations
+            ))
+        }
+        guard !preparedImports.isEmpty else {
+            throw NoteImportError.noImportableNotes
         }
 
         let importedNotes: [Note]
         do {
-            importedNotes = try manifest.notes.compactMap { try importNote(from: $0) }
-            guard !importedNotes.isEmpty else {
-                throw NoteImportError.noImportableNotes
+            importedNotes = try preparedImports.map {
+                try importNote(
+                    from: $0.record,
+                    note: $0.note,
+                    sequence: $0.sequence,
+                    marks: $0.marks
+                )
             }
             try saveContext()
         } catch {
             context.rollback()
             throw error
         }
-        publishImportedGraph(importedNotes)
+        let markOperations = Dictionary(uniqueKeysWithValues:
+            preparedImports.map { ($0.note.id, $0.operations) }
+        )
+        publishImportedGraph(
+            importedNotes,
+            markOperationsByNoteID: markOperations
+        )
         refreshCurrentFolderContent()
         selectNote(importedNotes[0])
         return importedNotes
@@ -3756,7 +3823,8 @@ final class NotesViewModel: ObservableObject {
 
     nonisolated private static func writeStructuredExportJSON(
         notes: [Note],
-        exportedAt: Date
+        exportedAt: Date,
+        formattingByNoteID: [UUID: [ExportManifestFormattingRun]]
     ) throws -> [URL] {
         let exportRoot = try makeExportDirectory()
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -3812,14 +3880,15 @@ final class NotesViewModel: ObservableObject {
                     modifiedAt: iso8601Timestamp(from: note.modifiedAt),
                     deletedAt: note.deletedAt.map(iso8601Timestamp(from:)),
                     folderPath: folderPathSegments(for: note.folder),
-                    attachments: manifestAttachments
+                    attachments: manifestAttachments,
+                    formattingRuns: formattingByNoteID[note.id]
                 )
             )
         }
 
         let manifest = ExportManifest(
             format: "myram-note-export",
-            version: 1,
+            version: 2,
             exportedAt: iso8601Timestamp(from: exportedAt),
             notes: manifestNotes
         )
@@ -3861,22 +3930,19 @@ final class NotesViewModel: ObservableObject {
             }
     }
 
-    private func importNote(from noteRecord: ExportManifestNote) throws -> Note? {
-        if noteRecord.deletedAt != nil {
-            return nil
-        }
-
+    private func importNote(
+        from noteRecord: ExportManifestNote,
+        note: Note,
+        sequence: PreparedInitialNoteSequenceState,
+        marks: SyncTextMarkState
+    ) throws -> Note {
         let folder = folder(forPath: noteRecord.folderPath)
-        let note = Note(title: noteRecord.title, content: noteRecord.content)
         note.createdAt = Self.date(from: noteRecord.createdAt) ?? .now
         note.modifiedAt = Self.date(from: noteRecord.modifiedAt) ?? .now
-        let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
-            noteID: note.id,
-            body: note.content
-        )
         _ = try NoteSequenceStateFullBodyIntegration.insertNewNote(
             note,
-            preparedState: prepared,
+            preparedState: sequence,
+            initialMarkState: marks,
             in: context
         )
         note.folder = folder
@@ -3913,7 +3979,10 @@ final class NotesViewModel: ObservableObject {
         return note
     }
 
-    private func publishImportedGraph(_ importedNotes: [Note]) {
+    private func publishImportedGraph(
+        _ importedNotes: [Note],
+        markOperationsByNoteID: [UUID: [SyncTextMarkOperation]]
+    ) {
         var publishedFolderIDs: Set<UUID> = []
 
         for note in importedNotes {
@@ -3930,10 +3999,26 @@ final class NotesViewModel: ObservableObject {
         }
 
         for note in importedNotes {
-            recordSyncBatchChange(SyncConvergenceCapturedLocalChange(
+            // One capture boundary owns creation and dependent formatting.
+            // The Slice 2 planner assigns separate durable V1/V2 and V3 IDs.
+            var capturedChanges = [SyncConvergenceCapturedLocalChange(
                 change: IPhoneSyncBatchCaptureHook.noteCreated(note),
                 evidence: nil
-            ))
+            )]
+            if let operations = markOperationsByNoteID[note.id],
+               !operations.isEmpty {
+                capturedChanges.append(SyncConvergenceCapturedLocalChange(
+                    change: .noteStructuralMarksChanged(
+                        SyncBatchNoteStructuralMarksChangedChange(
+                            noteID: note.id,
+                            operations: operations,
+                            modifiedAt: note.modifiedAt
+                        )
+                    ),
+                    evidence: nil
+                ))
+            }
+            recordSyncBatchChanges(capturedChanges)
             for pinnedText in note.pinnedThoughts {
                 recordPinnedThoughtSyncChange(pinnedText)
             }
@@ -3941,6 +4026,75 @@ final class NotesViewModel: ObservableObject {
                 recordPhotoAttachmentSyncChange(attachment, updatedAt: note.modifiedAt)
             }
         }
+    }
+
+    private func detachedFormattingRuns(
+        for note: Note
+    ) throws -> [ExportManifestFormattingRun] {
+        let noteID = note.id
+        var descriptor = FetchDescriptor<NoteSequenceStateRecord>(
+            predicate: #Predicate { $0.noteID == noteID }
+        )
+        descriptor.fetchLimit = 2
+        let records = try context.fetch(descriptor)
+        guard records.count == 1,
+              let record = records.first,
+              record.markFormatVersion == NoteStructuralFormattingPersistence.schemaVersion else {
+            throw NoteExportError.structuralFormattingUnavailable
+        }
+        do {
+            let sequence = try NoteSequenceStatePersistenceCodec
+                .decodeStructurallyValidatedState(record: record, noteID: note.id)
+            guard NoteSequenceStateExactText.matches(sequence.visibleText, note.content) else {
+                throw NoteExportError.structuralFormattingUnavailable
+            }
+            let marks = try NoteStructuralFormattingPersistence.decode(
+                record: record,
+                pairedWith: sequence
+            )
+            return try marks.visibleProjection(in: sequence).map { span in
+                ExportManifestFormattingRun(
+                    startUTF16Offset: span.startUTF16Offset,
+                    utf16Length: span.utf16Length,
+                    assignments: Dictionary(uniqueKeysWithValues:
+                        SyncTextMarkKey.allCases.map {
+                            ($0.rawValue, span.assignments[$0] ?? .clear)
+                        }
+                    )
+                )
+            }
+        } catch {
+            throw NoteExportError.structuralFormattingUnavailable
+        }
+    }
+
+    private static func detachedFormattingProjection(
+        runs: [ExportManifestFormattingRun],
+        body: String
+    ) throws -> NoteStructuralFormattingProjection {
+        let knownKeys = Set(SyncTextMarkKey.allCases.map(\.rawValue))
+        var projectedRuns: [NoteStructuralFormattingProjectionRun] = []
+        projectedRuns.reserveCapacity(runs.count)
+        for run in runs {
+            guard Set(run.assignments.keys) == knownKeys else {
+                throw NoteImportError.invalidFile
+            }
+            let assignments = Dictionary(uniqueKeysWithValues:
+                run.assignments.compactMap { key, value -> (SyncTextMarkKey, SyncTextMarkAssignment)? in
+                    guard let key = SyncTextMarkKey(rawValue: key) else { return nil }
+                    return (key, value)
+                }
+            )
+            projectedRuns.append(NoteStructuralFormattingProjectionRun(
+                startUTF16Offset: run.startUTF16Offset,
+                utf16Length: run.utf16Length,
+                assignments: assignments
+            ))
+        }
+        return NoteStructuralFormattingProjection(
+            plainText: body,
+            runs: projectedRuns
+        )
     }
 
     private func folder(forPath path: [String]) -> Folder? {
@@ -4502,6 +4656,22 @@ private struct ExportManifestNote: Codable {
     let deletedAt: String?
     let folderPath: [String]
     let attachments: [ExportManifestAttachment]
+    // V2 carries canonical visible marks, never source-device element IDs.
+    let formattingRuns: [ExportManifestFormattingRun]?
+}
+
+private struct ExportManifestFormattingRun: Codable, Sendable {
+    let startUTF16Offset: Int
+    let utf16Length: Int
+    let assignments: [String: SyncTextMarkAssignment]
+}
+
+private struct PreparedDetachedImport {
+    let record: ExportManifestNote
+    let note: Note
+    let sequence: PreparedInitialNoteSequenceState
+    let marks: SyncTextMarkState
+    let operations: [SyncTextMarkOperation]
 }
 
 private struct ExportManifestPinnedThought: Codable {
@@ -4523,6 +4693,7 @@ private struct ExportManifestAttachment: Codable {
 
 enum NoteExportError: LocalizedError {
     case noNotesSelected
+    case structuralFormattingUnavailable
     case failedToEncodeText
     case failedToEncodeManifest
     case failedToCreateArchive
@@ -4531,6 +4702,8 @@ enum NoteExportError: LocalizedError {
         switch self {
         case .noNotesSelected:
             "No notes were selected to export."
+        case .structuralFormattingUnavailable:
+            "The note's structural formatting is unavailable; export was stopped to prevent formatting loss."
         case .failedToEncodeText:
             "The note export could not be encoded as UTF-8."
         case .failedToEncodeManifest:

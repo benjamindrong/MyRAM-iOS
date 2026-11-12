@@ -7313,22 +7313,50 @@ final class MyRAMTests: XCTestCase {
         context.insert(child)
         try context.save()
         let vm = NotesViewModel(context: context)
-        for bundleID in ["com.northsignalstudio.myram.verification", "com.northsignalstudio.myram.mac.verification"] {
+        let registeredServices = MyRAMSyncRuntimeConfiguration.verificationServicesByBundleID
+        // Existing MYR-233 identities must retain their authorized inspection role.
+        XCTAssertEqual(registeredServices["com.northsignalstudio.myram.verification"], "myram-verify")
+        XCTAssertEqual(registeredServices["com.northsignalstudio.myram.mac.verification"], "myram-verify")
+
+        for (bundleID, service) in registeredServices.sorted(by: { $0.key < $1.key }) {
             let isolated = try MyRAMSyncRuntimeConfiguration(
-                bundleIdentifier: bundleID, bonjourServices: ["_myram-verify._tcp"], transportOnlyValue: nil)
+                bundleIdentifier: bundleID,
+                bonjourServices: ["_\(service)._tcp"],
+                transportOnlyValue: nil
+            )
             XCTAssertTrue(vm.fetchRecentlyDeletedNotes(now: now, configuration: isolated).isEmpty)
-            XCTAssertEqual(vm.fetchRecentlyDeletedNotes(now: now, includeRetainedExpired: true,
-                                                       configuration: isolated).map(\.id), [note.id])
+            XCTAssertEqual(
+                vm.fetchRecentlyDeletedNotes(
+                    now: now, includeRetainedExpired: true, configuration: isolated
+                ).map(\.id),
+                [note.id]
+            )
+            // A known Verification bundle with the wrong Bonjour namespace must
+            // fail closed before it can inspect retained deleted notes.
+            XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: bundleID,
+                bonjourServices: ["_myram-sync._tcp"],
+                transportOnlyValue: nil
+            )) { error in
+                switch error {
+                case MyRAMSyncRuntimeConfiguration.ConfigurationError.invalidVerificationNamespace:
+                    break
+                default:
+                    XCTFail("Expected invalidVerificationNamespace for \(bundleID): \(error)")
+                }
+            }
         }
-        for (bundleID, service) in [
-            ("com.northsignalstudio.myram", "_myram-verify._tcp"),
-            ("com.northsignalstudio.myram.verification", "_myram-sync._tcp")
-        ] {
+
+        for bundleID in ["com.northsignalstudio.myram", "com.northsignalstudio.myram.mac"] {
             let excluded = try MyRAMSyncRuntimeConfiguration(
-                bundleIdentifier: bundleID, bonjourServices: [service], transportOnlyValue: nil)
+                bundleIdentifier: bundleID,
+                bonjourServices: ["_myram-verify._tcp"],
+                transportOnlyValue: nil
+            )
             XCTAssertFalse(excluded.allowsRetainedDeletedNoteInspection)
-            XCTAssertTrue(vm.fetchRecentlyDeletedNotes(now: now, includeRetainedExpired: true,
-                                                       configuration: excluded).isEmpty)
+            XCTAssertTrue(vm.fetchRecentlyDeletedNotes(
+                now: now, includeRetainedExpired: true, configuration: excluded
+            ).isEmpty)
         }
         XCTAssertEqual(note.deletedAt, deletion)
         XCTAssertEqual(note.pinnedThoughts.map(\.id), [child.id])
@@ -8606,7 +8634,7 @@ final class MyRAMTests: XCTestCase {
         let importContainer = try makeContainer(isStoredInMemoryOnly: true)
         let importVM = NotesViewModel(context: importContainer.mainContext)
 
-        let importedNotes = try importVM.importNotes(from: exportURL)
+        let importedNotes = try await importVM.importNotes(from: exportURL)
         let importedNote = try XCTUnwrap(importedNotes.first)
 
         XCTAssertEqual(importedNote.title, "Imported Plan")

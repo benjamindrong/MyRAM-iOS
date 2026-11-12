@@ -8,6 +8,112 @@ import XCTest
 final class SyncBatchPeerCapabilityTests: XCTestCase {
     private var retainedContainers: [ModelContainer] = []
 
+    func testMYR227InterruptedFormattedImportRecoversViaReconnectBootstrapWithoutOutbox() throws {
+        // Simulate process loss after the imported revision-zero note and marks
+        // commit but before its asynchronous local batch capture begins. The
+        // existing reconnect bootstrap must recover the whole note directly
+        // from authoritative SwiftData; no extra outbox or trigger edit exists.
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR227-InterruptedImport-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let storeURL = root.appendingPathComponent("authoritative.store")
+        let schema = Schema(MyRAMModelRegistry.models)
+        func openDurableStore() throws -> ModelContainer {
+            let configuration = ModelConfiguration(
+                "MYR227-InterruptedImport",
+                schema: schema,
+                url: storeURL,
+                cloudKitDatabase: .none
+            )
+            return try ModelContainer(for: schema, configurations: configuration)
+        }
+
+        let noteID = UUID()
+        let body = "A🚀B"
+        let allAssignments: [(SyncTextMarkKey, SyncTextMarkAssignment)] = [
+            (.bold, .enabled),
+            (.italic, .enabled),
+            (.underline, .enabled),
+            (.strikethrough, .enabled),
+            (.fontSize, .fontSizeMilliPoints(25_000)),
+            (.textColor, .textColor(SyncTextMarkRGBAColor(
+                red: 20, green: 60, blue: 140, alpha: 255
+            )))
+        ]
+
+        do {
+            let writer = try openDurableStore()
+            let context = writer.mainContext
+            let importedNote = Note(title: "Interrupted formatted import", content: body)
+            importedNote.id = noteID
+            let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+                noteID: noteID,
+                body: body
+            )
+            let ops = try allAssignments.enumerated().map { index, pair in
+                try SyncTextMarkOperation(
+                    operationID: SyncOperationID(
+                        deviceID: UUID(uuidString: "22700000-0000-0000-0000-000000003001")!,
+                        localCounter: UInt64(index + 1)
+                    ),
+                    logicalClock: 1,
+                    key: pair.0,
+                    assignment: pair.1,
+                    startAnchor: prepared.state.operationAnchor(atVisibleUTF16Offset: 0),
+                    endAnchor: prepared.state.operationAnchor(
+                        atVisibleUTF16Offset: prepared.state.visibleUTF16Count
+                    )
+                )
+            }
+            _ = try NoteSequenceStateFullBodyIntegration.insertNewNote(
+                importedNote,
+                preparedState: prepared,
+                initialMarkState: SyncTextMarkState(operations: ops),
+                in: context
+            )
+            try context.save()
+            // Deliberately do not submit noteCreated or structural-mark batches.
+        }
+
+        let restarted = try openDurableStore()
+        let savedSnapshot = try SyncPeerBootstrapSnapshotPersistence.build(
+            from: restarted.mainContext
+        )
+        let exported = try XCTUnwrap(savedSnapshot.notes.first(where: { $0.id == noteID }))
+        XCTAssertEqual(exported.body, body)
+        XCTAssertEqual(exported.markRevision, 1)
+        XCTAssertNotNil(exported.markStatePayloadData)
+
+        let receiver = try makeInMemoryContainer()
+        let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(
+            savedSnapshot,
+            to: receiver.mainContext
+        )
+        XCTAssertEqual(disposition.coveredNoteIDs, [noteID])
+        XCTAssertEqual(disposition.coveredFormattingNoteIDs, [noteID])
+        let received = try XCTUnwrap(receiver.mainContext.fetch(
+            FetchDescriptor<Note>(predicate: #Predicate { $0.id == noteID })
+        ).first)
+        let projection = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: received,
+            in: receiver.mainContext
+        )
+        XCTAssertEqual(Array(received.content.utf16), Array(body.utf16))
+        XCTAssertEqual(projection.revision, 0)
+        XCTAssertEqual(projection.markRevision, 1)
+        XCTAssertEqual(projection.markState.operations.count, 6)
+        XCTAssertEqual(
+            Set(projection.markState.operations.map(\.key)),
+            Set(SyncTextMarkKey.allCases)
+        )
+        XCTAssertEqual(
+            try projection.markState.visibleProjection(in: projection.state).count,
+            1
+        )
+    }
+
     func testCanonicalEncoding() throws {
         XCTAssertEqual(SyncBatchPeerCapabilityCodec.encode(.v1Only), "1")
         XCTAssertEqual(SyncBatchPeerCapabilityCodec.encode(.v2Only), "2")
@@ -338,6 +444,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
 
     func testDiscoveryLossDuringActiveMacBootstrapKeepsSameSnapshotRetryAlive() async throws {
         let peer = MCPeerID(displayName: "Remote|lost-discovery-mac")
+        let retrySent = expectation(description: "Bootstrap snapshot retransmitted after discovery loss")
         var attemptedSnapshots: [SyncPeerBootstrapSnapshot] = []
         let controller = try makeController(
             connectedPeersProvider: { [peer] },
@@ -347,6 +454,9 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
                 attemptedSnapshots.append(
                     try JSONDecoder().decode(SyncPeerBootstrapSnapshot.self, from: message.payload)
                 )
+                if attemptedSnapshots.count == 2 {
+                    retrySent.fulfill()
+                }
             }
         )
         controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "lost-discovery-mac")
@@ -362,7 +472,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         let browser = MCNearbyServiceBrowser(peer: localPeerID, serviceType: "myram-sync")
 
         controller.browser(browser, lostPeer: peer)
-        try await Task.sleep(nanoseconds: 25_000_000)
+        await fulfillment(of: [retrySent], timeout: 2.0)
 
         XCTAssertGreaterThan(attemptedSnapshots.count, attemptsBeforeLoss)
         XCTAssertEqual(Set(attemptedSnapshots.map(\.id)), Set([snapshotID]))
