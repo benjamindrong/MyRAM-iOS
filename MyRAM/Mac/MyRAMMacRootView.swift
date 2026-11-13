@@ -16,6 +16,7 @@ struct MyRAMMacRootView: View {
     @StateObject private var startupCoordinator = MacStartupCoordinator()
     @StateObject private var syncController: MacSyncBatchController
     @StateObject private var editorSyncBridge = MacEditorSyncBridge()
+    @StateObject private var formattingController = MacFormattingController()
     @State private var syncConvergenceCoordinator: MacSyncConvergenceCoordinator?
     @State private var notes: [Note] = []
     @State private var selectedNoteID: UUID?
@@ -90,6 +91,7 @@ struct MyRAMMacRootView: View {
             drainPendingExternalOpenRequestsIfReady()
         }
         .focusedSceneValue(\.markdownCommandActions, markdownCommandActions)
+        .focusedSceneValue(\.macFormattingActions, macFormattingActions)
         .focusedSceneValue(\.macNoteViewZoom, $noteViewZoom)
         .alert(
             "Markdown File Error",
@@ -143,6 +145,7 @@ struct MyRAMMacRootView: View {
                 attributedText: $attributedText,
                 markdownEditorMode: macModeBinding,
                 syncBridge: editorSyncBridge,
+                formattingController: formattingController,
                 loadError: loadError,
                 saveError: saveError,
                 onTextChanged: scheduleSave,
@@ -202,6 +205,14 @@ struct MyRAMMacRootView: View {
     private var selectedNote: Note? {
         guard let selectedNoteID else { return nil }
         return notes.first { $0.id == selectedNoteID }
+    }
+
+    private var macFormattingActions: MacFormattingSceneActions {
+        MacFormattingSceneActions(
+            enabled: startupCoordinator.state == .ready && selectedNoteID != nil && markdownEditorMode == .edit,
+            perform: { command in formattingController.perform(command) },
+            showColors: { formattingController.showColors() }
+        )
     }
 
     private var markdownCommandActions: MacMarkdownCommandActions {

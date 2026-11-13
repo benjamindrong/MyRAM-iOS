@@ -9,6 +9,7 @@ struct MacNoteEditorView: View {
     /// each scene has independent mode state.
     @Binding var markdownEditorMode: MarkdownEditorMode
     @ObservedObject var syncBridge: MacEditorSyncBridge
+    @ObservedObject var formattingController: MacFormattingController
     let loadError: String?
     let saveError: String?
     let onTextChanged: () -> Void
@@ -23,6 +24,7 @@ struct MacNoteEditorView: View {
         attributedText: Binding<NSAttributedString>,
         markdownEditorMode: Binding<MarkdownEditorMode>,
         syncBridge: MacEditorSyncBridge,
+        formattingController: MacFormattingController,
         loadError: String?,
         saveError: String?,
         onTextChanged: @escaping () -> Void,
@@ -35,6 +37,7 @@ struct MacNoteEditorView: View {
         _attributedText = attributedText
         _markdownEditorMode = markdownEditorMode
         self.syncBridge = syncBridge
+        self.formattingController = formattingController
         self.loadError = loadError
         self.saveError = saveError
         self.onTextChanged = onTextChanged
@@ -57,12 +60,17 @@ struct MacNoteEditorView: View {
             .pickerStyle(.segmented)
             .accessibilityIdentifier("markdown-mode-picker")
 
+            MacFormattingToolbar(controller: formattingController, enabled: note != nil && markdownEditorMode == .edit)
+
             // MYR-195 Slice 2: ZStack keeps the AppKit text view alive during Preview so its
             // undo manager, selection, and buffer are preserved across mode switches (§10.4).
             ZStack {
                 MacTextViewRepresentable(
                     attributedText: $attributedText,
                     syncBridge: syncBridge,
+                    formattingController: formattingController,
+                    noteID: note?.id,
+                    editorEnabled: markdownEditorMode == .edit,
                     onTextChanged: onTextChanged,
                     resignFocusToggleToken: resignFocusToggleToken,
                     zoom: noteViewZoom
