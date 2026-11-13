@@ -16,6 +16,7 @@ VERIFICATION_PROFILES = {
     "default": "myram-verification-identities.json",
     "myr227": "myr227-verification-identities.json",
     "myr227test": "myr227-test-verification-identities.json",
+    "automated": "myram-automated-test-identities.json",
 }
 
 PRODUCTION = {
@@ -155,7 +156,7 @@ def load_identity(root: Path, profile: str = "default") -> dict[str, Any]:
 
     test_ids = {ios.get("test_bundle_identifier"), ios.get("ui_test_bundle_identifier"),
                 macos.get("test_bundle_identifier")} - {None}
-    if profile == "myr227test" and len(test_ids) != 3:
+    if profile in ("myr227test", "automated") and len(test_ids) != 3:
         fail("Dedicated test profile requires distinct iOS test, UI test, and Mac test bundle IDs.")
 
     production_values = {
