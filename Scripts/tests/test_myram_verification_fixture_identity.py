@@ -79,6 +79,13 @@ class VerificationFixtureIdentityTests(unittest.TestCase):
             self.assertNotEqual(profile[platform]["widget_app_group_identifier"], live[platform]["widget_app_group_identifier"])
         self.generate(with_fixture=False, profile="myr227test")
 
+    def test_automated_profile_is_isolated_and_rebinds_all_test_bundles(self):
+        automated = module.load_identity(ROOT, "automated")
+        ordinary = module.load_identity(ROOT)
+        self.assertNotEqual(automated["ios"]["app_bundle_identifier"], ordinary["ios"]["app_bundle_identifier"])
+        self.assertNotEqual(automated["multipeer_service_type"], ordinary["multipeer_service_type"])
+        self.generate(with_fixture=False, profile="automated")
+
     def test_creator_binds_myr227_profile_in_disposable_checkout(self):
         self.generate(with_fixture=False, profile="myr227")
 
@@ -107,7 +114,7 @@ class VerificationFixtureIdentityTests(unittest.TestCase):
                 manifest = json.loads((worktree / "MYR-221-VERIFICATION-IDENTITY.json").read_text())
                 self.assertEqual(manifest["source_candidate_sha"], sha)
                 self.assertEqual(manifest["profile"], profile)
-                if profile == "myr227test":
+                if profile in ("myr227test", "automated"):
                     project_text = (worktree / "MyRAM.xcodeproj" / "project.pbxproj").read_text()
                     expected = module.load_identity(ROOT, profile)
                     for name in (expected["ios"]["test_bundle_identifier"],
