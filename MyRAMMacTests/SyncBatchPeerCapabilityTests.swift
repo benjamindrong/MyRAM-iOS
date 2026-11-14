@@ -915,7 +915,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertTrue(registry.hasExplicitCurrentSessionBootstrapV1Support(forPeerDeviceID: "peer"))
     }
 
-    func testControllerAdvertisesAndInvitesWithCanonicalV1AndV2Context() throws {
+    func testControllerAdvertisesAndInvitesWithCanonicalV1AndV2Context() async throws {
         var invitedPeerIDs: [MCPeerID] = []
         var invitationContexts: [Data] = []
         let controller = try makeController(
@@ -925,6 +925,16 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             }
         )
         let peerID = MCPeerID(displayName: "Remote|capability-peer")
+        let browser = MCNearbyServiceBrowser(
+            peer: MCPeerID(displayName: "Local"), serviceType: "myram-verify"
+        )
+        controller.browser(browser, foundPeer: peerID, withDiscoveryInfo: nil)
+        let discoveryDeadline = Date().addingTimeInterval(2)
+        while !controller.availablePeers.contains(where: { $0.peerID == peerID }),
+              Date() < discoveryDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(controller.availablePeers.contains { $0.peerID == peerID })
 
         XCTAssertEqual(
             controller.advertisedBatchSchemaDiscoveryInfo,

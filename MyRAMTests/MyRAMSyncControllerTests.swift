@@ -85,6 +85,11 @@ final class MyRAMSyncControllerTests: XCTestCase {
             displayName: "Remote",
             isTrusted: true
         )
+        let browser = MCNearbyServiceBrowser(
+            peer: MCPeerID(displayName: "Local"), serviceType: "myram-verify"
+        )
+        controller.browser(browser, foundPeer: peer.peerID, withDiscoveryInfo: nil)
+        await waitUntil { controller.availablePeers.contains { $0.peerID == peer.peerID } }
         controller.invite(peer)
         XCTAssertEqual(transport.invitedPeerIDs, [Self.remotePeerID])
         uptime += 120 // MPC invite timeout alone is not a session terminal callback.

@@ -49,8 +49,8 @@ final class MacSyncBatchControllerTests: XCTestCase {
         await waitUntil { first != nil }
         XCTAssertEqual(first, true)
         var second: Bool?
-        controller.advertiser(advertiser, didReceiveInvitationFromPeer: currentPeer, withContext: nil) {
-            second = $0
+        controller.advertiser(advertiser, didReceiveInvitationFromPeer: currentPeer, withContext: nil) { accepted, _ in
+            second = accepted
         }
         await waitUntil { second != nil }
         XCTAssertEqual(second, false)
@@ -85,8 +85,8 @@ final class MacSyncBatchControllerTests: XCTestCase {
             peer: local, discoveryInfo: nil, serviceType: "myram-verify"
         )
         var accepted: Bool?
-        controller.advertiser(advertiser, didReceiveInvitationFromPeer: peer, withContext: nil) {
-            accepted = $0
+        controller.advertiser(advertiser, didReceiveInvitationFromPeer: peer, withContext: nil) { allowed, _ in
+            accepted = allowed
         }
         await waitUntil { accepted != nil }
         XCTAssertEqual(accepted, true)
