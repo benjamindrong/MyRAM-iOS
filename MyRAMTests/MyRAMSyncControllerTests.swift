@@ -83,6 +83,87 @@ final class MyRAMSyncControllerTests: XCTestCase {
         XCTAssertTrue(transport.invitedPeerIDs.isEmpty)
     }
 
+    func testRediscoveryResumesBoundedRetryWhenTerminalFollowsDiscoveryLoss() async throws {
+        try await assertRediscoveryRetainsRetryBudget(terminalBeforeLoss: false)
+    }
+
+    func testRediscoveryResumesBoundedRetryWhenDiscoveryLossFollowsTerminal() async throws {
+        try await assertRediscoveryRetainsRetryBudget(terminalBeforeLoss: true)
+    }
+
+    private func assertRediscoveryRetainsRetryBudget(terminalBeforeLoss: Bool) async throws {
+        let key = "myram.sync.trustedPeers"
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: key)
+        defer {
+            if let previous { defaults.set(previous, forKey: key) }
+            else { defaults.removeObject(forKey: key) }
+        }
+
+        let deviceID = UUID().uuidString
+        UserDefaultsTrustedPeerStore(key: key).trust(
+            TrustedPeer(id: deviceID, displayName: "Remote")
+        )
+        let remote = MCPeerID(displayName: "Remote|\(deviceID)")
+        let browser = MCNearbyServiceBrowser(
+            peer: MCPeerID(displayName: "Local"), serviceType: "myram-verify"
+        )
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        var uptime: TimeInterval = 100
+        var completedRetryDelays: [UInt64] = []
+        controller.configureReconnectSchedulerForTesting(
+            clock: { uptime },
+            sleeper: { delay in
+                // Keep the retry pending long enough to observe and cancel it
+                // when the terminal callback arrives before discovery loss.
+                try await Task.sleep(for: .milliseconds(100))
+                completedRetryDelays.append(delay)
+                uptime += TimeInterval(delay) / 1_000_000_000
+            }
+        )
+
+        controller.browser(browser, foundPeer: remote, withDiscoveryInfo: nil)
+        await waitUntil { transport.invitedPeerIDs.count == 1 }
+        XCTAssertEqual(transport.invitedPeerIDs, [remote])
+
+        for completedAttempt in 1...3 {
+            if terminalBeforeLoss {
+                controller.session(
+                    controller.retainedSessionForInvitationTests,
+                    peer: remote, didChange: .notConnected
+                )
+                await waitUntil { controller.lastConnectionEvent.hasPrefix("Not connected:") }
+                controller.browser(browser, lostPeer: remote)
+                await waitUntil { controller.availablePeers.isEmpty }
+            } else {
+                controller.browser(browser, lostPeer: remote)
+                await waitUntil { controller.availablePeers.isEmpty }
+                controller.session(
+                    controller.retainedSessionForInvitationTests,
+                    peer: remote, didChange: .notConnected
+                )
+                await waitUntil { controller.lastConnectionEvent.hasPrefix("Not connected:") }
+            }
+
+            controller.browser(browser, foundPeer: remote, withDiscoveryInfo: nil)
+            await waitUntil { controller.availablePeers.first?.peerID == remote }
+
+            if completedAttempt < 3 {
+                await waitUntil { transport.invitedPeerIDs.count == completedAttempt + 1 }
+                XCTAssertEqual(transport.invitedPeerIDs.count, completedAttempt + 1)
+                guard transport.invitedPeerIDs.count == completedAttempt + 1 else { return }
+                XCTAssertEqual(completedRetryDelays.count, completedAttempt)
+                XCTAssertGreaterThanOrEqual(completedRetryDelays.last ?? 0, 13_000_000_000)
+            } else {
+                await waitUntil { controller.lastConnectionEvent == "Found Remote" }
+                try await Task.sleep(for: .milliseconds(150))
+                XCTAssertEqual(transport.invitedPeerIDs.count, 3)
+                XCTAssertEqual(completedRetryDelays.count, 2)
+            }
+        }
+    }
+
     func testTrustedIPhoneReconnectHasThreeAttemptCeilingAndTerminalOnlyRelease() async throws {
         let transport = FakeMyRAMSyncTransport(connectedPeers: [])
         let controller = try makeController(transport: transport)
