@@ -1936,7 +1936,7 @@ extension MacSyncBatchController: MCSessionDelegate {
                 return
             }
             let identity = MacSyncPeerIdentity(peerID: peerID)
-            if session === self.session, state == .connected || state == .notConnected {
+            if state == .connected || state == .notConnected {
                 if pendingOutgoingInvitationByDeviceID[identity.deviceID] == peerID {
                     pendingOutgoingInvitationByDeviceID.removeValue(forKey: identity.deviceID)
                 }
