@@ -16,6 +16,7 @@ VERIFICATION_PROFILES = {
     "default": "myram-verification-identities.json",
     "myr227": "myr227-verification-identities.json",
     "myr227test": "myr227-test-verification-identities.json",
+    "myr371": "myr371-physical-verification-identities.json",
 }
 
 PRODUCTION = {
