@@ -1205,7 +1205,10 @@ private struct MacSyncStatusView: View {
                             .lineLimit(1)
                         Spacer()
                         Button(syncController.requiresExclusivePeerAuthorization
-                            ? "Authorize and connect" : "Pair") {
+                            ? (syncController.requiresIPhoneInitiation(peer)
+                                ? "Authorize; pair on iPhone" : "Authorize and connect")
+                            : (syncController.requiresIPhoneInitiation(peer)
+                                ? "Pair from iPhone" : "Pair")) {
                             if syncController.requiresExclusivePeerAuthorization {
                                 syncController.authorizeExclusivePeerForCapture(peer)
                             } else {
