@@ -510,6 +510,37 @@ final class MyRAMSyncControllerTests: XCTestCase {
         ))
     }
 
+    func testMYR371TransportOnlyProfileUsesAnExactIsolatedBonjourIdentity() throws {
+        for bundleID in [
+            "com.northsignalstudio.myram.myr371.transport.verification",
+            "com.northsignalstudio.myram.mac.myr371.transport.verification"
+        ] {
+            let isolated = try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: bundleID,
+                bonjourServices: ["_myr371-ice._tcp"],
+                transportOnlyValue: true
+            )
+            XCTAssertFalse(isolated.applicationSyncEnabled)
+            XCTAssertTrue(isolated.recordsTransportDiagnostics)
+            XCTAssertEqual(isolated.verificationServiceType, "myr371-ice")
+            XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: bundleID,
+                bonjourServices: ["_myram-sync._tcp"],
+                transportOnlyValue: true
+            ))
+            XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: bundleID,
+                bonjourServices: ["_myram-verify._tcp"],
+                transportOnlyValue: true
+            ))
+        }
+        XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+            bundleIdentifier: "com.northsignalstudio.myram",
+            bonjourServices: ["_myr371-ice._tcp"],
+            transportOnlyValue: true
+        ))
+    }
+
     func testMYR233TransportOnlyRetainsDiscoveryAndRejectsSyncWithoutMutatingQueues() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
