@@ -1353,10 +1353,15 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         )
     }
 
-    func testControllerAdvertisesAndInvitesWithCanonicalV1AndV2Context() throws {
+    func testControllerAdvertisesAndInvitesWithCanonicalV1AndV2Context() async throws {
         let transport = CapabilityRecordingTransport()
         let controller = makeController(transport: transport)
         let peerID = MCPeerID(displayName: "Remote|capability-peer")
+
+        let browser = MCNearbyServiceBrowser(peer: MCPeerID(displayName: "Local"), serviceType: "myram-verify")
+        controller.browser(browser, foundPeer: peerID, withDiscoveryInfo: nil)
+        await waitUntil { controller.availablePeers.contains { $0.peerID == peerID } }
+        XCTAssertTrue(controller.availablePeers.contains { $0.peerID == peerID })
 
         XCTAssertEqual(
             controller.advertisedBatchSchemaDiscoveryInfo,

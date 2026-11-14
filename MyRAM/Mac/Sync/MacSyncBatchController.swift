@@ -2184,7 +2184,13 @@ extension MacSyncBatchController: MCNearbyServiceBrowserDelegate {
                 invitationRoleByPeerID.removeValue(forKey: prior.peerID)
                 availablePeers.removeAll { $0.deviceID == identity.deviceID }
             }
-            invitationRoleByPeerID[peerID] = role
+            // Routing evidence is monotonic for this exact discovery incarnation.
+            // Conflicting valid hints fail closed: iPhone initiation wins in either
+            // order; absent/malformed data cannot restore Mac initiation. Loss or
+            // replacement retires the hint, which never authorizes sync or trust.
+            if let role, invitationRoleByPeerID[peerID] != .iosInitiator {
+                invitationRoleByPeerID[peerID] = role
+            }
             peerCapabilityRegistry.recordDiscoveryValue(
                 info?[SyncBatchPeerCapabilityCodec.discoveryInfoKey],
                 forPeerDeviceID: identity.deviceID

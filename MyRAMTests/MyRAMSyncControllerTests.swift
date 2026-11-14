@@ -6,6 +6,58 @@ import XCTest
 
 @MainActor
 final class MyRAMSyncControllerTests: XCTestCase {
+    func testManualPairRejectsDisappearedIncarnationWithoutChangingState() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        let browser = MCNearbyServiceBrowser(peer: MCPeerID(displayName: "Local"), serviceType: "myram-verify")
+        let peerID = MCPeerID(displayName: "Remote|\(UUID().uuidString)")
+        controller.browser(browser, foundPeer: peerID, withDiscoveryInfo: nil)
+        await waitUntil { controller.availablePeers.first?.peerID == peerID }
+        let captured = try XCTUnwrap(controller.availablePeers.first)
+        controller.browser(browser, lostPeer: peerID)
+        await waitUntil { controller.availablePeers.isEmpty }
+        let before = controller.lastConnectionEvent
+        controller.invite(captured)
+        XCTAssertTrue(transport.invitedPeerIDs.isEmpty)
+        XCTAssertEqual(controller.lastConnectionEvent, before)
+    }
+
+    func testManualPairRejectsReplacedIncarnationWithoutConsumingCurrentAttempt() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        let browser = MCNearbyServiceBrowser(peer: MCPeerID(displayName: "Local"), serviceType: "myram-verify")
+        let oldID = MCPeerID(displayName: "Remote|\(UUID().uuidString)")
+        let newID = MCPeerID(displayName: oldID.displayName)
+        controller.browser(browser, foundPeer: oldID, withDiscoveryInfo: nil)
+        await waitUntil { controller.availablePeers.first?.peerID == oldID }
+        let captured = try XCTUnwrap(controller.availablePeers.first)
+        controller.browser(browser, foundPeer: newID, withDiscoveryInfo: nil)
+        await waitUntil { controller.availablePeers.first?.peerID == newID }
+        let current = try XCTUnwrap(controller.availablePeers.first)
+        let before = controller.lastConnectionEvent
+        controller.invite(captured)
+        XCTAssertTrue(transport.invitedPeerIDs.isEmpty)
+        XCTAssertEqual(controller.lastConnectionEvent, before)
+        controller.invite(current)
+        XCTAssertEqual(transport.invitedPeerIDs, [newID])
+    }
+
+    func testManualPairRejectsMismatchedDeviceIdentityWithoutConsumingCurrentAttempt() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        let browser = MCNearbyServiceBrowser(peer: MCPeerID(displayName: "Local"), serviceType: "myram-verify")
+        let peerID = MCPeerID(displayName: "Remote|\(UUID().uuidString)")
+        controller.browser(browser, foundPeer: peerID, withDiscoveryInfo: nil)
+        await waitUntil { controller.availablePeers.first?.peerID == peerID }
+        let current = try XCTUnwrap(controller.availablePeers.first)
+        let before = controller.lastConnectionEvent
+        controller.invite(MyRAMDiscoveredPeer(peerID: peerID, deviceID: "wrong-device", displayName: "Remote", isTrusted: false))
+        XCTAssertTrue(transport.invitedPeerIDs.isEmpty)
+        XCTAssertEqual(controller.lastConnectionEvent, before)
+        controller.invite(current)
+        XCTAssertEqual(transport.invitedPeerIDs, [peerID])
+    }
+
     func testUpdatedMacReverseInvitationIsRejectedBeforeTrustOrTransportAdmission() async throws {
         let peer = MCPeerID(displayName: "Mac|22800000-0000-0000-0000-000000000801")
         let transport = FakeMyRAMSyncTransport(connectedPeers: [])
@@ -109,6 +161,9 @@ final class MyRAMSyncControllerTests: XCTestCase {
             displayName: "Remote",
             isTrusted: true
         )
+        let browser = MCNearbyServiceBrowser(peer: MCPeerID(displayName: "Local"), serviceType: "myram-verify")
+        controller.browser(browser, foundPeer: peer.peerID, withDiscoveryInfo: nil)
+        await waitUntil { controller.availablePeers.contains { $0.peerID == peer.peerID } }
         controller.invite(peer)
         let stale = MCSession(
             peer: MCPeerID(displayName: "stale"),
@@ -263,6 +318,10 @@ final class MyRAMSyncControllerTests: XCTestCase {
             configurationBundle: try XCTUnwrap(Bundle(path: bundlePath.path)), transport: transport
         )
         XCTAssertFalse(controller.applicationSyncEnabled)
+        let browser = MCNearbyServiceBrowser(peer: MCPeerID(displayName: "Local"), serviceType: "myram-verify")
+        controller.browser(browser, foundPeer: Self.remotePeerID, withDiscoveryInfo: nil)
+        await waitUntil { controller.availablePeers.contains { $0.peerID == Self.remotePeerID } }
+        XCTAssertTrue(controller.availablePeers.contains { $0.peerID == Self.remotePeerID })
         controller.invite(MyRAMDiscoveredPeer(peerID: Self.remotePeerID, deviceID: "remote-device", displayName: "Remote", isTrusted: true))
         XCTAssertEqual(transport.invitedPeerIDs, [Self.remotePeerID])
         var bootstrapPrepared = false
@@ -414,7 +473,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
         XCTAssertEqual(transport.invitedPeerIDs, [Self.remotePeerID, Self.remotePeerID])
     }
 
-    func testInviteDoesNotStartAnotherAttemptForConnectedPeer() throws {
+    func testInviteDoesNotStartAnotherAttemptForConnectedPeer() async throws {
         let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
         let controller = try makeController(transport: transport)
         let peer = MyRAMDiscoveredPeer(
@@ -424,6 +483,9 @@ final class MyRAMSyncControllerTests: XCTestCase {
             isTrusted: true
         )
 
+        let browser = MCNearbyServiceBrowser(peer: MCPeerID(displayName: "Local"), serviceType: "myram-verify")
+        controller.browser(browser, foundPeer: peer.peerID, withDiscoveryInfo: nil)
+        await waitUntil { controller.availablePeers.contains { $0.peerID == peer.peerID } }
         controller.invite(peer)
 
         XCTAssertTrue(transport.invitedPeerIDs.isEmpty)

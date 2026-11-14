@@ -682,6 +682,15 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func invite(_ peer: MyRAMDiscoveredPeer, origin: InvitationOrigin) {
+        // A captured Pair action or retry must still own the current discovery
+        // incarnation before it can touch any reconnect or retry state.
+        guard peer.deviceID == MyRAMPeerIdentity(peerID: peer.peerID).deviceID,
+              availablePeers.contains(where: {
+                  $0.deviceID == peer.deviceID && $0.peerID == peer.peerID
+              }) else {
+            transportDiagnostics.record("invitation.staleDiscovery.suppressed", session: session, peer: peer.peerID)
+            return
+        }
         recordReconnectState("invitation.pending.beforeAdmission", peer: peer.peerID)
         guard !transport.hasConnectedPeer(peer.peerID) else {
             cancelReconnectRetry(for: peer.deviceID)

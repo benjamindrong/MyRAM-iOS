@@ -1,4 +1,5 @@
 import AnchoredSequenceCore
+import Combine
 import NearbySyncCore
 @preconcurrency import MultipeerConnectivity
 import SwiftData
@@ -9,6 +10,68 @@ import XCTest
 final class MacSyncBatchControllerTests: XCTestCase {
     private var retainedContainers: [ModelContainer] = []
 
+
+    func testIPhoneRoleSurvivesMissingRepeatedDiscovery() async throws {
+        try await assertIPhoneRoleSurvivesRepeatedDiscovery(nil)
+    }
+
+    func testIPhoneRoleSurvivesMalformedRepeatedDiscovery() async throws {
+        try await assertIPhoneRoleSurvivesRepeatedDiscovery([
+            SyncBatchPeerCapabilityCodec.invitationRoleDiscoveryInfoKey: "invalid"
+        ])
+    }
+
+    func testIPhoneRoleWinsConflictingValidRepeatedDiscovery() async throws {
+        try await assertIPhoneRoleSurvivesRepeatedDiscovery(
+            SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(for: .macResponder)
+        )
+    }
+
+    private func assertIPhoneRoleSurvivesRepeatedDiscovery(_ info: [String: String]?) async throws {
+        let peerID = MCPeerID(displayName: "Remote|monotonic-role")
+        var invites: [MCPeerID] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil, unsentBatchQueue: nil,
+            connectedPeersProvider: { [] },
+            invitePeerOperation: { candidate, _, _ in invites.append(candidate) }
+        )
+        defer { controller.stopNetworking() }
+        let browser = MCNearbyServiceBrowser(peer: MCPeerID(displayName: "Local"), serviceType: "myram-verify")
+        // A conflicting initial responder hint must not prevent an upgrade to iPhone ownership.
+        controller.browser(browser, foundPeer: peerID, withDiscoveryInfo:
+            SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(for: .macResponder))
+        await waitUntil { controller.availablePeers.count == 1 }
+        controller.browser(browser, foundPeer: peerID, withDiscoveryInfo:
+            SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(for: .iosInitiator))
+        let peer = try XCTUnwrap(controller.availablePeers.first)
+        await waitUntil { controller.requiresIPhoneInitiation(peer) }
+        XCTAssertTrue(controller.requiresIPhoneInitiation(peer))
+        controller.browser(browser, foundPeer: peerID, withDiscoveryInfo: info)
+        // The delegate publishes availablePeers after consuming each discovery callback.
+        let updated = expectation(description: "Repeated discovery consumed")
+        var subscription: AnyCancellable?
+        subscription = controller.$availablePeers.dropFirst().sink { _ in updated.fulfill() }
+        await fulfillment(of: [updated], timeout: 2)
+        subscription?.cancel()
+        controller.invite(peer)
+        XCTAssertTrue(controller.requiresIPhoneInitiation(peer))
+        XCTAssertTrue(invites.isEmpty)
+        XCTAssertTrue(controller.lastConnectionEvent.contains("Pair from iPhone"))
+
+        // Evidence belongs to the exact MCPeerID, not the logical device identifier.
+        controller.browser(browser, lostPeer: peerID)
+        await waitUntil { controller.availablePeers.isEmpty }
+        let replacement = MCPeerID(displayName: peerID.displayName)
+        XCTAssertNotEqual(peerID, replacement)
+        controller.browser(browser, foundPeer: replacement, withDiscoveryInfo: info == nil ? nil : [
+            SyncBatchPeerCapabilityCodec.invitationRoleDiscoveryInfoKey: "invalid"
+        ])
+        await waitUntil { controller.availablePeers.first?.peerID == replacement }
+        let legacy = try XCTUnwrap(controller.availablePeers.first)
+        XCTAssertFalse(controller.requiresIPhoneInitiation(legacy))
+        controller.invite(legacy)
+        XCTAssertEqual(invites, [replacement])
+    }
 
     func testUpdatedIPhoneIsMacResponderOnlyIncludingDuplicateIncomingAndStaleLoss() async throws {
         let deviceID = "22800000-0000-0000-0000-000000000701"
