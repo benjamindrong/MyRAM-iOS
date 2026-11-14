@@ -1,3 +1,4 @@
+import Combine
 import MultipeerConnectivity
 import NearbySyncCore
 import SwiftData
@@ -80,6 +81,118 @@ final class MyRAMSyncControllerTests: XCTestCase {
         }
         await waitUntil { accepted != nil }
         XCTAssertEqual(accepted, false)
+        XCTAssertTrue(transport.invitedPeerIDs.isEmpty)
+    }
+
+    func testMacResponderRoleSurvivesRepeatedDiscoveryWithoutHint() async throws {
+        try await assertMacResponderRoleSurvivesRepeatedDiscovery(nil)
+    }
+
+    func testMacResponderRoleSurvivesRepeatedDiscoveryWithMalformedHint() async throws {
+        try await assertMacResponderRoleSurvivesRepeatedDiscovery([
+            SyncBatchPeerCapabilityCodec.invitationRoleDiscoveryInfoKey: "unsupported"
+        ])
+    }
+
+    func testMacResponderRoleWinsConflictingValidHintsInEitherOrder() async throws {
+        let initiatorHint = SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(
+            for: .iosInitiator
+        )
+        try await assertMacResponderRoleSurvivesRepeatedDiscovery(initiatorHint)
+        try await assertMacResponderRoleSurvivesRepeatedDiscovery(
+            initiatorHint, initiallyAdvertisesIPhoneRole: true
+        )
+    }
+
+    private func assertMacResponderRoleSurvivesRepeatedDiscovery(
+        _ repeatedInfo: [String: String]?,
+        initiallyAdvertisesIPhoneRole: Bool = false
+    ) async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        let deviceID = UUID().uuidString
+        let peer = MCPeerID(displayName: "Mac|\(deviceID)")
+        let local = MCPeerID(displayName: "iPhone|local")
+        let browser = MCNearbyServiceBrowser(peer: local, serviceType: "myram-verify")
+        let advertiser = MCNearbyServiceAdvertiser(
+            peer: local, discoveryInfo: nil, serviceType: "myram-verify"
+        )
+
+        func observeDiscovery(_ info: [String: String]?) async {
+            let published = expectation(description: "Discovery consumed")
+            let subscription = controller.$availablePeers.dropFirst().sink { _ in
+                published.fulfill()
+            }
+            controller.browser(browser, foundPeer: peer, withDiscoveryInfo: info)
+            await fulfillment(of: [published], timeout: 2)
+            subscription.cancel()
+        }
+
+        if initiallyAdvertisesIPhoneRole {
+            await observeDiscovery(
+                SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(for: .iosInitiator)
+            )
+        }
+        await observeDiscovery(
+            SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(for: .macResponder)
+        )
+        await observeDiscovery(repeatedInfo)
+        XCTAssertEqual(controller.availablePeers.first?.peerID, peer)
+
+        var accepted: Bool?
+        controller.advertiser(
+            advertiser, didReceiveInvitationFromPeer: peer, withContext: nil
+        ) { allowed, _ in
+            accepted = allowed
+        }
+        await waitUntil { accepted != nil }
+        XCTAssertEqual(accepted, false, "Updated Mac must remain responder after repeated discovery")
+        XCTAssertFalse(
+            UserDefaultsTrustedPeerStore(key: "myram.sync.trustedPeers").contains(peerID: deviceID),
+            "Rejected routing hint must not establish trust"
+        )
+        XCTAssertTrue(transport.invitedPeerIDs.isEmpty)
+    }
+
+    func testMacResponderRoleRetiresWithLostIncarnationAndPreservesLegacyIncomingInvitation() async throws {
+        let trustKey = "myram.sync.trustedPeers"
+        let defaults = UserDefaults.standard
+        let oldTrust = defaults.object(forKey: trustKey)
+        defer {
+            if let oldTrust { defaults.set(oldTrust, forKey: trustKey) }
+            else { defaults.removeObject(forKey: trustKey) }
+        }
+
+        let deviceID = UUID().uuidString
+        let oldPeer = MCPeerID(displayName: "Mac|\(deviceID)")
+        let replacement = MCPeerID(displayName: oldPeer.displayName)
+        XCTAssertNotEqual(oldPeer, replacement)
+        let local = MCPeerID(displayName: "iPhone|local")
+        let browser = MCNearbyServiceBrowser(peer: local, serviceType: "myram-verify")
+        let advertiser = MCNearbyServiceAdvertiser(
+            peer: local, discoveryInfo: nil, serviceType: "myram-verify"
+        )
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+
+        controller.browser(
+            browser, foundPeer: oldPeer,
+            withDiscoveryInfo: SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(for: .macResponder)
+        )
+        await waitUntil { controller.availablePeers.first?.peerID == oldPeer }
+        controller.browser(browser, lostPeer: oldPeer)
+        await waitUntil { controller.availablePeers.isEmpty }
+        controller.browser(browser, foundPeer: replacement, withDiscoveryInfo: nil)
+        await waitUntil { controller.availablePeers.first?.peerID == replacement }
+
+        var accepted: Bool?
+        controller.advertiser(
+            advertiser, didReceiveInvitationFromPeer: replacement, withContext: nil
+        ) { allowed, _ in
+            accepted = allowed
+        }
+        await waitUntil { accepted != nil }
+        XCTAssertEqual(accepted, true, "Legacy replacement has no inherited Mac responder role")
         XCTAssertTrue(transport.invitedPeerIDs.isEmpty)
     }
 
