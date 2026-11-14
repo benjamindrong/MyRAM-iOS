@@ -79,6 +79,21 @@ class VerificationFixtureIdentityTests(unittest.TestCase):
             self.assertNotEqual(profile[platform]["widget_app_group_identifier"], live[platform]["widget_app_group_identifier"])
         self.generate(with_fixture=False, profile="myr227test")
 
+    def test_myr371_transport_profile_is_distinct_and_isolated(self):
+        physical = module.load_identity(ROOT, "myr371")
+        self.assertEqual(physical["multipeer_service_type"], "myr371-ice")
+        self.assertEqual(physical["bonjour_service"], "_myr371-ice._tcp")
+        for other_name in ("default", "myr227", "myr227test"):
+            other = module.load_identity(ROOT, other_name)
+            for key in ("display_name", "storage_root_name", "swiftdata_store_name",
+                        "multipeer_service_type", "bonjour_service"):
+                self.assertNotEqual(physical[key], other[key])
+            for platform in ("ios", "macos"):
+                for key in ("app_bundle_identifier", "widget_bundle_identifier",
+                            "widget_app_group_identifier", "url_scheme"):
+                    self.assertNotEqual(physical[platform][key], other[platform][key])
+        self.generate(with_fixture=False, transport_only=True, profile="myr371")
+
     def test_creator_binds_myr227_profile_in_disposable_checkout(self):
         self.generate(with_fixture=False, profile="myr227")
 
