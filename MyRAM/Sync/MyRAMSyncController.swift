@@ -2581,7 +2581,14 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
                 invitationRoleByPeerID.removeValue(forKey: existing.peerID)
             }
             addOrUpdateAvailablePeer(discoveredPeer)
-            invitationRoleByPeerID[peerID] = SyncBatchPeerCapabilityCodec.invitationRole(from: info)
+            // A discovered Mac responder remains a responder for this exact
+            // incarnation. Missing, malformed or conflicting later hints cannot
+            // allow a competing reverse invitation. A newly discovered role
+            // may upgrade to responder, but discovery never grants trust.
+            if let role = SyncBatchPeerCapabilityCodec.invitationRole(from: info),
+               invitationRoleByPeerID[peerID] != .macResponder {
+                invitationRoleByPeerID[peerID] = role
+            }
             peerCapabilityRegistry.recordDiscoveryValue(
                 info?[SyncBatchPeerCapabilityCodec.discoveryInfoKey],
                 forPeerDeviceID: identity.deviceID
