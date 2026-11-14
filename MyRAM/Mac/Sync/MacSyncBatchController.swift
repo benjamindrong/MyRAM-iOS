@@ -1924,6 +1924,10 @@ extension MacSyncBatchController: MCSessionDelegate {
         transportDiagnostics.record("session.callback", session: session, peer: peerID, detail: "state=\(state.rawValue)")
         Task { @MainActor in
             guard networkingLifecycle != .stopped else { return }
+            guard session === self.session else {
+                transportDiagnostics.record("session.staleCallbackIgnored", session: session, peer: peerID)
+                return
+            }
             if exclusivePeerCaptureMode &&
                 (!permitsCapturePeer(peerID) ||
                     (state == .connected && !exclusiveCaptureSessionIsReady)) {
