@@ -6,6 +6,108 @@ import XCTest
 
 @MainActor
 final class MyRAMSyncControllerTests: XCTestCase {
+    func testUpdatedMacReverseInvitationIsRejectedBeforeTrustOrTransportAdmission() async throws {
+        let peer = MCPeerID(displayName: "Mac|22800000-0000-0000-0000-000000000801")
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        let local = MCPeerID(displayName: "iPhone|22800000-0000-0000-0000-000000000802")
+        let browser = MCNearbyServiceBrowser(peer: local, serviceType: "myram-verify")
+        controller.browser(
+            browser, foundPeer: peer,
+            withDiscoveryInfo: SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(for: .macResponder)
+        )
+        await waitUntil { controller.availablePeers.contains(where: { $0.peerID == peer }) }
+        let advertiser = MCNearbyServiceAdvertiser(
+            peer: local, discoveryInfo: nil, serviceType: "myram-verify"
+        )
+        var accepted: Bool?
+        controller.advertiser(
+            advertiser, didReceiveInvitationFromPeer: peer, withContext: nil
+        ) { allowed, _ in
+            accepted = allowed
+        }
+        await waitUntil { accepted != nil }
+        XCTAssertEqual(accepted, false)
+        XCTAssertTrue(transport.invitedPeerIDs.isEmpty)
+    }
+
+    func testTrustedIPhoneReconnectHasThreeAttemptCeilingAndTerminalOnlyRelease() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        var uptime: TimeInterval = 100
+        controller.configureReconnectSchedulerForTesting(
+            clock: { uptime },
+            sleeper: { nanoseconds in uptime += Double(nanoseconds) / 1_000_000_000 }
+        )
+        let peer = MyRAMDiscoveredPeer(
+            peerID: Self.remotePeerID,
+            deviceID: "remote-device",
+            displayName: "Remote",
+            isTrusted: true
+        )
+        controller.scheduleReconnectForTesting(to: peer, delayNanoseconds: 0)
+        await waitUntil { transport.invitedPeerIDs.count == 1 }
+        for expectedCount in [2, 3] {
+            controller.session(
+                controller.retainedSessionForInvitationTests,
+                peer: Self.remotePeerID, didChange: .notConnected
+            )
+            await waitUntil { transport.invitedPeerIDs.count == expectedCount }
+        }
+        controller.session(
+            controller.retainedSessionForInvitationTests,
+            peer: Self.remotePeerID, didChange: .notConnected
+        )
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertEqual(transport.invitedPeerIDs.count, 3)
+        controller.scheduleReconnectForTesting(to: peer, delayNanoseconds: 0)
+        await Task.yield()
+        XCTAssertEqual(transport.invitedPeerIDs.count, 3)
+    }
+
+    func testTimeoutWithoutTerminalCannotStartAnyDuplicateIPhoneInvite() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        var uptime: TimeInterval = 100
+        controller.configureReconnectSchedulerForTesting(
+            clock: { uptime },
+            sleeper: { nanoseconds in uptime += Double(nanoseconds) / 1_000_000_000 }
+        )
+        let peer = MyRAMDiscoveredPeer(
+            peerID: Self.remotePeerID,
+            deviceID: "remote-device",
+            displayName: "Remote",
+            isTrusted: true
+        )
+        controller.invite(peer)
+        XCTAssertEqual(transport.invitedPeerIDs, [Self.remotePeerID])
+        uptime += 120 // MPC invite timeout alone is not a session terminal callback.
+        controller.invite(peer)
+        controller.scheduleReconnectForTesting(to: peer, delayNanoseconds: 0)
+        await Task.yield()
+        XCTAssertEqual(transport.invitedPeerIDs, [Self.remotePeerID])
+    }
+
+    func testStaleSessionCannotRetireCurrentIPhoneInvitation() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        let peer = MyRAMDiscoveredPeer(
+            peerID: Self.remotePeerID,
+            deviceID: "remote-device",
+            displayName: "Remote",
+            isTrusted: true
+        )
+        controller.invite(peer)
+        let stale = MCSession(
+            peer: MCPeerID(displayName: "stale"),
+            securityIdentity: nil, encryptionPreference: .required
+        )
+        controller.session(stale, peer: Self.remotePeerID, didChange: .notConnected)
+        await Task.yield()
+        controller.invite(peer)
+        XCTAssertEqual(transport.invitedPeerIDs, [Self.remotePeerID])
+    }
+
     func testMYR238DeferredNetworkingDoesNotClaimDiscoveryStarted() throws {
         let transport = FakeMyRAMSyncTransport(connectedPeers: [])
         let controller = try makeController(transport: transport)
@@ -41,6 +143,11 @@ final class MyRAMSyncControllerTests: XCTestCase {
         let newPeer = MCPeerID(displayName: "Remote|\(deviceID)")
         let transport = FakeMyRAMSyncTransport(connectedPeers: [])
         let controller = try makeController(transport: transport)
+        var uptime: TimeInterval = 100
+        controller.configureReconnectSchedulerForTesting(
+            clock: { uptime },
+            sleeper: { nanoseconds in uptime += Double(nanoseconds) / 1_000_000_000 }
+        )
         let browser = MCNearbyServiceBrowser(peer: MCPeerID(displayName: "Local"), serviceType: "myram-verify")
         controller.browser(browser, foundPeer: oldPeer, withDiscoveryInfo: nil)
         await waitUntil { transport.invitedPeerIDs == [oldPeer] }
@@ -49,7 +156,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
         await waitUntil { controller.availablePeers.map(\.peerID) == [newPeer] }
         controller.invite(MyRAMDiscoveredPeer(peerID: newPeer, deviceID: deviceID, displayName: "Remote", isTrusted: true))
         XCTAssertEqual(transport.invitedPeerIDs, [oldPeer])
-        let session = MCSession(peer: MCPeerID(displayName: "Local"), securityIdentity: nil, encryptionPreference: .required)
+        let session = controller.retainedSessionForInvitationTests
         controller.session(session, peer: oldPeer, didChange: .notConnected)
         await waitUntil { transport.invitedPeerIDs == [oldPeer, newPeer] }
         XCTAssertEqual(transport.invitedPeerIDs, [oldPeer, newPeer])
@@ -89,7 +196,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
         XCTAssertEqual(transport.invitedPeerIDs, [currentPeer])
         let currentEvent = controller.lastConnectionEvent
         controller.browser(browser, lostPeer: oldPeer)
-        let session = MCSession(peer: local, securityIdentity: nil, encryptionPreference: .required)
+        let session = controller.retainedSessionForInvitationTests
         controller.session(session, peer: oldPeer, didChange: .notConnected)
         await Task.yield()
         await Task.yield()
@@ -152,7 +259,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
         controller.onDurablyCaptureIncomingBatch = { _ in incomingCaptured = true; return true }
         var incomingApplied = false
         controller.onChangesReceived = { _ in incomingApplied = true; return [] }
-        let session = MCSession(peer: MCPeerID(displayName: "local"), securityIdentity: nil, encryptionPreference: .required)
+        let session = controller.retainedSessionForInvitationTests
         controller.session(session, peer: Self.remotePeerID, didChange: .connected)
         controller.session(session, didReceive: try MultipeerSyncMessageCoding.encodeBatch(batch), fromPeer: Self.remotePeerID)
         await waitUntil { controller.lastConnectionEvent.hasPrefix("Connected:") }
@@ -280,12 +387,13 @@ final class MyRAMSyncControllerTests: XCTestCase {
             displayName: "Remote",
             isTrusted: true
         )
-        let session = MCSession(
-            peer: MCPeerID(displayName: "local|retry-callback"),
-            securityIdentity: nil,
-            encryptionPreference: .required
-        )
+        let session = controller.retainedSessionForInvitationTests
 
+        var uptime: TimeInterval = 100
+        controller.configureReconnectSchedulerForTesting(
+            clock: { uptime },
+            sleeper: { nanoseconds in uptime += Double(nanoseconds) / 1_000_000_000 }
+        )
         controller.scheduleReconnectForTesting(to: peer, delayNanoseconds: 0)
         await waitUntil { transport.invitedPeerIDs.count == 1 }
         controller.session(session, peer: Self.remotePeerID, didChange: .notConnected)
@@ -578,7 +686,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
         XCTAssertTrue(transport.sentLegacyEnvelopes.isEmpty, "nothing should send while no peer is connected")
 
         transport.connectedPeers = [Self.remotePeerID]
-        let dummySession = MCSession(peer: MCPeerID(displayName: "local|local-device"))
+        let dummySession = controller.retainedSessionForInvitationTests
         controller.session(dummySession, peer: Self.remotePeerID, didChange: .connected)
 
         await waitUntil { !transport.sentLegacyEnvelopes.isEmpty }
