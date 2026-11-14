@@ -94,6 +94,22 @@ class VerificationFixtureIdentityTests(unittest.TestCase):
                     self.assertNotEqual(physical[platform][key], other[platform][key])
         self.generate(with_fixture=False, transport_only=True, profile="myr371")
 
+    def test_myr371_disallows_unsafe_application_mode_before_worktree_creation(self):
+        attempted_creator = subprocess.run(
+            ["bash", str(ROOT / "Scripts/create-myram-verification-worktree.sh"),
+             "--profile", "myr371"],
+            cwd=ROOT, text=True, capture_output=True
+        )
+        self.assertNotEqual(attempted_creator.returncode, 0)
+        self.assertIn("requires --transport-only", attempted_creator.stderr)
+
+        attempted_configuration = subprocess.run(
+            ["python3", str(SCRIPT), "--profile", "myr371", "--root", str(ROOT)],
+            cwd=ROOT, text=True, capture_output=True
+        )
+        self.assertNotEqual(attempted_configuration.returncode, 0)
+        self.assertIn("requires --transport-only", attempted_configuration.stderr)
+
     def test_creator_binds_myr227_profile_in_disposable_checkout(self):
         self.generate(with_fixture=False, profile="myr227")
 
