@@ -35,9 +35,13 @@ final class MyRAMSyncControllerTests: XCTestCase {
         let transport = FakeMyRAMSyncTransport(connectedPeers: [])
         let controller = try makeController(transport: transport)
         var uptime: TimeInterval = 100
+        var observedDelays: [UInt64] = []
         controller.configureReconnectSchedulerForTesting(
             clock: { uptime },
-            sleeper: { nanoseconds in uptime += Double(nanoseconds) / 1_000_000_000 }
+            sleeper: { nanoseconds in
+                observedDelays.append(nanoseconds)
+                uptime += Double(nanoseconds) / 1_000_000_000
+            }
         )
         let peer = MyRAMDiscoveredPeer(
             peerID: Self.remotePeerID,
@@ -60,6 +64,8 @@ final class MyRAMSyncControllerTests: XCTestCase {
         )
         try await Task.sleep(for: .milliseconds(40))
         XCTAssertEqual(transport.invitedPeerIDs.count, 3)
+        XCTAssertEqual(observedDelays.count, 2)
+        XCTAssertTrue(observedDelays.allSatisfy { $0 >= 13_000_000_000 })
         controller.scheduleReconnectForTesting(to: peer, delayNanoseconds: 0)
         await Task.yield()
         XCTAssertEqual(transport.invitedPeerIDs.count, 3)
@@ -82,6 +88,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
         controller.invite(peer)
         XCTAssertEqual(transport.invitedPeerIDs, [Self.remotePeerID])
         uptime += 120 // MPC invite timeout alone is not a session terminal callback.
+        XCTAssertTrue(controller.readOnlySyncDiagnostics.contains("invitation_indeterminate_count=1"))
         controller.invite(peer)
         controller.scheduleReconnectForTesting(to: peer, delayNanoseconds: 0)
         await Task.yield()
