@@ -52,6 +52,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ "$profile" == myr371 && "$transport_only" != true ]]; then
+  echo "MYR371 physical acceptance profile requires --transport-only." >&2
+  exit 2
+fi
+
 repo_root="$(git rev-parse --show-toplevel)"
 candidate_sha="$(git -C "$repo_root" rev-parse HEAD)"
 short_sha="${candidate_sha:0:12}"
