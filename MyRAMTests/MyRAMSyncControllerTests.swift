@@ -139,12 +139,18 @@ final class MyRAMSyncControllerTests: XCTestCase {
                     controller.retainedSessionForInvitationTests,
                     peer: remote, didChange: .notConnected
                 )
-                await waitUntil { sleepers.count == 1 }
-                XCTAssertEqual(sleepers.count, 1)
-                guard sleepers.count == 1 else { return }
+                if completedAttempt < 3 {
+                    await waitUntil { sleepers.count == 1 }
+                    XCTAssertEqual(sleepers.count, 1)
+                    guard sleepers.count == 1 else { return }
+                } else {
+                    await waitUntil { controller.lastConnectionEvent.hasPrefix("Not connected:") }
+                }
                 controller.browser(browser, lostPeer: remote)
                 await waitUntil { controller.availablePeers.isEmpty }
-                sleepers.removeFirst().continuation.resume(throwing: CancellationError())
+                if completedAttempt < 3 {
+                    sleepers.removeFirst().continuation.resume(throwing: CancellationError())
+                }
             } else {
                 controller.browser(browser, lostPeer: remote)
                 await waitUntil { controller.availablePeers.isEmpty }
