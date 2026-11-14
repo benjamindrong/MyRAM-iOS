@@ -76,7 +76,14 @@ final class MacSyncTransportLifecycleTests: XCTestCase {
         controller.startNetworkingIfNeeded()
         let local = MCPeerID(displayName: "local")
         let remote = MCPeerID(displayName: "remote|myr233-reconnect")
-        let session = MCSession(peer: local, securityIdentity: nil, encryptionPreference: .required)
+        let browser = MCNearbyServiceBrowser(peer: local, serviceType: "myram-verify")
+        controller.browser(browser, foundPeer: remote, withDiscoveryInfo: nil)
+        let discoveryDeadline = Date().addingTimeInterval(2)
+        while !controller.availablePeers.contains(where: { $0.peerID == remote }),
+              Date() < discoveryDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(controller.availablePeers.contains { $0.peerID == remote })
         controller.session(controller.retainedSessionForInvitationTests, peer: remote, didChange: .notConnected)
         // Let the production delegate's main-actor hop finish before reconnecting.
         await Task.yield()

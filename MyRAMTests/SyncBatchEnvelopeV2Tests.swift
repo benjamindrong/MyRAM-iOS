@@ -602,7 +602,7 @@ final class MyRAMSyncBenchmarkProductionTelemetryTests: XCTestCase {
             securityIdentity: nil,
             encryptionPreference: .required
         )
-        controller.session(dummySession, peer: peer, didChange: .connecting)
+        controller.session(controller.retainedSessionForInvitationTests, peer: peer, didChange: .connecting)
 
         let batch = makeBatch(idSuffix: 2181)
         try await controller.acceptLocalBatch(batch)
@@ -752,7 +752,7 @@ final class MyRAMSyncBenchmarkProductionTelemetryTests: XCTestCase {
         })
 
         transport.connectedPeers = [peer]
-        controller.session(dummySession, peer: peer, didChange: .connected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: peer, didChange: .connected)
         await waitUntil { transport.sentBatchAcknowledgements.count == 1 }
         await waitUntil {
             guard let recordedEvents = try? self.events(from: recorder) else { return false }
