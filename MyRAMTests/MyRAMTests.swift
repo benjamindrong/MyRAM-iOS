@@ -7319,11 +7319,24 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(registeredServices["com.northsignalstudio.myram.mac.verification"], "myram-verify")
 
         for (bundleID, service) in registeredServices.sorted(by: { $0.key < $1.key }) {
+            let requiresTransportOnly = service == "myr371-ice"
             let isolated = try MyRAMSyncRuntimeConfiguration(
                 bundleIdentifier: bundleID,
                 bonjourServices: ["_\(service)._tcp"],
-                transportOnlyValue: nil
+                transportOnlyValue: requiresTransportOnly ? true : nil
             )
+            XCTAssertEqual(isolated.applicationSyncEnabled, !requiresTransportOnly)
+            if requiresTransportOnly {
+                // Retained-note inspection must not make this profile sync-capable.
+                XCTAssertThrowsError(try isolated.requireApplicationSync())
+                for value in [nil, false] as [Bool?] {
+                    XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                        bundleIdentifier: bundleID,
+                        bonjourServices: ["_\(service)._tcp"],
+                        transportOnlyValue: value
+                    ))
+                }
+            }
             XCTAssertTrue(vm.fetchRecentlyDeletedNotes(now: now, configuration: isolated).isEmpty)
             XCTAssertEqual(
                 vm.fetchRecentlyDeletedNotes(
