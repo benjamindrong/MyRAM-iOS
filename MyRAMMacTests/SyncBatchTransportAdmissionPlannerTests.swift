@@ -358,7 +358,7 @@ final class MYR229MacQueueDrainRegressionTests: XCTestCase {
                 forPeerDeviceID: "myr-229-mac"
             ).supportsV2
         }
-        controller.session(session, peer: peer, didChange: .connected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: peer, didChange: .connected)
         await fulfillment(of: [bootstrapSent], timeout: 1)
         let snapshotID = try XCTUnwrap(bootstrapSnapshotID)
         await controller.handleBootstrapAcknowledgementForTesting(
