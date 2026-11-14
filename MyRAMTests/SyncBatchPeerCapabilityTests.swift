@@ -6,6 +6,29 @@ import XCTest
 
 @MainActor
 final class SyncBatchPeerCapabilityTests: XCTestCase {
+    func testInvitationRoleIsStrictDiscoveryOnlyAndDoesNotChangeInvitationContext() {
+        let original = SyncBatchPeerCapabilityCodec.productionDiscoveryInfo
+        let originalContext = SyncBatchPeerCapabilityCodec.productionInvitationContext
+        let iPhone = SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(for: .iosInitiator)
+        let mac = SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(for: .macResponder)
+
+        XCTAssertNil(SyncBatchPeerCapabilityCodec.invitationRole(from: original))
+        XCTAssertEqual(SyncBatchPeerCapabilityCodec.invitationRole(from: iPhone), .iosInitiator)
+        XCTAssertEqual(SyncBatchPeerCapabilityCodec.invitationRole(from: mac), .macResponder)
+        XCTAssertEqual(
+            iPhone[SyncBatchPeerCapabilityCodec.discoveryInfoKey],
+            original[SyncBatchPeerCapabilityCodec.discoveryInfoKey]
+        )
+        XCTAssertEqual(
+            mac[SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey],
+            original[SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey]
+        )
+        XCTAssertNil(SyncBatchPeerCapabilityCodec.invitationRole(
+            from: [SyncBatchPeerCapabilityCodec.invitationRoleDiscoveryInfoKey: "ios-v2"]
+        ))
+        XCTAssertEqual(SyncBatchPeerCapabilityCodec.productionInvitationContext, originalContext)
+    }
+
     func testCanonicalEncoding() throws {
         XCTAssertEqual(
             SyncBatchPeerCapabilityCodec.encode(.v1Only),
