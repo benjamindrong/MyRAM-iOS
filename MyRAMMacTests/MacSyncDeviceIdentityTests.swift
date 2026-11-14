@@ -77,7 +77,7 @@ final class MacSyncTransportLifecycleTests: XCTestCase {
         let local = MCPeerID(displayName: "local")
         let remote = MCPeerID(displayName: "remote|myr233-reconnect")
         let session = MCSession(peer: local, securityIdentity: nil, encryptionPreference: .required)
-        controller.session(session, peer: remote, didChange: .notConnected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: remote, didChange: .notConnected)
         // Let the production delegate's main-actor hop finish before reconnecting.
         await Task.yield()
         controller.startNetworkingIfNeeded()
@@ -136,11 +136,11 @@ final class MacSyncTransportLifecycleTests: XCTestCase {
         XCTAssertEqual(acceptedInvitations, 0)
         let session = MCSession(peer: MCPeerID(displayName: "local"), securityIdentity: nil, encryptionPreference: .required)
         members = []
-        controller.session(session, peer: remote, didChange: .notConnected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: remote, didChange: .notConnected)
         await fulfillment(of: [invited], timeout: 2)
         XCTAssertEqual(acceptedInvitations, 1)
         members = [remote]
-        controller.session(session, peer: remote, didChange: .connected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: remote, didChange: .connected)
         let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
         controller.session(session, didReceive: data, fromPeer: remote)
         controller.flushPendingBatch()
@@ -695,7 +695,7 @@ final class MyRAMMacSyncBenchmarkProductionTelemetryTests: XCTestCase {
             securityIdentity: nil,
             encryptionPreference: .required
         )
-        controller.session(dummySession, peer: peer, didChange: .connecting)
+        controller.session(controller.retainedSessionForInvitationTests, peer: peer, didChange: .connecting)
 
         let batch = makeBatch(idSuffix: 2181)
         try await controller.acceptLocalBatch(batch)
@@ -949,7 +949,7 @@ final class MyRAMMacSyncBenchmarkProductionTelemetryTests: XCTestCase {
         })
 
         connectedPeers = [peer]
-        controller.session(dummySession, peer: peer, didChange: .connected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: peer, didChange: .connected)
         await waitUntil {
             sends.contains { data in
                 (try? MultipeerSyncMessageCoding.decodeMessage(from: data).kind)
