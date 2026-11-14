@@ -26,6 +26,7 @@ struct MyRAMSyncRuntimeConfiguration {
         case offlineRestoreRequiresVerificationIdentity
         case invalidOfflineRestoreValue
         case invalidVerificationNamespace
+        case dedicatedTransportProfileRequiresTransportOnly
     }
 
     enum AdmissionError: Error { case applicationSyncDisabled }
@@ -54,6 +55,12 @@ struct MyRAMSyncRuntimeConfiguration {
             isOfflineRestoreVerification = offlineRestore
         } else {
             isOfflineRestoreVerification = false
+        }
+        // The dedicated physical acceptance identity must never be capable
+        // of application sync, even when a build omits its transport-only flag.
+        if registeredService == "myr371-ice",
+           (transportOnlyValue as? Bool) != true {
+            throw ConfigurationError.dedicatedTransportProfileRequiresTransportOnly
         }
         guard let transportOnlyValue else {
             applicationSyncEnabled = true
