@@ -303,7 +303,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         let session = MCSession(
             peer: local, securityIdentity: nil, encryptionPreference: .required
         )
-        controller.session(session, peer: other, didChange: .connected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: other, didChange: .connected)
         await waitUntil {
             controller.lastErrorMessage?.contains("unexpected connection") == true
         }
@@ -331,16 +331,16 @@ final class MacSyncBatchControllerTests: XCTestCase {
         }
         await Task.yield()
         XCTAssertTrue(admissions.isEmpty, "Replacement must not be admitted while prior membership remains")
-        controller.session(session, peer: other, didChange: .notConnected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: other, didChange: .notConnected)
         await Task.yield()
         XCTAssertTrue(admissions.isEmpty, "Another peer's callback cannot release admission")
-        controller.session(session, peer: prior, didChange: .notConnected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: prior, didChange: .notConnected)
         await Task.yield()
         XCTAssertTrue(admissions.isEmpty, "Callback alone cannot override retained membership")
         members = [other]
-        controller.session(session, peer: prior, didChange: .notConnected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: prior, didChange: .notConnected)
         await waitUntil { admissions == [true] }
-        controller.session(session, peer: prior, didChange: .notConnected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: prior, didChange: .notConnected)
         await Task.yield()
         XCTAssertEqual(admissions, [true], "Invitation handler must complete exactly once")
         XCTAssertEqual(members, [other], "Other peers retain their connection")
@@ -370,7 +370,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         await waitUntil { first == [false] }
         XCTAssertTrue(second.isEmpty)
         members = []
-        controller.session(session, peer: prior, didChange: .notConnected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: prior, didChange: .notConnected)
         await waitUntil { second == [true] }
         XCTAssertEqual(first, [false])
         controller.stopNetworking()
@@ -647,7 +647,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
             invitationHandler: { _, _ in }
         )
         await Task.yield()
-        controller.session(session, peer: peer, didChange: .connected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: peer, didChange: .connected)
         await Task.yield()
         XCTAssertTrue(
             controller.hasExplicitPeerV2Support(
@@ -949,7 +949,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
             invitationHandler: { _, _ in }
         )
         await Task.yield()
-        controller.session(session, peer: peer, didChange: .connected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: peer, didChange: .connected)
         await Task.yield()
 
         for batch in batches {
