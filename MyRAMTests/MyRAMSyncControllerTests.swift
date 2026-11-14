@@ -525,6 +525,16 @@ final class MyRAMSyncControllerTests: XCTestCase {
             XCTAssertEqual(isolated.verificationServiceType, "myr371-ice")
             XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
                 bundleIdentifier: bundleID,
+                bonjourServices: ["_myr371-ice._tcp"],
+                transportOnlyValue: nil
+            ))
+            XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: bundleID,
+                bonjourServices: ["_myr371-ice._tcp"],
+                transportOnlyValue: false
+            ))
+            XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: bundleID,
                 bonjourServices: ["_myram-sync._tcp"],
                 transportOnlyValue: true
             ))
