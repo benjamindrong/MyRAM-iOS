@@ -306,7 +306,6 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private let maximumAutomaticInvitationsPerEpoch = 3
     private var reconnectEpochByDeviceID: [String: ReconnectEpoch] = [:]
     private var lastInvitationUptimeByDeviceID: [String: TimeInterval] = [:]
-    private var rediscoveryMayResetEpoch: Set<String> = []
     private var invitationRoleByPeerID: [MCPeerID: SyncBatchInvitationRole] = [:]
     private var reconnectClock: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     private var reconnectSleeper: (UInt64) async throws -> Void = {
@@ -708,8 +707,15 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         case .manual:
             guard prior?.awaitingTerminalCallback != true else { return }
         case .discovery:
-            // Repeated foundPeer callbacks are not new epochs.
-            guard prior == nil || prior?.incarnation != peer.peerID else { return }
+            // Repeated discovery is not a new retry epoch. A failed invitation
+            // may resume only after its exact terminal session callback, using
+            // the remaining finite budget and the normal retry backoff.
+            if let prior, prior.incarnation == peer.peerID {
+                if !prior.awaitingTerminalCallback {
+                    scheduleReconnect(to: peer)
+                }
+                return
+            }
             guard prior?.awaitingTerminalCallback != true else { return }
         case .retry:
             guard peer.isTrusted else { return }
@@ -746,7 +752,6 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         epoch.awaitingTerminalCallback = true
         reconnectEpochByDeviceID[peer.deviceID] = epoch
         lastInvitationUptimeByDeviceID[peer.deviceID] = now
-        rediscoveryMayResetEpoch.remove(peer.deviceID)
         recordReconnectState("invitation.pending.admitted", peer: peer.peerID)
         cancelReconnectRetry(for: peer.deviceID)
 
@@ -2575,9 +2580,6 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
                existing.peerID != peerID {
                 invitationRoleByPeerID.removeValue(forKey: existing.peerID)
             }
-            if rediscoveryMayResetEpoch.remove(identity.deviceID) != nil {
-                reconnectEpochByDeviceID.removeValue(forKey: identity.deviceID)
-            }
             addOrUpdateAvailablePeer(discoveredPeer)
             invitationRoleByPeerID[peerID] = SyncBatchPeerCapabilityCodec.invitationRole(from: info)
             peerCapabilityRegistry.recordDiscoveryValue(
@@ -2624,10 +2626,8 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
             guard availablePeers.contains(where: { $0.deviceID == identity.deviceID && $0.peerID == peerID }) else { return }
             lastConnectionEvent = "Lost \(identity.displayName)"
             invitationRoleByPeerID.removeValue(forKey: peerID)
-            if !reconnectTracker.isConnecting(to: identity.deviceID),
-               reconnectEpochByDeviceID[identity.deviceID]?.awaitingTerminalCallback != true {
-                rediscoveryMayResetEpoch.insert(identity.deviceID)
-            }
+            // Discovery loss cancels a queued retry but never resets the
+            // invitation's terminality or replenishes its retry budget.
             peerCapabilityRegistry.clearDiscoveryEvidence(
                 forPeerDeviceID: identity.deviceID
             )
