@@ -260,18 +260,31 @@ final class MacSyncDeviceIdentityTests: XCTestCase {
             XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
                 bundleIdentifier: id, bonjourServices: bonjour, transportOnlyValue: "true"
             ))
-            let normal = try MyRAMSyncRuntimeConfiguration(
-                bundleIdentifier: id, bonjourServices: bonjour, transportOnlyValue: nil
-            )
-            XCTAssertTrue(normal.applicationSyncEnabled)
-            XCTAssertTrue(normal.recordsTransportDiagnostics)
-            XCTAssertNoThrow(try normal.requireApplicationSync())
+            if service == "myr371-ice" {
+                // This dedicated physical profile can never admit application sync,
+                // including when its Info.plist omits the transport-only flag.
+                XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                    bundleIdentifier: id, bonjourServices: bonjour, transportOnlyValue: nil
+                ))
+                XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                    bundleIdentifier: id, bonjourServices: bonjour, transportOnlyValue: false
+                ))
+            } else {
+                let normal = try MyRAMSyncRuntimeConfiguration(
+                    bundleIdentifier: id, bonjourServices: bonjour, transportOnlyValue: nil
+                )
+                XCTAssertTrue(normal.applicationSyncEnabled)
+                XCTAssertTrue(normal.recordsTransportDiagnostics)
+                XCTAssertNoThrow(try normal.requireApplicationSync())
+            }
         }
     }
 
     func testMYR227VerificationNamespaceDoesNotOverlapMYR233() throws {
         let registrations = MyRAMSyncRuntimeConfiguration.verificationServicesByBundleID
-        XCTAssertEqual(Set(registrations.values), Set(["myram-verify", "myr227-sync", "myr227-test"]))
+        XCTAssertEqual(Set(registrations.values), Set([
+            "myram-verify", "myr227-sync", "myr227-test", "myr371-ice"
+        ]))
         for id in ["com.northsignalstudio.myram.myr227.verification",
                    "com.northsignalstudio.myram.mac.myr227.verification"] {
             XCTAssertEqual(registrations[id], "myr227-sync")
@@ -302,17 +315,31 @@ final class MacSyncDeviceIdentityTests: XCTestCase {
                 bundleIdentifier: identifier, bonjourServices: bonjour,
                 transportOnlyValue: nil, offlineRestoreValue: "true"
             ))
-            let enabled = try MyRAMSyncRuntimeConfiguration(
-                bundleIdentifier: identifier, bonjourServices: bonjour,
-                transportOnlyValue: nil, offlineRestoreValue: true
-            )
-            XCTAssertTrue(enabled.isOfflineRestoreVerification)
-            XCTAssertTrue(enabled.applicationSyncEnabled)
-            let normal = try MyRAMSyncRuntimeConfiguration(
-                bundleIdentifier: identifier, bonjourServices: bonjour,
-                transportOnlyValue: nil
-            )
-            XCTAssertFalse(normal.isOfflineRestoreVerification)
+            if service == "myr371-ice" {
+                XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                    bundleIdentifier: identifier, bonjourServices: bonjour,
+                    transportOnlyValue: nil, offlineRestoreValue: true
+                ))
+                let isolated = try MyRAMSyncRuntimeConfiguration(
+                    bundleIdentifier: identifier, bonjourServices: bonjour,
+                    transportOnlyValue: true, offlineRestoreValue: true
+                )
+                XCTAssertTrue(isolated.isOfflineRestoreVerification)
+                XCTAssertFalse(isolated.applicationSyncEnabled)
+                XCTAssertThrowsError(try isolated.requireApplicationSync())
+            } else {
+                let enabled = try MyRAMSyncRuntimeConfiguration(
+                    bundleIdentifier: identifier, bonjourServices: bonjour,
+                    transportOnlyValue: nil, offlineRestoreValue: true
+                )
+                XCTAssertTrue(enabled.isOfflineRestoreVerification)
+                XCTAssertTrue(enabled.applicationSyncEnabled)
+                let normal = try MyRAMSyncRuntimeConfiguration(
+                    bundleIdentifier: identifier, bonjourServices: bonjour,
+                    transportOnlyValue: nil
+                )
+                XCTAssertFalse(normal.isOfflineRestoreVerification)
+            }
         }
     }
 
