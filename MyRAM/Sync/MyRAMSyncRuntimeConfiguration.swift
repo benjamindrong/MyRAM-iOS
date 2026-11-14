@@ -14,7 +14,9 @@ struct MyRAMSyncRuntimeConfiguration {
         "com.northsignalstudio.myram.myr227.verification": "myr227-sync",
         "com.northsignalstudio.myram.mac.myr227.verification": "myr227-sync",
         "com.northsignalstudio.myram.myr227.test.verification": "myr227-test",
-        "com.northsignalstudio.myram.mac.myr227.test.verification": "myr227-test"
+        "com.northsignalstudio.myram.mac.myr227.test.verification": "myr227-test",
+        "com.northsignalstudio.myram.myr371.transport.verification": "myr371-ice",
+        "com.northsignalstudio.myram.mac.myr371.transport.verification": "myr371-ice"
     ]
     static let verificationBundleIDs = Set(verificationServicesByBundleID.keys)
 
