@@ -471,6 +471,19 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             "session_peer_hashes=" +
             connectedIDs.map(Self.diagnosticHash).sorted().joined(separator: ",")
         )
+        // A timed-out invitation without a matching terminal MCSession callback
+        // remains owned by the framework. It is diagnostic-only, not retryable.
+        let indeterminate = availablePeers.filter { peer in
+            reconnectTracker.connectingAttempt(to: peer.deviceID)?.incarnation == peer.peerID
+                && lastInvitationUptimeByDeviceID[peer.deviceID].map {
+                    reconnectClock() - $0 >= invitationTimeoutWindow
+                } == true
+        }
+        lines.append("invitation_indeterminate_count=\(indeterminate.count)")
+        lines.append(
+            "invitation_indeterminate_peer_hashes=" +
+            indeterminate.map { Self.diagnosticHash($0.deviceID) }.sorted().joined(separator: ",")
+        )
         for (index, batch) in unsentBatches.pendingBatches.enumerated() {
             lines.append(
                 "unsent[\(index)]=batch:\(Self.diagnosticHash(batch.id.uuidString))," +
