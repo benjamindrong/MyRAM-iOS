@@ -976,7 +976,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         await Task.yield()
         XCTAssertFalse(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
 
-        controller.session(session, peer: remotePeerID, didChange: .connected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: remotePeerID, didChange: .connected)
         await Task.yield()
         XCTAssertTrue(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
 
@@ -1000,7 +1000,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertTrue(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
 
         connectedPeers = []
-        controller.session(session, peer: remotePeerID, didChange: .notConnected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: remotePeerID, didChange: .notConnected)
         await Task.yield()
         XCTAssertFalse(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
         XCTAssertEqual(
@@ -1009,7 +1009,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         )
 
         connectedPeers = [remotePeerID]
-        controller.session(session, peer: remotePeerID, didChange: .connected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: remotePeerID, didChange: .connected)
         await Task.yield()
         XCTAssertTrue(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
 
@@ -1095,7 +1095,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         await Task.yield()
         XCTAssertFalse(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
 
-        controller.session(session, peer: remotePeerID, didChange: .connected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: remotePeerID, didChange: .connected)
         await Task.yield()
         XCTAssertTrue(
             controller.hasExplicitPeerV2Support(
