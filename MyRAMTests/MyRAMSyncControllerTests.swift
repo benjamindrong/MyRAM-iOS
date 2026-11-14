@@ -111,15 +111,21 @@ final class MyRAMSyncControllerTests: XCTestCase {
         let transport = FakeMyRAMSyncTransport(connectedPeers: [])
         let controller = try makeController(transport: transport)
         var uptime: TimeInterval = 100
+        // The existing scheduler injection allows exact, timer-free control of
+        // queued and canceled retries; discovery never supplies a new budget.
+        var sleepers: [(delay: UInt64, continuation: CheckedContinuation<Void, Error>)] = []
         var completedRetryDelays: [UInt64] = []
+        defer {
+            for sleeper in sleepers {
+                sleeper.continuation.resume(throwing: CancellationError())
+            }
+        }
         controller.configureReconnectSchedulerForTesting(
             clock: { uptime },
             sleeper: { delay in
-                // Keep the retry pending long enough to observe and cancel it
-                // when the terminal callback arrives before discovery loss.
-                try await Task.sleep(for: .milliseconds(100))
-                completedRetryDelays.append(delay)
-                uptime += TimeInterval(delay) / 1_000_000_000
+                try await withCheckedThrowingContinuation { continuation in
+                    sleepers.append((delay, continuation))
+                }
             }
         )
 
@@ -133,9 +139,12 @@ final class MyRAMSyncControllerTests: XCTestCase {
                     controller.retainedSessionForInvitationTests,
                     peer: remote, didChange: .notConnected
                 )
-                await waitUntil { controller.lastConnectionEvent.hasPrefix("Not connected:") }
+                await waitUntil { sleepers.count == 1 }
+                XCTAssertEqual(sleepers.count, 1)
+                guard sleepers.count == 1 else { return }
                 controller.browser(browser, lostPeer: remote)
                 await waitUntil { controller.availablePeers.isEmpty }
+                sleepers.removeFirst().continuation.resume(throwing: CancellationError())
             } else {
                 controller.browser(browser, lostPeer: remote)
                 await waitUntil { controller.availablePeers.isEmpty }
@@ -150,15 +159,23 @@ final class MyRAMSyncControllerTests: XCTestCase {
             await waitUntil { controller.availablePeers.first?.peerID == remote }
 
             if completedAttempt < 3 {
+                await waitUntil { sleepers.count == 1 }
+                XCTAssertEqual(sleepers.count, 1)
+                guard sleepers.count == 1 else { return }
+                let sleeper = sleepers.removeFirst()
+                XCTAssertGreaterThanOrEqual(sleeper.delay, 13_000_000_000)
+                completedRetryDelays.append(sleeper.delay)
+                uptime += TimeInterval(sleeper.delay) / 1_000_000_000
+                sleeper.continuation.resume(returning: ())
                 await waitUntil { transport.invitedPeerIDs.count == completedAttempt + 1 }
                 XCTAssertEqual(transport.invitedPeerIDs.count, completedAttempt + 1)
                 guard transport.invitedPeerIDs.count == completedAttempt + 1 else { return }
                 XCTAssertEqual(completedRetryDelays.count, completedAttempt)
-                XCTAssertGreaterThanOrEqual(completedRetryDelays.last ?? 0, 13_000_000_000)
             } else {
                 await waitUntil { controller.lastConnectionEvent == "Found Remote" }
-                try await Task.sleep(for: .milliseconds(150))
+                await Task.yield()
                 XCTAssertEqual(transport.invitedPeerIDs.count, 3)
+                XCTAssertTrue(sleepers.isEmpty, "Exhausted retry budget must not schedule a fourth attempt")
                 XCTAssertEqual(completedRetryDelays.count, 2)
             }
         }
