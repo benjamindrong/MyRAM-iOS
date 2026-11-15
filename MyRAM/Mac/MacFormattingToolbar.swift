@@ -26,12 +26,22 @@ struct MacFormattingToolbar: View {
     private func traitButton(
         _ title: String, icon: String, enabled: Bool?, command: MacFormattingCommand
     ) -> some View {
-        Button { controller.perform(command) } label: {
-            Image(systemName: icon)
-                .frame(width: 22, height: 20)
+        Toggle(isOn: Binding(
+            get: { enabled == true },
+            set: { _ in controller.perform(command) }
+        )) {
+            ZStack(alignment: .bottomTrailing) {
+                Image(systemName: icon)
+                    .frame(width: 22, height: 20)
+                if enabled == nil {
+                    Image(systemName: "minus")
+                        .font(.system(size: 8, weight: .bold))
+                        .offset(x: 3, y: 3)
+                }
+            }
         }
-        .buttonStyle(.bordered)
-        .help(title)
+        .toggleStyle(.button)
+        .help(enabled == nil ? "\(title) (Mixed)" : title)
         .accessibilityLabel(title)
         .accessibilityValue(enabled.map { $0 ? "On" : "Off" } ?? "Mixed")
     }

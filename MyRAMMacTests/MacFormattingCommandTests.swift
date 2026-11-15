@@ -43,6 +43,30 @@ final class MacFormattingCommandTests: XCTestCase {
     }
     private let whole = NSRange(location: 0, length: 2)
 
+    func testSelectionStateDrivesActiveOffAndMixedFormattingControls() {
+        let editor = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        editor.textStorage?.setAttributedString(NSAttributedString(
+            string: "AB", attributes: [.font: NSFont.systemFont(ofSize: 24)]
+        ))
+        editor.setSelectedRange(whole)
+        let controller = MacFormattingController()
+        controller.bind(textView: editor, noteID: UUID(), enabled: true)
+
+        XCTAssertEqual(controller.selection.bold, false)
+        controller.perform(.bold)
+        XCTAssertEqual(controller.selection.bold, true)
+
+        editor.textStorage?.addAttribute(.font, value: NSFont.systemFont(ofSize: 24),
+                                         range: NSRange(location: 1, length: 1))
+        controller.refreshSelection()
+        XCTAssertNil(controller.selection.bold)
+
+        controller.perform(.bold)
+        XCTAssertEqual(controller.selection.bold, true)
+        controller.perform(.bold)
+        XCTAssertEqual(controller.selection.bold, false)
+    }
+
     func testSixSupportedMarksProjectWithoutChangingBody() throws {
         let source = NSAttributedString(
             string: "AB", attributes: [.font: NSFont.systemFont(ofSize: 24)]
