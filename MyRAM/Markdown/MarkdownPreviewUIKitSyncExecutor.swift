@@ -187,6 +187,7 @@ enum MarkdownPreviewUIKitSyncExecutor {
         nativePlainText: String,
         richTextBindingDisposition: MarkdownPreviewUIKitRichTextBindingDisposition,
         richTextUpdate: EditorRichTextContentUpdate,
+        requiresPublication: Bool = false,
         isUpdatingUIView: Bool,
         generationOwner: MarkdownPreviewUIKitSyncGenerationOwner,
         dependencies: MarkdownPreviewUIKitSyncDependencies,
@@ -208,7 +209,7 @@ enum MarkdownPreviewUIKitSyncExecutor {
         let currentBoundText = dependencies.getBoundPlainText()
         let currentBoundRichTextData = dependencies.getBoundRichTextData()
 
-        guard currentBoundText != nativePlainText
+        guard requiresPublication || currentBoundText != nativePlainText
             || richTextBindingDisposition.differs(from: currentBoundRichTextData) else {
             _ = dependencies.clearAppliedContentIfOwned(
                 generation,
@@ -256,7 +257,7 @@ enum MarkdownPreviewUIKitSyncExecutor {
 
                 let recheckBoundText = dependencies.getBoundPlainText()
                 let recheckBoundData = dependencies.getBoundRichTextData()
-                guard recheckBoundText != nativePlainText
+                guard requiresPublication || recheckBoundText != nativePlainText
                     || richTextBindingDisposition.differs(from: recheckBoundData) else {
                     _ = dependencies.clearAppliedContentIfOwned(
                         generation,

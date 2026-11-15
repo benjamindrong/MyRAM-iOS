@@ -9337,6 +9337,14 @@ final class MyRAMTests: XCTestCase {
         try await waitForMountedEditorLifecycle()
         let coordinator = try XCTUnwrap(fixture.textView.delegate as? SelectableTextView.Coordinator)
         fixture.textView.selectedRange = NSRange(location: 0, length: 4)
+        let projectionBinding = coordinator.structuralFormattingProjection
+        coordinator.structuralFormattingProjection = Binding(get: {
+            projectionBinding.wrappedValue
+        }, set: { projection in
+            XCTAssertFalse(coordinator.isUpdatingUIView,
+                           "Authoritative editor state must publish after the SwiftUI view update")
+            projectionBinding.wrappedValue = projection
+        })
         coordinator.isUpdatingUIView = true
         coordinator.toggleUnderline(in: fixture.textView)
         coordinator.isUpdatingUIView = false
