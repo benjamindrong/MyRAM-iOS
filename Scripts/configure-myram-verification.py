@@ -16,6 +16,7 @@ VERIFICATION_PROFILES = {
     "default": "myram-verification-identities.json",
     "myr227": "myr227-verification-identities.json",
     "myr227test": "myr227-test-verification-identities.json",
+    "myr371": "myr371-physical-verification-identities.json",
 }
 
 PRODUCTION = {
@@ -633,6 +634,8 @@ def main() -> int:
     parser.add_argument("--transport-only", action="store_true", help="Disable application sync inside the existing isolated Verification MPC owners.")
     parser.add_argument("--profile", choices=sorted(VERIFICATION_PROFILES), default="default", help="Registered Verification profile.")
     args = parser.parse_args()
+    if args.profile == "myr371" and not args.transport_only:
+        parser.error("MYR371 physical acceptance profile requires --transport-only")
     root = args.root.resolve()
 
     try:

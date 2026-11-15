@@ -102,6 +102,10 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     // One invitation owns admission for each logical peer. A replacement cannot
     // enter the session while the preceding connection still owns membership.
     private var pendingReplacementInvitations: [String: PendingReplacementInvitation] = [:]
+    // Routing hints are scoped to the exact discovered MPC incarnation, never a claimed ID.
+    private var invitationRoleByPeerID: [MCPeerID: SyncBatchInvitationRole] = [:]
+    private var pendingOutgoingInvitationByDeviceID: [String: MCPeerID] = [:]
+    private var pendingIncomingInvitationByDeviceID: [String: MCPeerID] = [:]
     private var pendingIncomingBatchWork: [IncomingBatchWork] = []
     private var isProcessingIncomingBatchWork = false
     private var pendingReceivedBootstrapByPeerDeviceID: [String: PendingReceivedBootstrap] = [:]
@@ -145,7 +149,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         )
         let retainedAdvertiser = MCNearbyServiceAdvertiser(
             peer: retainedPeerID,
-            discoveryInfo: SyncBatchPeerCapabilityCodec.productionDiscoveryInfo,
+            discoveryInfo: SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(
+                for: .macResponder
+            ),
             serviceType: effectiveServiceType
         )
         let retainedBrowser = MCNearbyServiceBrowser(
@@ -241,6 +247,15 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         !exclusivePeerCaptureMode || authorizedCapturePeer?.peerID == peer
     }
 
+    func requiresIPhoneInitiation(_ peer: MacSyncDiscoveredPeer) -> Bool {
+        availablePeers.contains { $0.deviceID == peer.deviceID && $0.peerID == peer.peerID }
+            && invitationRoleByPeerID[peer.peerID] == .iosInitiator
+    }
+
+#if DEBUG
+    var retainedSessionForInvitationTests: MCSession { session }
+#endif
+
     private var exclusiveCaptureSessionIsReady: Bool {
         guard exclusivePeerCaptureMode else { return true }
         let connected = connectedPeersProvider()
@@ -263,7 +278,12 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             return false
         }
         authorizedCapturePeer = peer
-        invite(peer)
+        if requiresIPhoneInitiation(peer) {
+            lastConnectionEvent = "Authorized \(peer.displayName); pair from iPhone"
+            transportDiagnostics.record("invitation.mac.waitingForIPhone", session: session, peer: peer.peerID)
+        } else {
+            invite(peer)
+        }
         return true
     }
 
@@ -604,6 +624,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         session.delegate = nil
         let pendingInvitations = pendingReplacementInvitations.values
         pendingReplacementInvitations.removeAll()
+        pendingIncomingInvitationByDeviceID.removeAll()
+        pendingOutgoingInvitationByDeviceID.removeAll()
+        invitationRoleByPeerID.removeAll()
         pendingInvitations.forEach { $0.handler(false, nil) }
         stopAdvertisingOperation()
         stopBrowsingOperation()
@@ -635,6 +658,19 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             lastConnectionEvent = "Connected: \(peer.displayName)"
             return
         }
+        // Updated iPhones own invitation initiation for both first pairing and reconnect.
+        // An advertised role is a routing hint, not an authentication credential.
+        guard !requiresIPhoneInitiation(peer) else {
+            lastConnectionEvent = "Pair from iPhone: \(peer.displayName)"
+            transportDiagnostics.record("invitation.mac.outgoingSuppressed", session: session, peer: peer.peerID)
+            return
+        }
+        guard availablePeers.contains(where: {
+            $0.deviceID == peer.deviceID && $0.peerID == peer.peerID
+        }), pendingOutgoingInvitationByDeviceID[peer.deviceID] == nil else {
+            return
+        }
+        pendingOutgoingInvitationByDeviceID[peer.deviceID] = peer.peerID
         lastConnectionEvent = "Inviting \(peer.displayName)"
         transportDiagnostics.record("invitation.outgoing", session: session, peer: peer.peerID)
         invitePeerOperation(
@@ -1888,6 +1924,10 @@ extension MacSyncBatchController: MCSessionDelegate {
         transportDiagnostics.record("session.callback", session: session, peer: peerID, detail: "state=\(state.rawValue)")
         Task { @MainActor in
             guard networkingLifecycle != .stopped else { return }
+            guard session === self.session else {
+                transportDiagnostics.record("session.staleCallbackIgnored", session: session, peer: peerID)
+                return
+            }
             if exclusivePeerCaptureMode &&
                 (!permitsCapturePeer(peerID) ||
                     (state == .connected && !exclusiveCaptureSessionIsReady)) {
@@ -1896,6 +1936,14 @@ extension MacSyncBatchController: MCSessionDelegate {
                 return
             }
             let identity = MacSyncPeerIdentity(peerID: peerID)
+            if state == .connected || state == .notConnected {
+                if pendingOutgoingInvitationByDeviceID[identity.deviceID] == peerID {
+                    pendingOutgoingInvitationByDeviceID.removeValue(forKey: identity.deviceID)
+                }
+                if pendingIncomingInvitationByDeviceID[identity.deviceID] == peerID {
+                    pendingIncomingInvitationByDeviceID.removeValue(forKey: identity.deviceID)
+                }
+            }
             MyRAMSyncBenchmarkTelemetry.shared.record(
                 .peerConnectionState,
                 peerDeviceID: identity.deviceID,
@@ -2063,7 +2111,12 @@ extension MacSyncBatchController {
             return
         }
         let identity = MacSyncPeerIdentity(peerID: peerID)
+        guard pendingIncomingInvitationByDeviceID[identity.deviceID] == nil else {
+            handler(false, nil)
+            return
+        }
         pendingReplacementInvitations.removeValue(forKey: identity.deviceID)?.handler(false, nil)
+        pendingIncomingInvitationByDeviceID[identity.deviceID] = peerID
         peerCapabilityRegistry.recordInvitationContext(context, forPeerDeviceID: identity.deviceID)
         remember(peerID)
         lastConnectionEvent = "Invitation from \(displayName(for: peerID))"
@@ -2123,6 +2176,21 @@ extension MacSyncBatchController: MCNearbyServiceBrowserDelegate {
         Task { @MainActor in
             guard networkingLifecycle != .stopped else { return }
             let identity = MacSyncPeerIdentity(peerID: peerID)
+            let role = SyncBatchPeerCapabilityCodec.invitationRole(from: info)
+            if role == .iosInitiator,
+               let prior = availablePeers.first(where: { $0.deviceID == identity.deviceID }),
+               prior.peerID != peerID {
+                // A newer concrete incarnation cannot inherit the old role or Pair action.
+                invitationRoleByPeerID.removeValue(forKey: prior.peerID)
+                availablePeers.removeAll { $0.deviceID == identity.deviceID }
+            }
+            // Routing evidence is monotonic for this exact discovery incarnation.
+            // Conflicting valid hints fail closed: iPhone initiation wins in either
+            // order; absent/malformed data cannot restore Mac initiation. Loss or
+            // replacement retires the hint, which never authorizes sync or trust.
+            if let role, invitationRoleByPeerID[peerID] != .iosInitiator {
+                invitationRoleByPeerID[peerID] = role
+            }
             peerCapabilityRegistry.recordDiscoveryValue(
                 info?[SyncBatchPeerCapabilityCodec.discoveryInfoKey],
                 forPeerDeviceID: identity.deviceID
@@ -2153,6 +2221,8 @@ extension MacSyncBatchController: MCNearbyServiceBrowserDelegate {
                 }
             }
             remember(peerID)
+            // Role changes for an already-present peer must also refresh the Mac button.
+            availablePeers = availablePeers
         }
     }
 
@@ -2160,6 +2230,10 @@ extension MacSyncBatchController: MCNearbyServiceBrowserDelegate {
         Task { @MainActor in
             guard networkingLifecycle != .stopped else { return }
             let identity = MacSyncPeerIdentity(peerID: peerID)
+            guard availablePeers.contains(where: {
+                $0.deviceID == identity.deviceID && $0.peerID == peerID
+            }) else { return }
+            invitationRoleByPeerID.removeValue(forKey: peerID)
             peerCapabilityRegistry.clearDiscoveryEvidence(
                 forPeerDeviceID: identity.deviceID
             )

@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: bash Scripts/create-myram-verification-worktree.sh [--path PATH] [--profile default|myr227|myr227test] [--fixture-manifest PATH] [--transport-only]
+Usage: bash Scripts/create-myram-verification-worktree.sh [--path PATH] [--profile default|myr227|myr227test|myr371] [--fixture-manifest PATH] [--transport-only]
 
 Creates a detached sibling worktree at the current candidate HEAD and converts
 only that disposable checkout into the isolated "MyRAM Verification" variant.
@@ -28,7 +28,7 @@ while [[ $# -gt 0 ]]; do
     --profile)
       [[ $# -ge 2 ]] || { echo "Missing value for --profile" >&2; exit 2; }
       profile="$2"
-      case "$profile" in default|myr227|myr227test) ;; *) echo "Unknown Verification profile: $profile" >&2; exit 2;; esac
+      case "$profile" in default|myr227|myr227test|myr371) ;; *) echo "Unknown Verification profile: $profile" >&2; exit 2;; esac
       shift 2
       ;;
     --fixture-manifest)
@@ -51,6 +51,11 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$profile" == myr371 && "$transport_only" != true ]]; then
+  echo "MYR371 physical acceptance profile requires --transport-only." >&2
+  exit 2
+fi
 
 repo_root="$(git rev-parse --show-toplevel)"
 candidate_sha="$(git -C "$repo_root" rev-parse HEAD)"
