@@ -47,6 +47,7 @@ private final class MarkdownPreviewUIKitSyncHarness {
         label: String,
         nativePlainText: String,
         richTextDisposition: MarkdownPreviewUIKitRichTextBindingDisposition = .replace(nil),
+        requiresPublication: Bool = false,
         isUpdatingUIView: Bool,
         completionAction: (() -> Void)? = nil
     ) {
@@ -54,6 +55,7 @@ private final class MarkdownPreviewUIKitSyncHarness {
             nativePlainText: nativePlainText,
             richTextBindingDisposition: richTextDisposition,
             richTextUpdate: richTextUpdate(for: richTextDisposition),
+            requiresPublication: requiresPublication,
             isUpdatingUIView: isUpdatingUIView,
             generationOwner: generationOwner,
             dependencies: dependencies(),
@@ -321,6 +323,33 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
         XCTAssertEqual(ownerA.begin().rawValue, 1)
         XCTAssertEqual(ownerA.begin().rawValue, 2)
         XCTAssertEqual(ownerB.begin().rawValue, 1)
+    }
+
+    func testStructuralFormattingPublishesAfterViewUpdateWithUnchangedTextAndRTF() {
+        let cachedRTF = Data("same-cache".utf8)
+        let harness = MarkdownPreviewUIKitSyncHarness(boundPlainText: "Same", boundRichTextData: cachedRTF)
+        harness.synchronize(label: "format", nativePlainText: "Same",
+                            richTextDisposition: .replace(cachedRTF), requiresPublication: true,
+                            isUpdatingUIView: true)
+        XCTAssertTrue(harness.publications.isEmpty)
+        XCTAssertEqual(harness.scheduledOperations.count, 1)
+        harness.runScheduled(at: 0)
+        XCTAssertEqual(harness.publications, ["Same"])
+        XCTAssertEqual(harness.boundRichTextData, cachedRTF)
+        XCTAssertEqual(harness.completionCounts, ["format": 1])
+    }
+
+    func testSupersededStructuralFormattingCannotPublishItsOldProjection() {
+        let harness = MarkdownPreviewUIKitSyncHarness(boundPlainText: "Same")
+        harness.synchronize(label: "old-format", nativePlainText: "Same",
+                            richTextDisposition: .preserveExisting, requiresPublication: true,
+                            isUpdatingUIView: true)
+        harness.synchronize(label: "new-format", nativePlainText: "Same",
+                            richTextDisposition: .preserveExisting, requiresPublication: true,
+                            isUpdatingUIView: false)
+        harness.runScheduled(at: 0)
+        XCTAssertEqual(harness.publications, ["Same"])
+        XCTAssertEqual(harness.completionCounts, ["old-format": 1, "new-format": 1])
     }
 
     func testSupersessionDuringPlainSetterStopsLaterSideEffects() {

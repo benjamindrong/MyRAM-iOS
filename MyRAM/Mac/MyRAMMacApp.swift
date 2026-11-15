@@ -14,7 +14,7 @@ struct MyRAMMacApp: App {
         }
         .commands {
             TextEditingCommands()
-            TextFormattingCommands()
+            MacFormattingMenuCommands()
             SidebarCommands()
             MacNoteViewZoomCommands()
             MacMarkdownFileCommands()

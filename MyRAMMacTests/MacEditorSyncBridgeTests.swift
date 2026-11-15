@@ -115,6 +115,7 @@ final class MacEditorSyncBridgeTests: XCTestCase {
         let coordinator = MacTextViewRepresentable.Coordinator(
             attributedText: .constant(NSAttributedString(string: "Hello")),
             syncBridge: bridge,
+            formattingController: MacFormattingController(),
             onTextChanged: { changeCount += 1 }
         )
         coordinator.textView = textView
@@ -163,6 +164,7 @@ final class MacEditorSyncBridgeTests: XCTestCase {
         let coordinator = MacTextViewRepresentable.Coordinator(
             attributedText: binding,
             syncBridge: MacEditorSyncBridge(),
+            formattingController: MacFormattingController(),
             onTextChanged: { notificationCount += 1 }
         )
         coordinator.textView = textView

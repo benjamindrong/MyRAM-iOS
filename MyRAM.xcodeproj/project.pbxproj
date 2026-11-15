@@ -73,6 +73,9 @@
 		BCA105010000000000000003 /* MyRAMPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF104012FF1040000000104 /* MyRAMPlatform.swift */; };
 		BCA105010000000000000004 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BC9F1BB52EA47D300045FD72 /* Assets.xcassets */; };
 		BCA106010000000000000001 /* MacNoteEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000001 /* MacNoteEditorView.swift */; };
+		D22801000000000000000001 /* MacFormattingCommandCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D22802000000000000000001 /* MacFormattingCommandCoordinator.swift */; };
+		D22801000000000000000002 /* MacFormattingToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = D22802000000000000000002 /* MacFormattingToolbar.swift */; };
+		D22801000000000000000003 /* MacFormattingCommandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D22802000000000000000003 /* MacFormattingCommandTests.swift */; };
 		BCA106010000000000000002 /* MacTextViewRepresentable.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000002 /* MacTextViewRepresentable.swift */; };
 		BCA106010000000000000003 /* MacEditorSampleDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000003 /* MacEditorSampleDocument.swift */; };
 		BCA106010000000000000005 /* MacRemoteInsertionAttributePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000005 /* MacRemoteInsertionAttributePolicy.swift */; };
@@ -469,6 +472,9 @@
 		BCA105020000000000000003 /* MyRAMMacRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMMacRootView.swift; sourceTree = "<group>"; };
 		BCA105020000000000000006 /* MacSyncConflictViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncConflictViews.swift; sourceTree = "<group>"; };
 		BCA106020000000000000001 /* MacNoteEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNoteEditorView.swift; sourceTree = "<group>"; };
+		D22802000000000000000001 /* MacFormattingCommandCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacFormattingCommandCoordinator.swift; sourceTree = "<group>"; };
+		D22802000000000000000002 /* MacFormattingToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacFormattingToolbar.swift; sourceTree = "<group>"; };
+		D22802000000000000000003 /* MacFormattingCommandTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacFormattingCommandTests.swift; sourceTree = "<group>"; };
 		BCA106020000000000000002 /* MacTextViewRepresentable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTextViewRepresentable.swift; sourceTree = "<group>"; };
 		BCA106020000000000000003 /* MacEditorSampleDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSampleDocument.swift; sourceTree = "<group>"; };
 		BCA106020000000000000005 /* MacRemoteInsertionAttributePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacRemoteInsertionAttributePolicy.swift; sourceTree = "<group>"; };
@@ -940,6 +946,8 @@
 				BCA105020000000000000006 /* MacSyncConflictViews.swift */,
 				BCA170020000000000000001 /* MacStartupCoordinator.swift */,
 				BCA106020000000000000001 /* MacNoteEditorView.swift */,
+				D22802000000000000000001 /* MacFormattingCommandCoordinator.swift */,
+				D22802000000000000000002 /* MacFormattingToolbar.swift */,
 				BCA106020000000000000002 /* MacTextViewRepresentable.swift */,
 				BCA106020000000000000003 /* MacEditorSampleDocument.swift */,
 				BCA106020000000000000005 /* MacRemoteInsertionAttributePolicy.swift */,
@@ -978,6 +986,7 @@
 				D1950200000000000000000C /* MacMarkdownPreviewIntegrationTests.swift */,
 				E19602000000000000000004 /* MacNoteViewZoomTests.swift */,
 				E19602000000000000000005 /* MacMarkdownPreviewDocumentBuilderTests.swift */,
+				D22802000000000000000003 /* MacFormattingCommandTests.swift */,
 				BCA164020000000000000003 /* MacEditorTextColorPolicyTests.swift */,
 				BCA10A020000000000000002 /* MacSidebarCollapsePolicyTests.swift */,
 				C17402000000000000000002 /* SyncBatchEnvelopeV2Tests.swift */,
@@ -1781,6 +1790,8 @@
 				BCA105010000000000000006 /* MacSyncConflictViews.swift in Sources */,
 				BCA170010000000000000001 /* MacStartupCoordinator.swift in Sources */,
 				BCA106010000000000000001 /* MacNoteEditorView.swift in Sources */,
+				D22801000000000000000001 /* MacFormattingCommandCoordinator.swift in Sources */,
+				D22801000000000000000002 /* MacFormattingToolbar.swift in Sources */,
 				BCA106010000000000000002 /* MacTextViewRepresentable.swift in Sources */,
 				BCA106010000000000000003 /* MacEditorSampleDocument.swift in Sources */,
 				BCA106010000000000000005 /* MacRemoteInsertionAttributePolicy.swift in Sources */,
@@ -1886,6 +1897,7 @@
 				D19501000000000000000010 /* MacMarkdownPreviewIntegrationTests.swift in Sources */,
 				E19601000000000000000004 /* MacNoteViewZoomTests.swift in Sources */,
 				E19601000000000000000005 /* MacMarkdownPreviewDocumentBuilderTests.swift in Sources */,
+				D22801000000000000000003 /* MacFormattingCommandTests.swift in Sources */,
 				BCA164010000000000000004 /* MacEditorTextColorPolicyTests.swift in Sources */,
 				BCA10A010000000000000002 /* MacSidebarCollapsePolicyTests.swift in Sources */,
 				C17401000000000000000002 /* SyncBatchEnvelopeV2Tests.swift in Sources */,
