@@ -133,14 +133,20 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
         let editor = try XCTUnwrap(host.state.syncBridge.textView)
         let scrollView = try XCTUnwrap(editor.enclosingScrollView)
         XCTAssertEqual(editor.textContainerInset, .zero)
-        XCTAssertEqual(editor.font?.pointSize, 26)
-        for zoom in [CGFloat(0.5), 1, 2, 3, 1] {
-            MacNoteViewZoom.apply(zoom, to: scrollView)
-            scrollView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(
+            editor.font?.pointSize,
+            MacStructuralFormattingAdapter.defaultBodyFont.pointSize
+        )
+        // Exercise the production SwiftUI zoom binding; directly magnifying
+        // a hosted NSScrollView bypasses the scene owner and can disrupt the host.
+        for zoom in [CGFloat(1.1), 1.2, 1.0] {
+            host.state.zoom = zoom
+            drainMainRunLoop()
+            XCTAssertEqual(scrollView.magnification, zoom, accuracy: 0.0001)
             XCTAssertEqual(editor.textContainerInset, .zero)
             XCTAssertFalse(scrollView.hasHorizontalScroller)
         }
-        host.window.close()
+        XCTAssertEqual(host.state.recorder.onTextChangedCount, 0)
     }
 
     // MARK: - MYR-196 Production mode binding
