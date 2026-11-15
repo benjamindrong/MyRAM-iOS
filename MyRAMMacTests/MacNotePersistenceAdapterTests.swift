@@ -174,6 +174,25 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         XCTAssertEqual(persisted.content, "Alpha")
     }
 
+    func testMYR225UnformattedAttributedInputRendersAtDefaultWithoutCreatingSizeMark() {
+        let input = NSAttributedString(string: "Unmarked")
+        let display = MacStructuralFormattingAdapter.applyingDefaultBodyFontIfMissing(input)
+        XCTAssertNil(input.attribute(.font, at: 0, effectiveRange: nil))
+        XCTAssertEqual(
+            (display.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize,
+            MacStructuralFormattingAdapter.defaultBodyFont.pointSize
+        )
+        let result = MacStructuralFormattingAdapter.project(display)
+        XCTAssertEqual(result.runs.first?.assignments[.fontSize], .clear)
+
+        let attributed = NSMutableAttributedString(string: "AB")
+        attributed.addAttribute(.font, value: NSFont.systemFont(ofSize: 17),
+                                range: NSRange(location: 1, length: 1))
+        let mixed = MacStructuralFormattingAdapter.applyingDefaultBodyFontIfMissing(attributed)
+        XCTAssertEqual((mixed.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize, 26)
+        XCTAssertEqual((mixed.attribute(.font, at: 1, effectiveRange: nil) as? NSFont)?.pointSize, 17)
+    }
+
     func testMYR225DefaultBodyFontDoesNotChangeExplicitFontSizeMarks() {
         XCTAssertEqual(MacStructuralFormattingAdapter.defaultBodyFont.pointSize, 26)
         let projection = NoteStructuralFormattingProjection(

@@ -6,6 +6,21 @@ import AppKit
 enum MacStructuralFormattingAdapter {
     static let defaultBodyFont = NSFont.systemFont(ofSize: 26)
 
+    /// Apply the presentation default only where source text has no authored font.
+    /// It must not create an explicit font-size mark in structural authority.
+    static func applyingDefaultBodyFontIfMissing(
+        _ source: NSAttributedString
+    ) -> NSAttributedString {
+        let result = NSMutableAttributedString(attributedString: source)
+        guard source.length > 0 else { return result }
+        let fullRange = NSRange(location: 0, length: source.length)
+        source.enumerateAttribute(.font, in: fullRange) { value, range, _ in
+            guard value == nil else { return }
+            result.addAttribute(.font, value: defaultBodyFont, range: range)
+        }
+        return result
+    }
+
     static func project(
         _ attributedText: NSAttributedString,
         baseBodyFont: NSFont = defaultBodyFont

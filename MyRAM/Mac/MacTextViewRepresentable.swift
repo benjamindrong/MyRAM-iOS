@@ -35,7 +35,9 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         textView.effectiveAppearanceDidChange = { [weak coordinator = context.coordinator] in
             coordinator?.refreshDisplayText()
         }
-        let displayText = MacEditorTextColorPolicy.normalizedForDisplay(attributedText)
+        let displayText = MacStructuralFormattingAdapter.applyingDefaultBodyFontIfMissing(
+            MacEditorTextColorPolicy.normalizedForDisplay(attributedText)
+        )
         textView.textStorage?.setAttributedString(displayText)
         textView.isEditable = true
         textView.isSelectable = true
@@ -88,7 +90,9 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         context.coordinator.register(textView)
         textView.textStorage?.delegate = context.coordinator
         MacNoteViewZoom.apply(zoom, to: scrollView)
-        let displayText = MacEditorTextColorPolicy.normalizedForDisplay(attributedText)
+        let displayText = MacStructuralFormattingAdapter.applyingDefaultBodyFontIfMissing(
+            MacEditorTextColorPolicy.normalizedForDisplay(attributedText)
+        )
         let currentText = textView.attributedString()
         if !currentText.isEqual(to: displayText) {
             let selectedRange = textView.selectedRange()
@@ -199,7 +203,9 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         func refreshDisplayText() {
             guard let textView else { return }
 
-            let displayText = MacEditorTextColorPolicy.normalizedForDisplay(attributedText.wrappedValue)
+            let displayText = MacStructuralFormattingAdapter.applyingDefaultBodyFontIfMissing(
+                MacEditorTextColorPolicy.normalizedForDisplay(attributedText.wrappedValue)
+            )
             let selectedRange = textView.selectedRange()
             isApplyingSwiftUIUpdate = true
             textView.textStorage?.setAttributedString(displayText)

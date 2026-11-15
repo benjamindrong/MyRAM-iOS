@@ -481,10 +481,14 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
         XCTAssertLessThanOrEqual(scrollView.contentView.bounds.origin.y, maximumY)
     }
 
-    func testEmptyEditorDefaultsTo24PointsAndExistingExplicitFontsRemainUnchanged() throws {
+    func testEmptyEditorUsesCurrentDefaultAndExistingExplicitFontsRemainUnchanged() throws {
         let emptyHost = makeHostedEditor(text: "")
         let emptyEditor = try XCTUnwrap(emptyHost.state.syncBridge.textView)
-        XCTAssertEqual(try XCTUnwrap(emptyEditor.font).pointSize, 24, accuracy: 0.0001)
+        XCTAssertEqual(
+            try XCTUnwrap(emptyEditor.font).pointSize,
+            MacStructuralFormattingAdapter.defaultBodyFont.pointSize,
+            accuracy: 0.0001
+        )
         XCTAssertEqual(emptyHost.state.recorder.onTextChangedCount, 0)
 
         XCTAssertTrue(emptyHost.window.makeFirstResponder(emptyEditor))
@@ -493,7 +497,11 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
         let typedFont = try XCTUnwrap(
             emptyEditor.attributedString().attribute(.font, at: 0, effectiveRange: nil) as? NSFont
         )
-        XCTAssertEqual(typedFont.pointSize, 24, accuracy: 0.0001)
+        XCTAssertEqual(
+            typedFont.pointSize,
+            MacStructuralFormattingAdapter.defaultBodyFont.pointSize,
+            accuracy: 0.0001
+        )
 
         let explicit = NSMutableAttributedString(string: "Stored")
         explicit.addAttribute(
