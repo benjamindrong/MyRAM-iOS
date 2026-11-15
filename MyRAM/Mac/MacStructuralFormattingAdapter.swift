@@ -5,6 +5,9 @@ import AppKit
 @MainActor
 enum MacStructuralFormattingAdapter {
     static let defaultBodyFont = NSFont.systemFont(ofSize: 26)
+    // Historical RTF migration must retain the 24 pt baseline that authored the
+    // legacy cache, rather than interpreting its inherited text as an explicit size.
+    static let legacyMigrationBodyFont = NSFont.systemFont(ofSize: 24)
 
     /// Apply the presentation default only where source text has no authored font.
     /// It must not create an explicit font-size mark in structural authority.
@@ -219,7 +222,7 @@ enum MacStructuralFormattingAdapter {
 
     static func strictLegacyProjection(
         data: Data,
-        baseBodyFont: NSFont = defaultBodyFont
+        baseBodyFont: NSFont = legacyMigrationBodyFont
     ) -> NoteStructuralFormattingProjection? {
         guard let attributed = try? NSAttributedString(
             data: data,

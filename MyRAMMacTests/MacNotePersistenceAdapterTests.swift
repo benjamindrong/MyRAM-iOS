@@ -174,6 +174,32 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         XCTAssertEqual(persisted.content, "Alpha")
     }
 
+    func testMYR225Legacy24PointBaselineDoesNotFabricateAnExplicitSizeMark() throws {
+        let oldDefault = NSAttributedString(
+            string: "Legacy",
+            attributes: [.font: NSFont.systemFont(ofSize: 24)]
+        )
+        let encoded = try XCTUnwrap(RTFCoding.encode(oldDefault))
+        let migrated = try XCTUnwrap(MacStructuralFormattingAdapter.strictLegacyProjection(data: encoded))
+        XCTAssertEqual(migrated.runs.first?.assignments[.fontSize], .clear)
+
+        let visible = MacStructuralFormattingAdapter.render(projection: migrated)
+        XCTAssertEqual(
+            (visible.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize,
+            26
+        )
+
+        let explicitlySized = NSAttributedString(
+            string: "Manual",
+            attributes: [.font: NSFont.systemFont(ofSize: 30)]
+        )
+        let explicitData = try XCTUnwrap(RTFCoding.encode(explicitlySized))
+        let explicitProjection = try XCTUnwrap(
+            MacStructuralFormattingAdapter.strictLegacyProjection(data: explicitData)
+        )
+        XCTAssertEqual(explicitProjection.runs.first?.assignments[.fontSize], .fontSizeMilliPoints(30_000))
+    }
+
     func testMYR225UnformattedAttributedInputRendersAtDefaultWithoutCreatingSizeMark() {
         let input = NSAttributedString(string: "Unmarked")
         let display = MacStructuralFormattingAdapter.applyingDefaultBodyFontIfMissing(input)
