@@ -48,6 +48,156 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         }
     }
 
+    func testMYR225TitleOnlyCommitCapturesExactlyOneTitleChangeAndPreservesBodyAuthority() async throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let note = Note(title: "Old Title", content: "Body stays identical")
+        note.richTextContentData = Data([12, 34, 56])
+        context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
+
+        let adapter = MacNotePersistenceAdapter(context: context)
+        let record = try XCTUnwrap(context.fetch(FetchDescriptor<NoteSequenceStateRecord>()).first)
+        let initialRevision = record.revision
+        let initialStatePayload = record.statePayloadData
+        let initialCache = note.richTextContentData
+        let content = adapter.attributedContent(for: note)
+        let prepared = try await adapter.prepareProductionLocalNoteEdit(
+            noteID: note.id,
+            proposedAttributedContent: content,
+            proposedTitle: "New Title"
+        )
+
+        XCTAssertEqual(prepared.previousTitle, "Old Title")
+        XCTAssertEqual(prepared.proposedTitle, "New Title")
+        XCTAssertTrue(prepared.hasTitleMutation)
+        XCTAssertFalse(prepared.hasBodyMutation)
+        XCTAssertFalse(prepared.hasFormattingMutation)
+        XCTAssertEqual(prepared.proposedRichTextContentData, initialCache)
+        XCTAssertEqual(prepared.capturedChanges.count, 1)
+        guard case .noteTitleChanged(let titleChange) = prepared.capturedChanges[0].change else {
+            return XCTFail("A title-only save must capture noteTitleChanged, not body/marks")
+        }
+        XCTAssertEqual(titleChange.noteID, note.id)
+        XCTAssertEqual(titleChange.title, "New Title")
+
+        try adapter.persistPreparedLocalNoteEdit(prepared)
+        let persisted = try XCTUnwrap(
+            ModelContext(container).fetch(FetchDescriptor<Note>()).first
+        )
+        XCTAssertEqual(persisted.title, "New Title")
+        XCTAssertEqual(persisted.content, "Body stays identical")
+        XCTAssertEqual(persisted.richTextContentData, initialCache)
+        XCTAssertEqual(record.revision, initialRevision)
+        XCTAssertEqual(record.statePayloadData, initialStatePayload)
+    }
+
+    func testMYR225CombinedTitleAndBodySaveCapturesBothAfterOneDurableCommit() async throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let note = Note(title: "Before", content: "Alpha")
+        context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
+
+        var saveCount = 0
+        let adapter = MacNotePersistenceAdapter(context: context, saveOperation: { context in
+            saveCount += 1
+            let staged = try XCTUnwrap(context.fetch(FetchDescriptor<Note>()).first)
+            XCTAssertEqual(staged.title, "After")
+            XCTAssertEqual(staged.content, "Alpha plus text")
+            try context.save()
+        })
+        let modifiedText = NSAttributedString(
+            string: "Alpha plus text",
+            attributes: [.font: MacStructuralFormattingAdapter.defaultBodyFont]
+        )
+        let prepared = try await adapter.prepareProductionLocalNoteEdit(
+            noteID: note.id,
+            proposedAttributedContent: modifiedText,
+            proposedTitle: "After"
+        )
+        XCTAssertTrue(prepared.hasTitleMutation)
+        XCTAssertTrue(prepared.hasBodyMutation)
+        XCTAssertEqual(prepared.capturedChanges.filter {
+            if case .noteTitleChanged = $0.change { return true }
+            return false
+        }.count, 1)
+        XCTAssertTrue(prepared.capturedChanges.contains {
+            $0.change.bodyOperationRepresentation == .anchored
+        })
+
+        try adapter.persistPreparedLocalNoteEdit(prepared)
+        XCTAssertEqual(saveCount, 1, "Title+body must use one persistence transaction")
+        let reloaded = try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<Note>()).first)
+        XCTAssertEqual(reloaded.title, "After")
+        XCTAssertEqual(reloaded.content, "Alpha plus text")
+    }
+
+    func testMYR225FailedTitleAndBodySaveRestoresBothWithoutPublication() async throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let note = Note(title: "Before", content: "Alpha")
+        context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
+        let originalRTF = note.richTextContentData
+        let originalDate = note.modifiedAt
+        let adapter = MacNotePersistenceAdapter(
+            context: context,
+            saveOperation: { _ in throw MacNotePersistenceAdapterTestError.injectedSaveFailure }
+        )
+        let proposed = NSAttributedString(
+            string: "Beta",
+            attributes: [.font: MacStructuralFormattingAdapter.defaultBodyFont]
+        )
+        let prepared = try await adapter.prepareProductionLocalNoteEdit(
+            noteID: note.id,
+            proposedAttributedContent: proposed,
+            proposedTitle: "After"
+        )
+        var didPublish = false
+        do {
+            try adapter.persistPreparedLocalNoteEdit(prepared)
+            didPublish = true
+        } catch {
+            XCTAssertNotNil(error as? MacNotePersistenceAdapterTestError)
+        }
+        XCTAssertFalse(didPublish, "Uncommitted title/body changes cannot be published")
+        XCTAssertEqual(note.title, "Before")
+        XCTAssertEqual(note.content, "Alpha")
+        XCTAssertEqual(note.richTextContentData, originalRTF)
+        XCTAssertEqual(note.modifiedAt, originalDate)
+        let persisted = try XCTUnwrap(ModelContext(container).fetch(FetchDescriptor<Note>()).first)
+        XCTAssertEqual(persisted.title, "Before")
+        XCTAssertEqual(persisted.content, "Alpha")
+    }
+
+    func testMYR225DefaultBodyFontDoesNotChangeExplicitFontSizeMarks() {
+        XCTAssertEqual(MacStructuralFormattingAdapter.defaultBodyFont.pointSize, 26)
+        let projection = NoteStructuralFormattingProjection(
+            plainText: "AB",
+            runs: [
+                NoteStructuralFormattingProjectionRun(
+                    startUTF16Offset: 0,
+                    utf16Length: 1,
+                    assignments: [.fontSize: .clear]
+                ),
+                NoteStructuralFormattingProjectionRun(
+                    startUTF16Offset: 1,
+                    utf16Length: 1,
+                    assignments: [.fontSize: .fontSizeMilliPoints(25_000)]
+                )
+            ]
+        )
+        let rendered = MacStructuralFormattingAdapter.render(projection: projection)
+        XCTAssertEqual((rendered.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)?.pointSize, 26)
+        XCTAssertEqual((rendered.attribute(.font, at: 1, effectiveRange: nil) as? NSFont)?.pointSize, 25)
+        let roundTrip = MacStructuralFormattingAdapter.project(rendered)
+        XCTAssertEqual(roundTrip.runs.last?.assignments[.fontSize], .fontSizeMilliPoints(25_000))
+    }
+
     func testActivatedMacPersistenceRejectsLegacyPreparedEditWithoutChangingSequence() async throws {
         XCTAssertTrue(SyncBatchAnchoredPayloadCapability.isEnabled)
         let container = try makeInMemoryContainer()

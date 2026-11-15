@@ -4,6 +4,7 @@ import SwiftUI
 
 struct MacNoteEditorView: View {
     let note: Note?
+    @Binding var title: String
     @Binding var attributedText: NSAttributedString
     /// MYR-195 Slice 2: mode state owned by MyRAMMacRootView; passed as binding so
     /// each scene has independent mode state.
@@ -21,6 +22,7 @@ struct MacNoteEditorView: View {
 
     init(
         note: Note?,
+        title: Binding<String> = .constant(""),
         attributedText: Binding<NSAttributedString>,
         markdownEditorMode: Binding<MarkdownEditorMode>,
         syncBridge: MacEditorSyncBridge,
@@ -34,6 +36,7 @@ struct MacNoteEditorView: View {
             MacMarkdownPreviewDocumentBuilder()
     ) {
         self.note = note
+        _title = title
         _attributedText = attributedText
         _markdownEditorMode = markdownEditorMode
         self.syncBridge = syncBridge
@@ -47,7 +50,7 @@ struct MacNoteEditorView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             header
 
             // MYR-195 Slice 2: mode picker. Routes through MyRAMMacRootView's modeSelection binding.
@@ -76,6 +79,10 @@ struct MacNoteEditorView: View {
                     zoom: noteViewZoom
                 )
                 .frame(minWidth: 160, minHeight: 200)
+                // Screen-space padding belongs outside NSScrollView magnification.
+                .padding(.horizontal, MacNoteViewZoom.screenSpaceHorizontalInset)
+                .padding(.vertical, MacNoteViewZoom.screenSpaceVerticalInset)
+                .background(Color(nsColor: .textBackgroundColor))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay {
                     RoundedRectangle(cornerRadius: 8)
@@ -92,6 +99,10 @@ struct MacNoteEditorView: View {
                     builder: markdownPreviewBuilder
                 )
                 .frame(minWidth: 160, minHeight: 200)
+                // Screen-space padding belongs outside NSScrollView magnification.
+                .padding(.horizontal, MacNoteViewZoom.screenSpaceHorizontalInset)
+                .padding(.vertical, MacNoteViewZoom.screenSpaceVerticalInset)
+                .background(Color(nsColor: .textBackgroundColor))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay {
                     RoundedRectangle(cornerRadius: 8)
@@ -113,24 +124,23 @@ struct MacNoteEditorView: View {
                     .foregroundStyle(.red)
             }
         }
-        .padding(16)
+        .padding(12)
         .frame(minWidth: 200, minHeight: 280)
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("MyRAM")
-                .font(.title.weight(.semibold))
-            Text(platformStatus)
-                .font(.subheadline)
+        VStack(alignment: .leading, spacing: 5) {
+            Text("NOTE TITLE")
+                .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
+            TextField("Untitled", text: $title)
+                .font(.title2.weight(.semibold))
+                .textFieldStyle(.roundedBorder)
+                .disabled(note == nil || markdownEditorMode != .edit)
+                .help("Edit Title")
+                .accessibilityLabel("Edit Title")
+                .accessibilityIdentifier("mac-note-edit-title")
         }
-    }
-
-    private var platformStatus: String {
-        // Keep platform identity centralized in the shared helper introduced for the Mac port.
-        guard MyRAMPlatform.isNativeMacOS else { return "Unsupported platform" }
-        return note.map { $0.title.isEmpty ? "Untitled" : $0.title } ?? "Loading Untitled note"
     }
 }
 #endif

@@ -128,6 +128,21 @@ private struct MacMarkdownPreviewHostedEditor: View {
 @MainActor
 final class MacMarkdownPreviewIntegrationTests: XCTestCase {
 
+    func testMYR225ProductionHostedEditorHasNoZoomScaledTextInset() throws {
+        let host = makeHostedEditor(text: "A long note body")
+        let editor = try XCTUnwrap(host.state.syncBridge.textView)
+        let scrollView = try XCTUnwrap(editor.enclosingScrollView)
+        XCTAssertEqual(editor.textContainerInset, .zero)
+        XCTAssertEqual(editor.font?.pointSize, 26)
+        for zoom in [CGFloat(0.5), 1, 2, 3, 1] {
+            MacNoteViewZoom.apply(zoom, to: scrollView)
+            scrollView.layoutSubtreeIfNeeded()
+            XCTAssertEqual(editor.textContainerInset, .zero)
+            XCTAssertFalse(scrollView.hasHorizontalScroller)
+        }
+        host.window.close()
+    }
+
     // MARK: - MYR-196 Production mode binding
 
     func testModeBindingFactoryOrdersPreviewResignationAndIgnoresNoOp() {

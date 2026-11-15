@@ -43,12 +43,13 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         textView.isRichText = true
         textView.importsGraphics = false
         textView.usesFindBar = true
-        textView.font = .systemFont(ofSize: 24)
+        textView.font = MacStructuralFormattingAdapter.defaultBodyFont
         textView.textColor = .textColor
         textView.backgroundColor = .textBackgroundColor
         textView.insertionPointColor = .controlAccentColor
         textView.typingAttributes = MacEditorTextColorPolicy.normalizedTypingAttributes(textView.typingAttributes)
-        textView.textContainerInset = NSSize(width: 24, height: 20)
+        // Screen-space margin is owned by MacNoteEditorView, not magnified TextKit.
+        textView.textContainerInset = .zero
         textView.minSize = NSSize(width: 0, height: 0)
         textView.maxSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,

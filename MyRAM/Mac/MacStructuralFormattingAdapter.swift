@@ -4,7 +4,7 @@ import AppKit
 
 @MainActor
 enum MacStructuralFormattingAdapter {
-    static let defaultBodyFont = NSFont.systemFont(ofSize: 24)
+    static let defaultBodyFont = NSFont.systemFont(ofSize: 26)
 
     static func project(
         _ attributedText: NSAttributedString,

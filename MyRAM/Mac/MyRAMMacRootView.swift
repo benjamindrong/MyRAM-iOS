@@ -21,6 +21,7 @@ struct MyRAMMacRootView: View {
     @State private var notes: [Note] = []
     @State private var selectedNoteID: UUID?
     @State private var attributedText = NSAttributedString(string: "")
+    @State private var draftTitle = ""
     @State private var loadError: String?
     @State private var saveError: String?
     @State private var saveTask: Task<Void, Never>?
@@ -142,6 +143,7 @@ struct MyRAMMacRootView: View {
         } detail: {
             MacNoteEditorView(
                 note: selectedNote,
+                title: macTitleBinding,
                 attributedText: $attributedText,
                 markdownEditorMode: macModeBinding,
                 syncBridge: editorSyncBridge,
@@ -207,6 +209,17 @@ struct MyRAMMacRootView: View {
         return notes.first { $0.id == selectedNoteID }
     }
 
+    private var macTitleBinding: Binding<String> {
+        Binding(
+            get: { draftTitle },
+            set: { newTitle in
+                guard selectedNoteID != nil, draftTitle != newTitle else { return }
+                draftTitle = newTitle
+                scheduleSave()
+            }
+        )
+    }
+
     private var macFormattingActions: MacFormattingSceneActions {
         MacFormattingSceneActions(
             enabled: startupCoordinator.state == .ready && selectedNoteID != nil && markdownEditorMode == .edit,
@@ -242,7 +255,7 @@ struct MyRAMMacRootView: View {
 
     /// Routes user mode changes through the same production seam used by hosted tests.
     private var macModeBinding: Binding<MarkdownEditorMode> {
-        MacMarkdownModeBindingFactory.make(
+        let standardBinding = MacMarkdownModeBindingFactory.make(
             mode: $markdownEditorMode,
             resignFocusToggleToken: $macResignFocusToggleToken,
             prepareForPreview: {
@@ -251,6 +264,23 @@ struct MyRAMMacRootView: View {
                     window: textView.window,
                     textView: textView
                 )
+            }
+        )
+        return Binding(
+            get: { markdownEditorMode },
+            set: { target in
+                guard target != markdownEditorMode else { return }
+                guard target == .preview && hasUnsavedChanges else {
+                    standardBinding.wrappedValue = target
+                    return
+                }
+                let originalNoteID = selectedNoteID
+                Task { @MainActor in
+                    guard await flushPendingSave(),
+                          selectedNoteID == originalNoteID,
+                          markdownEditorMode == .edit else { return }
+                    standardBinding.wrappedValue = target
+                }
             }
         )
     }
@@ -293,6 +323,7 @@ struct MyRAMMacRootView: View {
         let newID = loadedNotes.first?.id
         updateMarkdownModeForSelectionChange(from: selectedNoteID, to: newID)
         selectedNoteID = newID
+        draftTitle = loadedNotes.first?.title ?? ""
         attributedText = loadedNotes.first.map {
             MacNotePersistenceAdapter().attributedContent(for: $0)
         } ?? NSAttributedString(string: "")
@@ -308,6 +339,7 @@ struct MyRAMMacRootView: View {
             notes = loadedNotes
             if let selectedNoteID, loadedNotes.contains(where: { $0.id == selectedNoteID }) {
                 // Same note still exists: reload buffer but do NOT reset mode.
+                draftTitle = selectedNote?.title ?? ""
                 attributedText = selectedNote.map {
                     MacNotePersistenceAdapter().attributedContent(for: $0)
                 } ?? NSAttributedString(string: "")
@@ -316,6 +348,7 @@ struct MyRAMMacRootView: View {
                 let newID = loadedNotes.first?.id
                 updateMarkdownModeForSelectionChange(from: selectedNoteID, to: newID)
                 selectedNoteID = newID
+                draftTitle = loadedNotes.first?.title ?? ""
                 attributedText = loadedNotes.first.map {
                     MacNotePersistenceAdapter().attributedContent(for: $0)
                 } ?? NSAttributedString(string: "")
@@ -337,12 +370,16 @@ struct MyRAMMacRootView: View {
                 let newID = loadedNotes.first?.id
                 updateMarkdownModeForSelectionChange(from: selectedNoteID, to: newID)
                 selectedNoteID = newID
+                draftTitle = loadedNotes.first?.title ?? ""
                 attributedText = loadedNotes.first.map {
                     MacNotePersistenceAdapter().attributedContent(for: $0)
                 } ?? NSAttributedString(string: "")
                 hasUnsavedChanges = false
                 editorRevision = UUID()
                 return
+            }
+            if !hasUnsavedChanges {
+                draftTitle = loadedNotes.first(where: { $0.id == selectedNoteID })?.title ?? draftTitle
             }
             loadError = nil
         } catch {
@@ -362,6 +399,7 @@ struct MyRAMMacRootView: View {
                 let oldID = selectedNoteID
                 selectedNoteID = nil
                 updateMarkdownModeForSelectionChange(from: oldID, to: nil)
+                draftTitle = ""
                 attributedText = NSAttributedString(string: "")
                 hasUnsavedChanges = false
                 editorRevision = UUID()
@@ -467,6 +505,7 @@ struct MyRAMMacRootView: View {
         }
 
         guard outcome == .reloaded else { return false }
+        draftTitle = selectedNote?.title ?? ""
         editorRevision = UUID()
         saveError = nil
         return true
@@ -480,6 +519,7 @@ struct MyRAMMacRootView: View {
             let oldID = selectedNoteID
             selectedNoteID = note.id
             updateMarkdownModeForSelectionChange(from: oldID, to: note.id)
+            draftTitle = note.title
             attributedText = MacNotePersistenceAdapter().attributedContent(for: note)
             hasUnsavedChanges = false
             editorRevision = UUID()
@@ -510,6 +550,7 @@ struct MyRAMMacRootView: View {
                 let oldID = selectedNoteID
                 selectedNoteID = newNote.id
                 updateMarkdownModeForSelectionChange(from: oldID, to: newNote.id)
+                draftTitle = newNote.title
                 attributedText = MacNotePersistenceAdapter().attributedContent(for: newNote)
                 hasUnsavedChanges = false
                 editorRevision = UUID()
@@ -706,6 +747,7 @@ struct MyRAMMacRootView: View {
         let oldID = selectedNoteID
         selectedNoteID = importedNote.id
         updateMarkdownModeForSelectionChange(from: oldID, to: importedNote.id)
+        draftTitle = importedNote.title
         attributedText = adapter.attributedContent(for: importedNote)
         hasUnsavedChanges = false
         editorRevision = UUID()
@@ -720,6 +762,7 @@ struct MyRAMMacRootView: View {
         let oldID = selectedNoteID
         selectedNoteID = note.id
         updateMarkdownModeForSelectionChange(from: oldID, to: note.id)
+        draftTitle = note.title
         attributedText = adapter.attributedContent(for: note)
         hasUnsavedChanges = false
         editorRevision = UUID()
@@ -782,6 +825,7 @@ struct MyRAMMacRootView: View {
     private func scheduleSave() {
         guard let noteID = selectedNoteID else { return }
         let contentToSave = NSAttributedString(attributedString: attributedText)
+        let titleToSave = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         editorRevision = UUID()
         hasUnsavedChanges = true
 
@@ -789,7 +833,12 @@ struct MyRAMMacRootView: View {
         saveTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard !Task.isCancelled, selectedNoteID == noteID else { return }
-            _ = await saveNote(id: noteID, attributedContent: contentToSave, publication: .ordinary)
+            _ = await saveNote(
+                id: noteID,
+                attributedContent: contentToSave,
+                proposedTitle: titleToSave,
+                publication: .ordinary
+            )
         }
     }
 
@@ -798,7 +847,12 @@ struct MyRAMMacRootView: View {
         saveTask = nil
 
         guard hasUnsavedChanges, let selectedNoteID else { return true }
-        let result = await saveNote(id: selectedNoteID, attributedContent: attributedText, publication: .ordinary)
+        let result = await saveNote(
+            id: selectedNoteID,
+            attributedContent: attributedText,
+            proposedTitle: draftTitle.trimmingCharacters(in: .whitespacesAndNewlines),
+            publication: .ordinary
+        )
         return MacEditorSaveOwnership.flushMayProceed(for: result)
     }
 
@@ -810,7 +864,8 @@ struct MyRAMMacRootView: View {
         let attempt = MacEditorSaveAttempt(
             noteID: noteID,
             editorRevision: editorRevision,
-            attributedContent: NSAttributedString(attributedString: attributedContent)
+            attributedContent: NSAttributedString(attributedString: attributedContent),
+            proposedTitle: draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         )
         let completion = await completeSaveAttempt(attempt, publication: .incomingBoundary)
         return await boundaryResult(for: completion, requestedAttempt: attempt)
@@ -819,12 +874,14 @@ struct MyRAMMacRootView: View {
     private func saveNote(
         id noteID: UUID,
         attributedContent: NSAttributedString,
+        proposedTitle: String,
         publication: MacLocalSavePublication
     ) async -> MacPendingSaveResult {
         let attempt = MacEditorSaveAttempt(
             noteID: noteID,
             editorRevision: editorRevision,
-            attributedContent: NSAttributedString(attributedString: attributedContent)
+            attributedContent: NSAttributedString(attributedString: attributedContent),
+            proposedTitle: proposedTitle
         )
         let completion = await completeSaveAttempt(attempt, publication: publication)
         return pendingSaveResult(for: completion, requestedAttempt: attempt)
@@ -854,7 +911,8 @@ struct MyRAMMacRootView: View {
         do {
             prepared = try await adapter.prepareProductionLocalNoteEdit(
                 noteID: attempt.noteID,
-                proposedAttributedContent: attempt.attributedContent
+                proposedAttributedContent: attempt.attributedContent,
+                proposedTitle: attempt.proposedTitle
             )
         } catch MacPendingSaveFailure.noteMissing {
             return .failed(attempt: attempt, failure: .noteMissing(noteID: attempt.noteID))
@@ -862,6 +920,10 @@ struct MyRAMMacRootView: View {
             return .failed(attempt: attempt, failure: .captureFailed(noteID: attempt.noteID))
         }
 
+        // Preparing may suspend. Discard a snapshot superseded by later title/body edits.
+        guard stillOwnsEditorState(attempt) else {
+            return .supersededBeforeStart(attempt: attempt)
+        }
         guard prepared.hasAnyAuthoritativeMutation || prepared.previousRichTextContentData != prepared.proposedRichTextContentData else {
             return .completed(attempt: attempt, mutationKind: .none, publication: .none)
         }
@@ -909,6 +971,11 @@ struct MyRAMMacRootView: View {
         var state = editorSaveState
         let result = state.pendingResult(for: completion, requestedAttempt: requestedAttempt)
         applyEditorSaveState(state)
+        if case .completed(let attempt, _, _) = completion,
+           stillOwnsEditorState(attempt),
+           !hasUnsavedChanges {
+            draftTitle = selectedNote?.title ?? draftTitle
+        }
         switch result {
         case .noChanges, .savedWithoutBodyMutation, .savedWithPendingBodyMutation:
             resumeSyncConvergence()

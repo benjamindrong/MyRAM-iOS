@@ -128,11 +128,13 @@ final class MacNotePersistenceAdapter {
 
     func prepareProductionLocalNoteEdit(
         noteID: UUID,
-        proposedAttributedContent: NSAttributedString
+        proposedAttributedContent: NSAttributedString,
+        proposedTitle: String? = nil
     ) async throws -> MacPreparedLocalNoteEdit {
         try await prepareLocalNoteEditCore(
             noteID: noteID,
             proposedAttributedContent: proposedAttributedContent,
+            proposedTitle: proposedTitle,
             activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled,
             operationIDReserver: MyRAMSyncOperationIDAllocator.shared
         )
@@ -141,13 +143,15 @@ final class MacNotePersistenceAdapter {
     func prepareLocalNoteEditCore(
         noteID: UUID,
         proposedAttributedContent: NSAttributedString,
+        proposedTitle: String? = nil,
         activationEnabled: Bool,
         operationIDReserver: any SyncOperationIDReserving
     ) async throws -> MacPreparedLocalNoteEdit {
         guard activationEnabled else {
             return try prepareLegacyLocalNoteEdit(
                 noteID: noteID,
-                proposedAttributedContent: proposedAttributedContent
+                proposedAttributedContent: proposedAttributedContent,
+                proposedTitle: proposedTitle
             )
         }
         guard let note = try loadNote(id: noteID) else {
@@ -155,19 +159,15 @@ final class MacNotePersistenceAdapter {
         }
 
         let modifiedAt = Date()
+        let nextTitle = proposedTitle ?? note.title
         let proposedBody = proposedAttributedContent.string
         let formattingProjection = MacStructuralFormattingAdapter.project(
             proposedAttributedContent
         )
-        let proposedRichTextContentData = RTFCoding.encode(
-            MacStructuralFormattingAdapter.render(
-                projection: formattingProjection
-            )
-        )
         let titleChange = SyncBatchNoteChangeCapture.titleChanged(
             noteID: note.id,
             oldTitle: note.title,
-            newTitle: note.title,
+            newTitle: nextTitle,
             modifiedAt: modifiedAt
         ).map { SyncConvergenceCapturedLocalChange(change: $0, evidence: nil) }
         let snapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(for: note, in: context)
@@ -186,6 +186,13 @@ final class MacNotePersistenceAdapter {
             operationIDReserver: operationIDReserver
         )
         let finalMarkState = formattingEdit.finalMarkState
+        let hasBodyMutation = !capture.capturedChanges.isEmpty
+        let hasFormattingMutation = finalMarkState != snapshot.markState
+        // A title-only save cannot rewrite structural sequence or derived RTF.
+        let proposedRichTextContentData: Data? =
+            hasBodyMutation || hasFormattingMutation
+                ? RTFCoding.encode(MacStructuralFormattingAdapter.render(projection: formattingProjection))
+                : note.richTextContentData
         let structuralMarkChange: SyncConvergenceCapturedLocalChange?
         if formattingEdit.emittedOperations.isEmpty {
             structuralMarkChange = nil
@@ -209,7 +216,7 @@ final class MacNotePersistenceAdapter {
             previousBody: note.content,
             previousRichTextContentData: note.richTextContentData,
             previousModifiedAt: note.modifiedAt,
-            proposedTitle: note.title,
+            proposedTitle: nextTitle,
             proposedBody: proposedBody,
             proposedRichTextContentData: proposedRichTextContentData,
             capturedChanges:
@@ -217,8 +224,8 @@ final class MacNotePersistenceAdapter {
                 + capture.capturedChanges
                 + (structuralMarkChange.map { [$0] } ?? []),
             hasTitleMutation: titleChange != nil,
-            hasBodyMutation: !capture.capturedChanges.isEmpty,
-            hasFormattingMutation: finalMarkState != snapshot.markState,
+            hasBodyMutation: hasBodyMutation,
+            hasFormattingMutation: hasFormattingMutation,
             structuralSnapshot: snapshot,
             finalStructuralState: capture.finalState,
             finalStructuralMarkState: finalMarkState
@@ -227,18 +234,19 @@ final class MacNotePersistenceAdapter {
 
     private func prepareLegacyLocalNoteEdit(
         noteID: UUID,
-        proposedAttributedContent: NSAttributedString
+        proposedAttributedContent: NSAttributedString,
+        proposedTitle: String? = nil
     ) throws -> MacPreparedLocalNoteEdit {
         guard let note = try loadNote(id: noteID) else {
             throw MacPendingSaveFailure.noteMissing(noteID: noteID)
         }
         let modifiedAt = Date()
+        let nextTitle = proposedTitle ?? note.title
         let proposedBody = proposedAttributedContent.string
-        let proposedRichTextContentData = RTFCoding.encode(proposedAttributedContent)
         let titleChange = SyncBatchNoteChangeCapture.titleChanged(
             noteID: note.id,
             oldTitle: note.title,
-            newTitle: note.title,
+            newTitle: nextTitle,
             modifiedAt: modifiedAt
         ).map { SyncConvergenceCapturedLocalChange(change: $0, evidence: nil) }
         let bodyChanges = try SyncBatchNoteChangeCapture.capturedBodyChanges(
@@ -248,6 +256,8 @@ final class MacNotePersistenceAdapter {
             modifiedAt: modifiedAt,
             bodyHashCapabilityEnabled: true
         )
+        let proposedRichTextContentData = bodyChanges.isEmpty
+            ? note.richTextContentData : RTFCoding.encode(proposedAttributedContent)
         return MacPreparedLocalNoteEdit(
             noteID: note.id,
             modifiedAt: modifiedAt,
@@ -255,7 +265,7 @@ final class MacNotePersistenceAdapter {
             previousBody: note.content,
             previousRichTextContentData: note.richTextContentData,
             previousModifiedAt: note.modifiedAt,
-            proposedTitle: note.title,
+            proposedTitle: nextTitle,
             proposedBody: proposedBody,
             proposedRichTextContentData: proposedRichTextContentData,
             capturedChanges: (titleChange.map { [$0] } ?? []) + bodyChanges,
@@ -289,7 +299,8 @@ final class MacNotePersistenceAdapter {
 
         do {
             note.title = prepared.proposedTitle
-            if let snapshot = prepared.structuralSnapshot,
+            if prepared.hasBodyMutation || prepared.hasFormattingMutation,
+               let snapshot = prepared.structuralSnapshot,
                let finalState = prepared.finalStructuralState,
                let finalMarkState = prepared.finalStructuralMarkState {
                 let staged = try NoteSequenceStateFullBodyIntegration
@@ -302,10 +313,12 @@ final class MacNotePersistenceAdapter {
                         in: context
                     )
                 didStageStructuralMutation = staged.textChanged || staged.markChanged
-            } else {
+            } else if prepared.structuralSnapshot == nil {
                 note.content = prepared.proposedBody
             }
-            note.richTextContentData = prepared.proposedRichTextContentData
+            if currentRichTextContentData != prepared.proposedRichTextContentData {
+                note.richTextContentData = prepared.proposedRichTextContentData
+            }
             note.modifiedAt = prepared.modifiedAt
             try saveOperation(context)
         } catch {
