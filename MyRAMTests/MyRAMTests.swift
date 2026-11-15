@@ -9329,6 +9329,64 @@ final class MyRAMTests: XCTestCase {
         )
     }
 
+    func testMountedFormattingOnlySynchronizesWhileEditorRemainsOpen() async throws {
+        let fixture = try makeMountedEditorFixture(title: "Title", content: "Same")
+        defer { fixture.unmount() }
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: fixture.note, in: fixture.context)
+        try fixture.context.save()
+        try await waitForMountedEditorLifecycle()
+        let coordinator = try XCTUnwrap(fixture.textView.delegate as? SelectableTextView.Coordinator)
+        fixture.textView.selectedRange = NSRange(location: 0, length: 4)
+        coordinator.isUpdatingUIView = true
+        coordinator.toggleUnderline(in: fixture.textView)
+        coordinator.isUpdatingUIView = false
+        try await waitPastEditorCommitDelay()
+        XCTAssertNotNil(fixture.window.rootViewController)
+        XCTAssertEqual(fixture.textView.text, "Same")
+        let id = fixture.noteID
+        let fresh = ModelContext(fixture.container)
+        let record = try XCTUnwrap(fresh.fetch(FetchDescriptor<NoteSequenceStateRecord>(
+            predicate: #Predicate { $0.noteID == id }
+        )).first)
+        let sequence = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(record: record, noteID: id)
+        let marks = try NoteStructuralFormattingPersistence.decode(record: record, pairedWith: sequence)
+        XCTAssertEqual(sequence.visibleText, "Same")
+        XCTAssertEqual(try marks.visibleProjection(in: sequence).first?.assignments[.underline], .enabled)
+        XCTAssertTrue(fixture.recorder.recordedBatches.flatMap(\.changes).contains {
+            if case .noteStructuralMarksChanged = $0 { return true }; return false
+        }, "Formatting must reach outbound transport without closing the editor")
+    }
+
+    func testMountedNativeFormattingOnlySynchronizesWhileEditorRemainsOpen() async throws {
+        let fixture = try makeMountedEditorFixture(title: "Title", content: "Same")
+        defer { fixture.unmount() }
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: fixture.note, in: fixture.context)
+        try fixture.context.save()
+        try await waitForMountedEditorLifecycle()
+        let coordinator = try XCTUnwrap(fixture.textView.delegate as? SelectableTextView.Coordinator)
+        fixture.textView.selectedRange = NSRange(location: 0, length: 4)
+        // UIKit's selection-menu formatting reports an attributed-text edit through
+        // the delegate, without changing the body or eagerly serializing RTF.
+        fixture.textView.textStorage.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue,
+                                                  range: fixture.textView.selectedRange)
+        coordinator.textViewDidChange(fixture.textView)
+        try await waitPastEditorCommitDelay()
+        XCTAssertNotNil(fixture.window.rootViewController)
+        XCTAssertEqual(fixture.textView.text, "Same")
+        let id = fixture.noteID
+        let fresh = ModelContext(fixture.container)
+        let record = try XCTUnwrap(fresh.fetch(FetchDescriptor<NoteSequenceStateRecord>(
+            predicate: #Predicate { $0.noteID == id }
+        )).first)
+        let sequence = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(record: record, noteID: id)
+        let marks = try NoteStructuralFormattingPersistence.decode(record: record, pairedWith: sequence)
+        XCTAssertEqual(sequence.visibleText, "Same")
+        XCTAssertEqual(try marks.visibleProjection(in: sequence).first?.assignments[.underline], .enabled)
+        XCTAssertTrue(fixture.recorder.recordedBatches.flatMap(\.changes).contains {
+            if case .noteStructuralMarksChanged = $0 { return true }; return false
+        }, "Formatting must reach outbound transport without closing the editor")
+    }
+
     private func makeMountedEditorFixture(
         title: String,
         content: String

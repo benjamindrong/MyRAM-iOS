@@ -250,6 +250,11 @@ struct NoteEditorView: View {
             .onChange(of: content) {
                 scheduleCurrentNoteSearchUpdate()
             }
+            .onChange(of: structuralFormattingProjection) {
+                // Formatting is an authoritative edit even when deferred RTF
+                // serialization leaves both content bindings unchanged.
+                handleEditorChange()
+            }
             .onChange(of: sortedPinnedTextSearchSignature) {
                 scheduleCurrentNoteSearchUpdate()
             }
@@ -3130,7 +3135,7 @@ private final class LiveTextEnabledImageView: UIScrollView, UIScrollViewDelegate
     }
 }
 
-private struct SelectableTextView: UIViewRepresentable {
+struct SelectableTextView: UIViewRepresentable {
     @Binding var text: String
     @Binding var richTextContentData: Data?
     let syncBridge: UIKitEditorSyncBridge
