@@ -424,18 +424,81 @@ def xcode_release(evidence: Evidence, root: Path, scratch: Path, platform: str,
                  "CODE_SIGNING_ALLOWED=NO", "build"], cwd=root, env=env)
 
 
+def physical_phase(evidence: Evidence, root: Path, scratch: Path,
+                   iphone: str, env: dict[str, str]) -> None:
+    derived = scratch / "PhysicalDerivedData"
+    evidence.run("physical-mac-build", [
+        "xcodebuild", "-project", "MyRAM.xcodeproj", "-scheme", "MyRAMMac",
+        "-configuration", "Debug", "-destination", "platform=macOS",
+        "-derivedDataPath", str(derived), "build"
+    ], cwd=root, env=env)
+    app = derived / "Build" / "Products" / "Debug" / "MyRAMMac.app"
+    info_path = app / "Contents" / "Info.plist"
+    require(info_path.is_file(), "Signed MYR371 Mac app bundle was not produced")
+    with info_path.open("rb") as source:
+        info = plistlib.load(source)
+    require(info.get("CFBundleIdentifier") == PHYSICAL_MAC_ID
+            and info.get("MyRAMVerificationTransportOnly") is True
+            and info.get("NSBonjourServices") == ["_myr371-ice._tcp"],
+            "Built Mac app does not have the immutable MYR371 transport-only identity")
+    evidence.run("physical-mac-signature", [
+        "codesign", "--verify", "--strict", "--deep", str(app)
+    ], env=env)
+    executable = app / "Contents" / "MacOS" / "MyRAMMac"
+    require(executable.is_file(), "Built MYR371 Mac executable missing")
+    mac_log = evidence.raw / "physical-mac-process.log"
+    mobile_environment = dict(env, TEST_RUNNER_MYR371_PHYSICAL_TRANSPORT="1")
+    with mac_log.open("xb") as output:
+        process = subprocess.Popen([str(executable)], cwd=root, env=env,
+                                   stdout=output, stderr=subprocess.STDOUT)
+        try:
+            require(process.poll() is None, "Signed MYR371 Mac app exited at launch")
+            evidence.run("physical-iphone-tests", [
+                "xcodebuild", "-project", "MyRAM.xcodeproj", "-scheme", "MyRAM",
+                "-configuration", "Debug", "-destination", f"platform=iOS,id={iphone}",
+                "-parallel-testing-enabled", "NO", "-derivedDataPath", str(derived),
+                "-resultBundlePath", str(evidence.raw / "physical-iphone-tests.xcresult"),
+                "-only-testing:" + PHYSICAL_TEST, "test"
+            ], cwd=root, env=mobile_environment)
+            require(process.poll() is None, "Signed MYR371 Mac app exited during physical acceptance")
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+            output.flush()
+            os.fsync(output.fileno())
+    summary = run_output("xcrun", "xcresulttool", "get", "test-results", "summary",
+                         "--path", str(evidence.raw / "physical-iphone-tests.xcresult"))
+    counts = validate_summary(summary)
+    require(counts["total"] == 1 and counts["passed"] == 1 and counts["skipped"] == 0,
+            "Physical acceptance requires exactly one non-skipped native XCUITest")
+    (evidence.raw / "physical-iphone-tests-summary.json").write_text(summary + "\n", encoding="utf-8")
+    evidence.phases[-1]["counts"] = counts
+    assert_myr371_mac_transport(mac_log.read_text(encoding="utf-8", errors="replace"))
+    print("PASS: MYR371 native iPhone connection and Mac reconnect lifecycle", flush=True)
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run MyRAM native tests against clean HEAD in isolated Verification")
-    parser.add_argument("suite", choices=("ui", "ios", "mac", "all"), nargs="?", default="ui")
+    parser.add_argument("suite", choices=("ui", "ios", "mac", "all", "physical"), nargs="?", default="ui")
     parser.add_argument("--only", action="append", default=[], metavar="TARGET/CLASS[/TEST]",
                         help="Repeatable exact Xcode test selector for a single suite")
     parser.add_argument("--simulator", metavar="EXISTING-UDID", help="Use this existing iPhone Simulator UUID")
+    parser.add_argument("--iphone-udid", metavar="PHYSICAL-ID", help="Pin an eligible physical iOS device")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
-    validate_only(args.suite, args.only)
+    if args.suite == "physical":
+        require(not args.only and not args.simulator, "Physical MYR371 uses its dedicated native test; --only/--simulator are forbidden")
+    else:
+        require(not args.iphone_udid, "--iphone-udid requires the physical suite")
+        validate_only(args.suite, args.only)
     repo = Path(__file__).resolve().parent.parent
     evidence: Evidence | None = None
     status = "FAIL"
@@ -454,6 +517,7 @@ def main(argv: list[str] | None = None) -> int:
         xcode_version = run_output("xcodebuild", "-version")
         run_output("xcrun", "--find", "xcresulttool")
         print(f"candidate_sha={sha}\nnearby_sha={near_sha}\njava_home={java_home}\n{xcode_version}", flush=True)
+        profile = PHYSICAL_PROFILE if args.suite == "physical" else PROFILE
         simid = None
         booted = True
         if args.suite in ("ui", "ios", "all"):
@@ -464,8 +528,10 @@ def main(argv: list[str] | None = None) -> int:
         require(authority.is_dir(), "Canonical workspace Evidence authority missing; refusing another root")
         evidence = Evidence(authority / "MyRAM" / "AutomatedVerification", sha, near_sha, args.suite)
         (evidence.raw / "execution.json").write_text(json.dumps({"sha": sha, "nearby": near_sha,
-                       "profile": PROFILE, "simulator": simid, "xcode": xcode_version}, indent=2) + "\n", encoding="utf-8")
-        resources = (["sim-" + simid] if simid else []) + (["mac-profile"] if args.suite in ("mac", "all") else [])
+                       "profile": profile, "simulator": simid, "xcode": xcode_version}, indent=2) + "\n", encoding="utf-8")
+        resources = (["sim-" + simid] if simid else []) + (["mac-profile"] if args.suite in ("mac", "all", "physical") else [])
+        if args.suite == "physical":
+            resources.append("physical-iphone")
         with lock_resources(evidence.path.parent / ".locks", resources):
             with tempfile.TemporaryDirectory(prefix=".myram-native-verify-", dir=repo.parent) as directory:
                 scratch = Path(directory)
@@ -486,19 +552,39 @@ def main(argv: list[str] | None = None) -> int:
                     env = os.environ.copy()
                     env["JAVA_HOME"] = str(java_home)
                     env["PATH"] = f"{java_home / 'bin'}:{env.get('PATH', '')}"
-                    evidence.run("verification-profile", [sys.executable,
-                                 "Scripts/configure-myram-verification.py", "--root", str(ios_worktree),
-                                 "--profile", PROFILE,
-                                 "--manifest-output", str(evidence.raw / "isolation.json")], cwd=ios_worktree, env=env)
+                    profile_args = [sys.executable, "Scripts/configure-myram-verification.py",
+                                    "--root", str(ios_worktree), "--profile", profile,
+                                    "--manifest-output", str(evidence.raw / "isolation.json")]
+                    if args.suite == "physical":
+                        profile_args.append("--transport-only")
+                    evidence.run("verification-profile", profile_args, cwd=ios_worktree, env=env)
                     isolated = json.loads((evidence.raw / "isolation.json").read_text(encoding="utf-8"))
-                    require(isolated.get("source_candidate_sha") == sha and isolated.get("profile") == PROFILE
-                            and isolated.get("application_identifiers", {}).get("verification_ios") == IDENTITY,
+                    expected_id = PHYSICAL_IOS_ID if args.suite == "physical" else IDENTITY
+                    require(isolated.get("source_candidate_sha") == sha and isolated.get("profile") == profile
+                            and isolated.get("application_identifiers", {}).get("verification_ios") == expected_id
+                            and (args.suite != "physical" or isolated.get("transport_mode") == "transportOnly"),
                             "Disposable Verification identity audit did not match exact candidate")
                     if simid is not None:
                         if not booted:
                             evidence.run("boot-existing-simulator", ["xcrun", "simctl", "boot", simid], env=env)
                         evidence.run("simulator-ready", ["xcrun", "simctl", "bootstatus", simid, "-b"], env=env)
-                    for suite in (["mac", "ios", "ui"] if args.suite == "all" else [args.suite]):
+                    if args.suite == "physical":
+                        evidence.run("physical-device-discovery", [
+                            "xcodebuild", "-project", "MyRAM.xcodeproj",
+                            "-scheme", "MyRAM", "-showdestinations"
+                        ], cwd=ios_worktree, env=env)
+                        iphone = choose_physical_iphone(
+                            (evidence.raw / "physical-device-discovery.log").read_text(),
+                            args.iphone_udid or os.environ.get(PHYSICAL_DEVICE_ENV)
+                        )
+                        (evidence.raw / "physical-device-identity.json").write_text(
+                            json.dumps({"iphone": iphone, "mac_bundle_id": PHYSICAL_MAC_ID,
+                                        "iphone_bundle_id": PHYSICAL_IOS_ID}) + "\n", encoding="utf-8"
+                        )
+                        physical_phase(evidence, ios_worktree, scratch, iphone, env)
+                    suites = ([] if args.suite == "physical" else
+                              (["mac", "ios", "ui"] if args.suite == "all" else [args.suite]))
+                    for suite in suites:
                         require(run_output("git", "-C", str(ios_worktree), "rev-parse", "HEAD") == sha,
                                 "Candidate SHA drift during verification")
                         if suite != "mac":
