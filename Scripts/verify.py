@@ -154,8 +154,12 @@ def sha_file(path: Path) -> str:
 
 def artifacts_in(raw: Path) -> list[dict[str, Any]]:
     entries = []
-    for file in sorted(p for p in raw.rglob("*") if p.is_file()):
+    for file in sorted(raw.rglob("*")):
         require(not file.is_symlink(), f"Symlink artifact rejected: {file}")
+        require(file.resolve().is_relative_to(raw.resolve()), f"Artifact escapes evidence root: {file}")
+        if file.is_dir():
+            continue
+        require(file.is_file(), f"Nonregular artifact rejected: {file}")
         entries.append({"path": file.relative_to(raw.parent).as_posix(),
                         "size": file.stat().st_size, "sha256": sha_file(file)})
     return entries
@@ -165,8 +169,15 @@ class Evidence:
     def __init__(self, root: Path, sha: str, nearby: str, suite: str):
         stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self.path = root / f"{stamp}-{os.getpid()}-{sha[:12]}"
+        # Evidence itself may redirect to external storage; project and run roots may not.
+        require(not root.is_symlink() and not root.parent.is_symlink(),
+                "Nested evidence authority symlink")
+        root.mkdir(parents=True, exist_ok=True)
+        self.path.mkdir()  # refuse any competing/previous run identity
         self.raw = self.path / "raw"
-        self.raw.mkdir(parents=True)
+        for folder in ("raw", "metadata", "manifests"):
+            (self.path / folder).mkdir()
+        self.started_at = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
         self.sha = sha
         self.nearby = nearby
         self.suite = suite
@@ -187,17 +198,80 @@ class Evidence:
         print(f"PASS: {name}", flush=True)
 
     def seal(self, outcome: str, reason: str | None = None) -> None:
-        report = {"schema": "myram.native-verification.v1", "repository": REPOSITORY,
-                  "candidate_sha": self.sha, "nearby_sha": self.nearby, "suite": self.suite,
-                  "retention_state": "sealed", "outcome": outcome, "reason": reason,
-                  "phases": self.phases, "canonical_artifacts": artifacts_in(self.raw)}
-        payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
-        temp = self.path / "manifest.json.tmp"
-        temp.write_text(payload, encoding="utf-8")
-        os.replace(temp, self.path / "manifest.json")
-        print(f"evidence_manifest_sha256={sha_file(self.path / 'manifest.json')}", flush=True)
+        """One V1 authority; retain original logs and native result bundles."""
+        require(outcome in ("PASS", "FAIL"), "Unsupported verification outcome")
+        if outcome == "PASS":
+            require(self.phases and all(p["exit_code"] == 0 for p in self.phases),
+                    "Cannot claim PASS without completed successful phases")
+        for folder in ("raw", "metadata", "manifests"):
+            require((self.path / folder).is_dir() and not (self.path / folder).is_symlink(),
+                    "Noncanonical run directory")
+        indexed = artifacts_in(self.raw)
+        phases = {p["name"]: f"phase-{i}" for i, p in enumerate(self.phases, 1)}
+        evidence, artifacts = [], []
+        for entry in indexed:
+            relative = entry["path"]
+            name = Path(relative).name
+            phase = phases.get(name.removesuffix(".log")) if name.endswith(".log") else None
+            if ".xcresult/" not in relative:
+                evidence.append(dict(
+                    evidence_id=relative,
+                    category="runner_output" if name.endswith(".log") else "generated_manifest_report",
+                    category_detail=None, provenance="machine", availability="present",
+                    path=relative, sha256=entry["sha256"], phase_id=phase,
+                    attempt_number=1 if phase else None, captured_at=None,
+                    legacy_source_ref=None,
+                ))
+            artifacts.append(dict(
+                artifact_id=relative, path=relative, artifact_kind="file",
+                retention_class="canonical", disposition="retained",
+                sha256=entry["sha256"], logical_content_sha256=entry["sha256"],
+                size_bytes=entry["size"], supports=[phase or "run_outcome"],
+            ))
+        for bundle in sorted(self.raw.glob("*.xcresult")):
+            require(bundle.is_dir() and not bundle.is_symlink(), "Noncanonical Xcode result bundle")
+            relative = bundle.relative_to(self.path).as_posix()
+            phase = phases.get(bundle.name.removesuffix(".xcresult"))
+            evidence.append(dict(
+                evidence_id=relative, category="result_bundle", category_detail=None,
+                provenance="machine", availability="present", path=relative,
+                sha256=None, phase_id=phase, attempt_number=1 if phase else None,
+                captured_at=None, legacy_source_ref=None,
+            ))
+        status = ("passed" if outcome == "PASS" else
+                  "failed" if any(p["exit_code"] != 0 for p in self.phases) else "blocked")
+        report = dict(
+            manifest_schema_version=1, evidence_contract_version=1,
+            project=self.path.parent.parent.name, work_unit=self.path.parent.name,
+            run_id=self.path.name, origin=dict(kind="implementation_unit", key="AutomatedVerification"),
+            associations=[], started_at=self.started_at,
+            completed_at=dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+            status=status, history_state="current", authority_state="current",
+            superseded_by_run_id=None, source_revision=self.sha,
+            retention_state="sealed", evidence=evidence, artifacts=artifacts,
+            retention_summary=dict(
+                canonical_bytes=sum(item["size_bytes"] for item in artifacts),
+                canonical_artifacts=len(artifacts),
+                supporting_bytes_purged=0, supporting_artifacts_purged=0,
+            ),
+        )
+        location = self.path / "manifests" / "run.json"
+        with location.open("xb") as output:  # no overwrite or parallel legacy manifest
+            output.write((json.dumps(report, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+            output.flush()
+            os.fsync(output.fileno())
+        # Recheck recorded originals before reporting any PASS; reject stale or
+        # tampered retained test artifacts, including files inside .xcresult.
+        for item in artifacts:
+            file = self.path / item["path"]
+            require(file.is_file() and not file.is_symlink()
+                    and file.resolve().is_relative_to(self.path.resolve())
+                    and file.stat().st_size == item["size_bytes"]
+                    and sha_file(file) == item["sha256"],
+                    "Retained original artifact integrity mismatch")
+        print(f"evidence_manifest_sha256={sha_file(location)}", flush=True)
+        print(f"CANONICAL_MANIFEST={location}", flush=True)
         print(f"evidence_directory={self.path}", flush=True)
-
 
 @contextlib.contextmanager
 def lock_resources(directory: Path, resources: list[str]):
@@ -300,7 +374,9 @@ def main(argv: list[str] | None = None) -> int:
             simid, booted = choose_simulator(run_output("xcrun", "simctl", "list", "devices", "available", "--json"),
                                              args.simulator or os.environ.get(SIMULATOR_ENV))
             print(f"simulator_udid={simid} (existing)", flush=True)
-        evidence = Evidence(repo.parent / "Evidence" / "MyRAM" / "AutomatedVerification", sha, near_sha, args.suite)
+        authority = repo.parent / "Evidence"
+        require(authority.is_dir(), "Canonical workspace Evidence authority missing; refusing another root")
+        evidence = Evidence(authority / "MyRAM" / "AutomatedVerification", sha, near_sha, args.suite)
         (evidence.raw / "execution.json").write_text(json.dumps({"sha": sha, "nearby": near_sha,
                        "profile": PROFILE, "simulator": simid, "xcode": xcode_version}, indent=2) + "\n", encoding="utf-8")
         resources = (["sim-" + simid] if simid else []) + (["mac-profile"] if args.suite in ("mac", "all") else [])
