@@ -18,6 +18,16 @@ SPEC.loader.exec_module(v)
 
 
 class NativeVerifierTests(unittest.TestCase):
+    def test_physical_cli_requires_explicit_unambiguous_native_mode(self):
+        self.assertEqual(v.parse_args(["physical"]).suite, "physical")
+        self.assertEqual(v.parse_args(["physical", "--iphone-udid",
+                                       "00008110-00001A1234567890"]).iphone_udid,
+                         "00008110-00001A1234567890")
+        with self.assertRaisesRegex(v.VerificationError, "forbidden"):
+            v.main(["physical", "--simulator", "11111111-1111-1111-1111-111111111111"])
+        with self.assertRaisesRegex(v.VerificationError, "requires the physical suite"):
+            v.main(["ui", "--iphone-udid", "00008110-00001A1234567890"])
+
     def test_default_mode_is_ui(self):
         self.assertEqual(v.parse_args([]).suite, "ui")
         self.assertEqual(v.parse_args(["all"]).suite, "all")
