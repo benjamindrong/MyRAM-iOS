@@ -25,7 +25,7 @@ class NativeVerifierTests(unittest.TestCase):
                          ["MyRAMTests/A/B"])
 
     def test_suite_selector_is_exact_and_cannot_expand_other_targets(self):
-        v.validate_only("ui", ["MyRAMUITests/MyRAMUITests/testFoo", "MyRAMUITests/MyRAMUITests"])
+        v.validate_only("ui", ["MyRAMUITests/MyRAMUITests/testFoo", "MyRAMUITests/OtherTests"])
         v.validate_only("ios", ["MyRAMTests/EditorFormattingMutationApplierTests"])
         with self.assertRaises(v.VerificationError):
             v.validate_only("all", ["MyRAMTests/Any"])
