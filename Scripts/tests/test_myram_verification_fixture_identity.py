@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import plistlib
+import re
 import subprocess
 import tempfile
 import unittest
@@ -116,6 +117,25 @@ class VerificationFixtureIdentityTests(unittest.TestCase):
         self.assertNotEqual(automated["ios"]["app_bundle_identifier"], ordinary["ios"]["app_bundle_identifier"])
         self.assertNotEqual(automated["multipeer_service_type"], ordinary["multipeer_service_type"])
         self.generate(with_fixture=False, profile="automated")
+
+    def test_runtime_transport_allowlist_matches_every_registered_profile(self):
+        swift = (ROOT / "MyRAM/Sync/MyRAMSyncRuntimeConfiguration.swift").read_text()
+        declaration = swift.split("static let verificationServicesByBundleID: [String: String] = [", 1)
+        self.assertEqual(len(declaration), 2)
+        registrations = declaration[1].split("]", 1)[0]
+        parsed = re.findall(r'"([^"]+)": "([^"]+)"', registrations)
+        self.assertEqual(len(parsed), len(set(key for key, _ in parsed)),
+                         "Duplicate runtime Verification app identity")
+        actual = dict(parsed)
+        expected = {}
+        for profile in module.VERIFICATION_PROFILES:
+            identity = module.load_identity(ROOT, profile)
+            for platform in ("ios", "macos"):
+                bundle_id = identity[platform]["app_bundle_identifier"]
+                self.assertNotIn(bundle_id, expected)
+                expected[bundle_id] = identity["multipeer_service_type"]
+        self.assertEqual(actual, expected,
+                         "Every registered Verification identity must match its runtime MPC service")
 
     def test_creator_binds_myr227_profile_in_disposable_checkout(self):
         self.generate(with_fixture=False, profile="myr227")

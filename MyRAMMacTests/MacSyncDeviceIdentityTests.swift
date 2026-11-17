@@ -283,13 +283,37 @@ final class MacSyncDeviceIdentityTests: XCTestCase {
     func testMYR227VerificationNamespaceDoesNotOverlapMYR233() throws {
         let registrations = MyRAMSyncRuntimeConfiguration.verificationServicesByBundleID
         XCTAssertEqual(Set(registrations.values), Set([
-            "myram-verify", "myr227-sync", "myr227-test", "myr371-ice"
+            "myram-verify", "myr227-sync", "myr227-test", "myr371-ice", "myram-autotest"
         ]))
         for id in ["com.northsignalstudio.myram.myr227.verification",
                    "com.northsignalstudio.myram.mac.myr227.verification"] {
             XCTAssertEqual(registrations[id], "myr227-sync")
             XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
                 bundleIdentifier: id, bonjourServices: ["_myram-verify._tcp"],
+                transportOnlyValue: nil
+            ))
+        }
+    }
+
+    func testAutomatedVerificationRuntimeUsesOnlyItsOwnTransportNamespace() throws {
+        for identifier in ["com.northsignalstudio.myram.automated.verification",
+                           "com.northsignalstudio.myram.mac.automated.verification"] {
+            let mode = try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: identifier, bonjourServices: ["_myram-autotest._tcp"],
+                transportOnlyValue: nil
+            )
+            XCTAssertEqual(mode.verificationServiceType, "myram-autotest")
+            XCTAssertTrue(mode.applicationSyncEnabled)
+            XCTAssertTrue(mode.recordsTransportDiagnostics)
+            XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: identifier, bonjourServices: ["_myram-sync._tcp"],
+                transportOnlyValue: nil
+            ))
+        }
+        for identifier in ["com.northsignalstudio.myram.unknown.verification",
+                           "com.northsignalstudio.myram.mac.unknown.verification"] {
+            XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                bundleIdentifier: identifier, bonjourServices: ["_myram-sync._tcp"],
                 transportOnlyValue: nil
             ))
         }
