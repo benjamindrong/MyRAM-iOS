@@ -137,6 +137,8 @@ class NativeVerifierTests(unittest.TestCase):
             original = evidence.raw / "failed-probe.log"
             self.assertEqual(manifest["artifacts"][0]["sha256"], v.sha_file(original))
             self.assertFalse((evidence.path / "manifest.json").exists())
+            self.assertEqual((evidence.raw / "producer-error.txt").read_text(),
+                             "expected probe failure\n")
 
     def test_canonical_ui_result_bundle_keeps_native_bytes_and_a_single_index(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -198,6 +200,15 @@ class NativeVerifierTests(unittest.TestCase):
                     evidence.seal("PASS")
             self.assertEqual(calls[0], 2)
             self.assertFalse((evidence.path / "manifests" / "run.json").exists())
+
+    def test_run_id_is_unique_even_for_same_commit_in_same_second(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "MyRAM" / "AutomatedVerification"
+            first = v.Evidence(root, "a" * 40, "b" * 40, "mac")
+            second = v.Evidence(root, "a" * 40, "b" * 40, "mac")
+            self.assertNotEqual(first.path, second.path)
+            self.assertTrue(first.path.is_dir())
+            self.assertTrue(second.path.is_dir())
 
     def test_xcode_phase_only_selector_does_not_expand_to_full_target(self):
         class ProbeEvidence:
