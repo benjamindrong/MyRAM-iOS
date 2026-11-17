@@ -242,6 +242,18 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         let coveredNoteIDs: Set<SyncBatchNoteID>
     }
 
+    private enum InvitationOrigin {
+        case manual
+        case discovery
+        case retry
+    }
+
+    private struct ReconnectEpoch {
+        let incarnation: MCPeerID
+        var attempts: Int
+        var awaitingTerminalCallback: Bool
+    }
+
     @Published private(set) var availablePeers: [MyRAMDiscoveredPeer] = []
     @Published private(set) var connectedPeers: [String] = []
     @Published private(set) var pendingChangeCount = 0
@@ -290,6 +302,15 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private var reconnectTracker = TrustedPeerReconnectTracker()
     private var reconnectRetryTasks: [String: Task<Void, Never>] = [:]
     private var reconnectRetryDelayNanoseconds: UInt64 = 1_000_000_000
+    private let invitationTimeoutWindow: TimeInterval = 13
+    private let maximumAutomaticInvitationsPerEpoch = 3
+    private var reconnectEpochByDeviceID: [String: ReconnectEpoch] = [:]
+    private var lastInvitationUptimeByDeviceID: [String: TimeInterval] = [:]
+    private var invitationRoleByPeerID: [MCPeerID: SyncBatchInvitationRole] = [:]
+    private var reconnectClock: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    private var reconnectSleeper: (UInt64) async throws -> Void = {
+        try await Task.sleep(nanoseconds: $0)
+    }
     private var peerCapabilityRegistry = SyncBatchPeerCapabilityRegistry()
     private var bootstrapStateByPeerDeviceID: [String: SyncPeerBootstrapPendingState] = [:]
     private var inboundFormattingBaselineCoveredNoteIDsByPeerDeviceID:
@@ -357,7 +378,9 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         session = MCSession(peer: peer, securityIdentity: nil, encryptionPreference: .required)
         advertiser = MCNearbyServiceAdvertiser(
             peer: peer,
-            discoveryInfo: SyncBatchPeerCapabilityCodec.productionDiscoveryInfo,
+            discoveryInfo: SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(
+                for: .iosInitiator
+            ),
             serviceType: effectiveServiceType
         )
         browser = MCNearbyServiceBrowser(peer: peer, serviceType: effectiveServiceType)
@@ -393,6 +416,18 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             await requestLegacyFlush()
         }
     }
+
+#if DEBUG
+    var retainedSessionForInvitationTests: MCSession { session }
+
+    func configureReconnectSchedulerForTesting(
+        clock: @escaping () -> TimeInterval,
+        sleeper: @escaping (UInt64) async throws -> Void
+    ) {
+        reconnectClock = clock
+        reconnectSleeper = sleeper
+    }
+#endif
 
     deinit {
         transportDiagnostics.record("owner.deinit", session: session)
@@ -434,6 +469,19 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         lines.append(
             "session_peer_hashes=" +
             connectedIDs.map(Self.diagnosticHash).sorted().joined(separator: ",")
+        )
+        // A timed-out invitation without a matching terminal MCSession callback
+        // remains owned by the framework. It is diagnostic-only, not retryable.
+        let indeterminate = availablePeers.filter { peer in
+            reconnectTracker.connectingAttempt(to: peer.deviceID)?.incarnation == peer.peerID
+                && lastInvitationUptimeByDeviceID[peer.deviceID].map {
+                    reconnectClock() - $0 >= invitationTimeoutWindow
+                } == true
+        }
+        lines.append("invitation_indeterminate_count=\(indeterminate.count)")
+        lines.append(
+            "invitation_indeterminate_peer_hashes=" +
+            indeterminate.map { Self.diagnosticHash($0.deviceID) }.sorted().joined(separator: ",")
         )
         for (index, batch) in unsentBatches.pendingBatches.enumerated() {
             lines.append(
@@ -629,26 +677,90 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     func invite(_ peer: MyRAMDiscoveredPeer) {
+        invite(peer, origin: .manual)
+    }
+
+    private func invite(_ peer: MyRAMDiscoveredPeer, origin: InvitationOrigin) {
+        // A captured Pair action or retry must still own the current discovery
+        // incarnation before it can touch any reconnect or retry state.
+        guard peer.deviceID == MyRAMPeerIdentity(peerID: peer.peerID).deviceID,
+              availablePeers.contains(where: {
+                  $0.deviceID == peer.deviceID && $0.peerID == peer.peerID
+              }) else {
+            transportDiagnostics.record("invitation.staleDiscovery.suppressed", session: session, peer: peer.peerID)
+            return
+        }
         recordReconnectState("invitation.pending.beforeAdmission", peer: peer.peerID)
         guard !transport.hasConnectedPeer(peer.peerID) else {
             cancelReconnectRetry(for: peer.deviceID)
             lastConnectionEvent = "Connected: \(peer.displayName)"
             return
         }
-        guard reconnectTracker.beginConnecting(to: peer.deviceID, incarnation: peer.peerID) != nil else {
+        // An MPC invitation has no supported cancellation API. Do not infer
+        // terminality from its timeout, a rediscovery, or a second button tap.
+        guard !reconnectTracker.isConnecting(to: peer.deviceID) else {
             recordReconnectState("invitation.pending.suppressed", peer: peer.peerID)
             return
         }
+        let prior = reconnectEpochByDeviceID[peer.deviceID]
+        switch origin {
+        case .manual:
+            guard prior?.awaitingTerminalCallback != true else { return }
+        case .discovery:
+            // Repeated discovery is not a new retry epoch. A failed invitation
+            // may resume only after its exact terminal session callback, using
+            // the remaining finite budget and the normal retry backoff.
+            if let prior, prior.incarnation == peer.peerID {
+                if !prior.awaitingTerminalCallback {
+                    scheduleReconnect(to: peer)
+                }
+                return
+            }
+            guard prior?.awaitingTerminalCallback != true else { return }
+        case .retry:
+            guard peer.isTrusted else { return }
+            if let prior {
+                guard !prior.awaitingTerminalCallback else { return }
+                if prior.incarnation == peer.peerID {
+                    guard prior.attempts < maximumAutomaticInvitationsPerEpoch else {
+                        transportDiagnostics.record("retry.budgetExhausted", session: session, peer: peer.peerID)
+                        return
+                    }
+                }
+            }
+        }
+
+        let now = reconnectClock()
+        if let previous = lastInvitationUptimeByDeviceID[peer.deviceID],
+           now < previous + invitationTimeoutWindow {
+            lastConnectionEvent = "Waiting for prior invitation to retire: \(peer.displayName)"
+            if origin == .discovery && peer.isTrusted {
+                scheduleReconnect(to: peer)
+            }
+            return
+        }
+        guard reconnectTracker.beginConnecting(to: peer.deviceID, incarnation: peer.peerID) != nil else {
+            return
+        }
+        var epoch: ReconnectEpoch
+        if origin == .retry, let prior, prior.incarnation == peer.peerID {
+            epoch = prior
+        } else {
+            epoch = ReconnectEpoch(incarnation: peer.peerID, attempts: 0, awaitingTerminalCallback: false)
+        }
+        epoch.attempts += 1
+        epoch.awaitingTerminalCallback = true
+        reconnectEpochByDeviceID[peer.deviceID] = epoch
+        lastInvitationUptimeByDeviceID[peer.deviceID] = now
         recordReconnectState("invitation.pending.admitted", peer: peer.peerID)
         cancelReconnectRetry(for: peer.deviceID)
 
         lastConnectionEvent = "Inviting \(peer.displayName)"
-        let timeout: TimeInterval = 12
         transportDiagnostics.record("invitation.outgoing", session: session, peer: peer.peerID)
         transport.invite(
             peer.peerID,
             context: SyncBatchPeerCapabilityCodec.productionInvitationContext,
-            timeout: timeout
+            timeout: 12
         )
     }
 
@@ -897,26 +1009,49 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func scheduleReconnect(to peer: MyRAMDiscoveredPeer) {
-        guard reconnectRetryTasks[peer.deviceID] == nil,
+        guard peer.isTrusted,
+              reconnectRetryTasks[peer.deviceID] == nil,
+              !reconnectTracker.isConnecting(to: peer.deviceID),
               !transport.hasConnectedPeer(peer.peerID) else { return }
 
-        let delay = reconnectRetryDelayNanoseconds
+        let epoch = reconnectEpochByDeviceID[peer.deviceID]
+        if let epoch {
+            guard !epoch.awaitingTerminalCallback else { return }
+            if epoch.incarnation == peer.peerID {
+                guard epoch.attempts < maximumAutomaticInvitationsPerEpoch else { return }
+            }
+        }
+        // Backoff applies after an observed terminal callback. Regardless of
+        // callback timing, no new attempt precedes the previous 12s MPC window.
+        let retryOrdinal = epoch?.incarnation == peer.peerID ? epoch?.attempts ?? 0 : 0
+        let backoff: UInt64
+        if retryOrdinal >= 2 {
+            backoff = max(reconnectRetryDelayNanoseconds, 2_000_000_000)
+        } else if retryOrdinal == 1 {
+            backoff = max(reconnectRetryDelayNanoseconds, 1_000_000_000)
+        } else {
+            backoff = reconnectRetryDelayNanoseconds
+        }
+        let remainingWindow = lastInvitationUptimeByDeviceID[peer.deviceID]
+            .map { max(0, $0 + invitationTimeoutWindow - reconnectClock()) } ?? 0
+        let delay = max(backoff, UInt64(ceil(remainingWindow * 1_000_000_000)))
         reconnectRetryTasks[peer.deviceID] = Task { @MainActor [weak self] in
+            guard let self else { return }
             if delay > 0 {
                 do {
-                    try await Task.sleep(nanoseconds: delay)
+                    try await self.reconnectSleeper(delay)
                 } catch {
                     return
                 }
             }
-            guard !Task.isCancelled, let self else { return }
+            guard !Task.isCancelled else { return }
             self.recordReconnectState("retry.wake", peer: peer.peerID)
             self.reconnectRetryTasks.removeValue(forKey: peer.deviceID)
             self.recordReconnectState("retry.removedBeforeInvite", peer: peer.peerID)
             guard self.availablePeers.contains(where: {
                 $0.deviceID == peer.deviceID && $0.peerID == peer.peerID && $0.isTrusted
             }) else { return }
-            self.invite(peer)
+            self.invite(peer, origin: .retry)
         }
         recordReconnectState("retry.scheduled", peer: peer.peerID)
     }
@@ -938,9 +1073,19 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 #endif
 
-    private func clearConnectingState(for peerID: MCPeerID) {
+    private func clearConnectingState(for peerID: MCPeerID, state: MCSessionState) {
         recordReconnectState("invitation.pending.terminal.before", peer: peerID)
-        reconnectTracker.finishConnecting(to: MyRAMPeerIdentity(peerID: peerID).deviceID, incarnation: peerID)
+        let deviceID = MyRAMPeerIdentity(peerID: peerID).deviceID
+        let ownsPending = reconnectTracker.connectingAttempt(to: deviceID)?.incarnation == peerID
+        reconnectTracker.finishConnecting(to: deviceID, incarnation: peerID)
+        if var epoch = reconnectEpochByDeviceID[deviceID], epoch.incarnation == peerID {
+            if state == .notConnected && ownsPending {
+                epoch.awaitingTerminalCallback = false
+                reconnectEpochByDeviceID[deviceID] = epoch
+            } else if state == .connected {
+                reconnectEpochByDeviceID.removeValue(forKey: deviceID)
+            }
+        }
         recordReconnectState("invitation.pending.terminal.after", peer: peerID)
     }
 
@@ -2139,6 +2284,10 @@ extension MyRAMSyncController: MCSessionDelegate {
             defer {
                 recordReconnectState("session.actor.completed", peer: peerID, callbackSession: session, callbackState: state)
             }
+            guard session === self.session else {
+                transportDiagnostics.record("session.staleCallbackIgnored", session: session, peer: peerID)
+                return
+            }
             let identity = MyRAMPeerIdentity(peerID: peerID)
             transportDiagnostics.record("session.state", session: session, peer: peerID, detail: "state=\(state.rawValue)")
             // Record the raw callback, but let only its concrete peer mutate invitation state.
@@ -2146,7 +2295,7 @@ extension MyRAMSyncController: MCSessionDelegate {
                let current = availablePeers.first(where: { $0.deviceID == identity.deviceID }),
                current.peerID != peerID {
                 transportDiagnostics.record("session.retiredPeerCallback", session: session, peer: peerID)
-                clearConnectingState(for: peerID)
+                clearConnectingState(for: peerID, state: state)
                 scheduleReconnectIfPossible(for: identity.deviceID)
                 return
             }
@@ -2159,7 +2308,7 @@ extension MyRAMSyncController: MCSessionDelegate {
             lastConnectionEvent = "\(description(for: state)): \(displayName(for: peerID))"
 
             if state == .connected || state == .notConnected {
-                clearConnectingState(for: peerID)
+                clearConnectingState(for: peerID, state: state)
             }
 
             if state == .notConnected {
@@ -2384,6 +2533,13 @@ extension MyRAMSyncController: MCNearbyServiceAdvertiserDelegate {
     ) {
         transportDiagnostics.record("invitation.incoming.callback", peer: peerID, owner: advertiser, context: context)
         Task { @MainActor in
+            // An updated Mac is a responder. An incoming Mac invitation
+            // would race the iPhone-owned connection and is not admitted.
+            if invitationRoleByPeerID[peerID] == .macResponder {
+                transportDiagnostics.record("invitation.ios.reverseRejected", session: session, peer: peerID)
+                invitationHandler(false, nil)
+                return
+            }
             let identity = MyRAMPeerIdentity(peerID: peerID)
             peerCapabilityRegistry.recordInvitationContext(
                 context,
@@ -2420,7 +2576,19 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
             )
             // Publish discovery before suspension. An older callback must not overwrite
             // a newer peer incarnation when its transport lookup resumes.
+            if let existing = availablePeers.first(where: { $0.deviceID == identity.deviceID }),
+               existing.peerID != peerID {
+                invitationRoleByPeerID.removeValue(forKey: existing.peerID)
+            }
             addOrUpdateAvailablePeer(discoveredPeer)
+            // A discovered Mac responder remains a responder for this exact
+            // incarnation. Missing, malformed or conflicting later hints cannot
+            // allow a competing reverse invitation. A newly discovered role
+            // may upgrade to responder, but discovery never grants trust.
+            if let role = SyncBatchPeerCapabilityCodec.invitationRole(from: info),
+               invitationRoleByPeerID[peerID] != .macResponder {
+                invitationRoleByPeerID[peerID] = role
+            }
             peerCapabilityRegistry.recordDiscoveryValue(
                 info?[SyncBatchPeerCapabilityCodec.discoveryInfoKey],
                 forPeerDeviceID: identity.deviceID
@@ -2454,7 +2622,7 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
 
             if discoveredPeer.isTrusted,
                availablePeers.contains(where: { $0.deviceID == identity.deviceID && $0.peerID == peerID }) {
-                invite(discoveredPeer)
+                invite(discoveredPeer, origin: .discovery)
             }
         }
     }
@@ -2464,6 +2632,9 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
             let identity = MyRAMPeerIdentity(peerID: peerID)
             guard availablePeers.contains(where: { $0.deviceID == identity.deviceID && $0.peerID == peerID }) else { return }
             lastConnectionEvent = "Lost \(identity.displayName)"
+            invitationRoleByPeerID.removeValue(forKey: peerID)
+            // Discovery loss cancels a queued retry but never resets the
+            // invitation's terminality or replenishes its retry budget.
             peerCapabilityRegistry.clearDiscoveryEvidence(
                 forPeerDeviceID: identity.deviceID
             )

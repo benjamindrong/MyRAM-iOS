@@ -1,4 +1,5 @@
 import AnchoredSequenceCore
+import Combine
 import NearbySyncCore
 @preconcurrency import MultipeerConnectivity
 import SwiftData
@@ -9,6 +10,189 @@ import XCTest
 final class MacSyncBatchControllerTests: XCTestCase {
     private var retainedContainers: [ModelContainer] = []
 
+
+    func testIPhoneRoleSurvivesMissingRepeatedDiscovery() async throws {
+        try await assertIPhoneRoleSurvivesRepeatedDiscovery(nil)
+    }
+
+    func testIPhoneRoleSurvivesMalformedRepeatedDiscovery() async throws {
+        try await assertIPhoneRoleSurvivesRepeatedDiscovery([
+            SyncBatchPeerCapabilityCodec.invitationRoleDiscoveryInfoKey: "invalid"
+        ])
+    }
+
+    func testIPhoneRoleWinsConflictingValidRepeatedDiscovery() async throws {
+        try await assertIPhoneRoleSurvivesRepeatedDiscovery(
+            SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(for: .macResponder)
+        )
+    }
+
+    private func assertIPhoneRoleSurvivesRepeatedDiscovery(_ info: [String: String]?) async throws {
+        let peerID = MCPeerID(displayName: "Remote|monotonic-role")
+        var invites: [MCPeerID] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil, unsentBatchQueue: nil,
+            connectedPeersProvider: { [] },
+            invitePeerOperation: { candidate, _, _ in invites.append(candidate) }
+        )
+        defer { controller.stopNetworking() }
+        let browser = MCNearbyServiceBrowser(peer: MCPeerID(displayName: "Local"), serviceType: "myram-verify")
+        // A conflicting initial responder hint must not prevent an upgrade to iPhone ownership.
+        controller.browser(browser, foundPeer: peerID, withDiscoveryInfo:
+            SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(for: .macResponder))
+        await waitUntil { controller.availablePeers.count == 1 }
+        controller.browser(browser, foundPeer: peerID, withDiscoveryInfo:
+            SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(for: .iosInitiator))
+        let peer = try XCTUnwrap(controller.availablePeers.first)
+        await waitUntil { controller.requiresIPhoneInitiation(peer) }
+        XCTAssertTrue(controller.requiresIPhoneInitiation(peer))
+        controller.browser(browser, foundPeer: peerID, withDiscoveryInfo: info)
+        // The delegate publishes availablePeers after consuming each discovery callback.
+        let updated = expectation(description: "Repeated discovery consumed")
+        var subscription: AnyCancellable?
+        subscription = controller.$availablePeers.dropFirst().sink { _ in updated.fulfill() }
+        await fulfillment(of: [updated], timeout: 2)
+        subscription?.cancel()
+        controller.invite(peer)
+        XCTAssertTrue(controller.requiresIPhoneInitiation(peer))
+        XCTAssertTrue(invites.isEmpty)
+        XCTAssertTrue(controller.lastConnectionEvent.contains("Pair from iPhone"))
+
+        // Evidence belongs to the exact MCPeerID, not the logical device identifier.
+        controller.browser(browser, lostPeer: peerID)
+        await waitUntil { controller.availablePeers.isEmpty }
+        let replacement = MCPeerID(displayName: peerID.displayName)
+        XCTAssertNotEqual(peerID, replacement)
+        controller.browser(browser, foundPeer: replacement, withDiscoveryInfo: info == nil ? nil : [
+            SyncBatchPeerCapabilityCodec.invitationRoleDiscoveryInfoKey: "invalid"
+        ])
+        await waitUntil { controller.availablePeers.first?.peerID == replacement }
+        let legacy = try XCTUnwrap(controller.availablePeers.first)
+        XCTAssertFalse(controller.requiresIPhoneInitiation(legacy))
+        controller.invite(legacy)
+        XCTAssertEqual(invites, [replacement])
+    }
+
+    func testUpdatedIPhoneIsMacResponderOnlyIncludingDuplicateIncomingAndStaleLoss() async throws {
+        let deviceID = "22800000-0000-0000-0000-000000000701"
+        let oldPeer = MCPeerID(displayName: "iPhone|\(deviceID)")
+        let currentPeer = MCPeerID(displayName: "iPhone|\(deviceID)")
+        var invites: [MCPeerID] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [] },
+            invitePeerOperation: { peer, _, _ in invites.append(peer) }
+        )
+        let local = MCPeerID(displayName: "Mac|22800000-0000-0000-0000-000000000702")
+        let browser = MCNearbyServiceBrowser(peer: local, serviceType: "myram-verify")
+        let info = SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(for: .iosInitiator)
+        controller.browser(browser, foundPeer: oldPeer, withDiscoveryInfo: info)
+        await waitUntil { controller.availablePeers.first?.peerID == oldPeer }
+        controller.browser(browser, foundPeer: currentPeer, withDiscoveryInfo: info)
+        await waitUntil { controller.availablePeers.first?.peerID == currentPeer }
+        controller.browser(browser, lostPeer: oldPeer)
+        await Task.yield()
+        let current = try XCTUnwrap(controller.availablePeers.first)
+        XCTAssertEqual(current.peerID, currentPeer)
+        XCTAssertTrue(controller.requiresIPhoneInitiation(current))
+        controller.invite(current)
+        controller.invite(current)
+        XCTAssertTrue(invites.isEmpty)
+        XCTAssertTrue(controller.lastConnectionEvent.contains("Pair from iPhone"))
+
+        let advertiser = MCNearbyServiceAdvertiser(
+            peer: local, discoveryInfo: nil, serviceType: "myram-verify"
+        )
+        var first: Bool?
+        controller.advertiser(advertiser, didReceiveInvitationFromPeer: currentPeer, withContext: nil) {
+            first = $0
+            if $0 { XCTAssertNotNil($1) }
+        }
+        await waitUntil { first != nil }
+        XCTAssertEqual(first, true)
+        var second: Bool?
+        controller.advertiser(advertiser, didReceiveInvitationFromPeer: currentPeer, withContext: nil) { accepted, _ in
+            second = accepted
+        }
+        await waitUntil { second != nil }
+        XCTAssertEqual(second, false)
+        XCTAssertTrue(invites.isEmpty)
+        controller.stopNetworking()
+    }
+
+    func testUpdatedIPhoneExclusiveAuthorizationDoesNotInvite() async throws {
+        let peer = MCPeerID(displayName: "iPhone|22800000-0000-0000-0000-000000000711")
+        var invites: [MCPeerID] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [] },
+            invitePeerOperation: { candidate, _, _ in invites.append(candidate) },
+            exclusivePeerCaptureMode: true
+        )
+        let local = MCPeerID(displayName: "Mac|22800000-0000-0000-0000-000000000712")
+        let browser = MCNearbyServiceBrowser(peer: local, serviceType: "myram-verify")
+        controller.browser(
+            browser, foundPeer: peer,
+            withDiscoveryInfo: SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(for: .iosInitiator)
+        )
+        await waitUntil { controller.availablePeers.count == 1 }
+        let discovered = try XCTUnwrap(controller.availablePeers.first)
+        XCTAssertTrue(controller.requiresIPhoneInitiation(discovered))
+        XCTAssertTrue(controller.authorizeExclusivePeerForCapture(discovered))
+        XCTAssertTrue(invites.isEmpty)
+        XCTAssertTrue(controller.lastConnectionEvent.contains("pair from iPhone"))
+        XCTAssertFalse(controller.authorizeExclusivePeerForCapture(discovered))
+        let advertiser = MCNearbyServiceAdvertiser(
+            peer: local, discoveryInfo: nil, serviceType: "myram-verify"
+        )
+        var accepted: Bool?
+        controller.advertiser(advertiser, didReceiveInvitationFromPeer: peer, withContext: nil) { allowed, _ in
+            accepted = allowed
+        }
+        await waitUntil { accepted != nil }
+        XCTAssertEqual(accepted, true)
+        XCTAssertTrue(invites.isEmpty)
+        controller.stopNetworking()
+    }
+
+    func testLegacyMacPairIsDeduplicatedUntilExactSessionTerminates() async throws {
+        let peerID = MCPeerID(displayName: "legacy|22800000-0000-0000-0000-000000000721")
+        var invites: [MCPeerID] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [] },
+            invitePeerOperation: { candidate, _, _ in invites.append(candidate) }
+        )
+        let local = MCPeerID(displayName: "local")
+        let browser = MCNearbyServiceBrowser(peer: local, serviceType: "myram-verify")
+        controller.browser(browser, foundPeer: peerID, withDiscoveryInfo: nil)
+        await waitUntil { controller.availablePeers.count == 1 }
+        let peer = try XCTUnwrap(controller.availablePeers.first)
+        XCTAssertFalse(controller.requiresIPhoneInitiation(peer))
+        controller.invite(peer)
+        controller.invite(peer)
+        XCTAssertEqual(invites, [peerID])
+
+        let staleSession = MCSession(
+            peer: local, securityIdentity: nil, encryptionPreference: .required
+        )
+        controller.session(staleSession, peer: peerID, didChange: .notConnected)
+        await Task.yield()
+        controller.invite(peer)
+        XCTAssertEqual(invites, [peerID])
+
+        controller.session(
+            controller.retainedSessionForInvitationTests,
+            peer: peerID, didChange: .notConnected
+        )
+        await waitUntil { controller.lastConnectionEvent.hasPrefix("Not connected:") }
+        controller.invite(peer)
+        XCTAssertEqual(invites, [peerID, peerID])
+        controller.stopNetworking()
+    }
 
     func testMYR238ExclusiveCaptureRequiresOneOperatorAuthorizedExactPeer() async throws {
         let allowed = MCPeerID(displayName: "iPhone|23800000-0000-0000-0000-000000000501")
@@ -182,7 +366,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         let session = MCSession(
             peer: local, securityIdentity: nil, encryptionPreference: .required
         )
-        controller.session(session, peer: other, didChange: .connected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: other, didChange: .connected)
         await waitUntil {
             controller.lastErrorMessage?.contains("unexpected connection") == true
         }
@@ -210,16 +394,16 @@ final class MacSyncBatchControllerTests: XCTestCase {
         }
         await Task.yield()
         XCTAssertTrue(admissions.isEmpty, "Replacement must not be admitted while prior membership remains")
-        controller.session(session, peer: other, didChange: .notConnected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: other, didChange: .notConnected)
         await Task.yield()
         XCTAssertTrue(admissions.isEmpty, "Another peer's callback cannot release admission")
-        controller.session(session, peer: prior, didChange: .notConnected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: prior, didChange: .notConnected)
         await Task.yield()
         XCTAssertTrue(admissions.isEmpty, "Callback alone cannot override retained membership")
         members = [other]
-        controller.session(session, peer: prior, didChange: .notConnected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: prior, didChange: .notConnected)
         await waitUntil { admissions == [true] }
-        controller.session(session, peer: prior, didChange: .notConnected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: prior, didChange: .notConnected)
         await Task.yield()
         XCTAssertEqual(admissions, [true], "Invitation handler must complete exactly once")
         XCTAssertEqual(members, [other], "Other peers retain their connection")
@@ -249,7 +433,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         await waitUntil { first == [false] }
         XCTAssertTrue(second.isEmpty)
         members = []
-        controller.session(session, peer: prior, didChange: .notConnected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: prior, didChange: .notConnected)
         await waitUntil { second == [true] }
         XCTAssertEqual(first, [false])
         controller.stopNetworking()
@@ -526,7 +710,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
             invitationHandler: { _, _ in }
         )
         await Task.yield()
-        controller.session(session, peer: peer, didChange: .connected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: peer, didChange: .connected)
         await Task.yield()
         XCTAssertTrue(
             controller.hasExplicitPeerV2Support(
@@ -828,7 +1012,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
             invitationHandler: { _, _ in }
         )
         await Task.yield()
-        controller.session(session, peer: peer, didChange: .connected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: peer, didChange: .connected)
         await Task.yield()
 
         for batch in batches {

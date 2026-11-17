@@ -6,6 +6,29 @@ import XCTest
 
 @MainActor
 final class SyncBatchPeerCapabilityTests: XCTestCase {
+    func testInvitationRoleIsStrictDiscoveryOnlyAndDoesNotChangeInvitationContext() {
+        let original = SyncBatchPeerCapabilityCodec.productionDiscoveryInfo
+        let originalContext = SyncBatchPeerCapabilityCodec.productionInvitationContext
+        let iPhone = SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(for: .iosInitiator)
+        let mac = SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(for: .macResponder)
+
+        XCTAssertNil(SyncBatchPeerCapabilityCodec.invitationRole(from: original))
+        XCTAssertEqual(SyncBatchPeerCapabilityCodec.invitationRole(from: iPhone), .iosInitiator)
+        XCTAssertEqual(SyncBatchPeerCapabilityCodec.invitationRole(from: mac), .macResponder)
+        XCTAssertEqual(
+            iPhone[SyncBatchPeerCapabilityCodec.discoveryInfoKey],
+            original[SyncBatchPeerCapabilityCodec.discoveryInfoKey]
+        )
+        XCTAssertEqual(
+            mac[SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey],
+            original[SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey]
+        )
+        XCTAssertNil(SyncBatchPeerCapabilityCodec.invitationRole(
+            from: [SyncBatchPeerCapabilityCodec.invitationRoleDiscoveryInfoKey: "ios-v2"]
+        ))
+        XCTAssertEqual(SyncBatchPeerCapabilityCodec.productionInvitationContext, originalContext)
+    }
+
     func testCanonicalEncoding() throws {
         XCTAssertEqual(
             SyncBatchPeerCapabilityCodec.encode(.v1Only),
@@ -674,7 +697,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             ).supportsV2
         }
 
-        controller.session(session, peer: peer, didChange: .connected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: peer, didChange: .connected)
         await fulfillment(of: [connectedLifecycleStarted], timeout: 1)
         await waitUntil {
             controller.hasExplicitPeerV2Support(
@@ -1330,10 +1353,15 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         )
     }
 
-    func testControllerAdvertisesAndInvitesWithCanonicalV1AndV2Context() throws {
+    func testControllerAdvertisesAndInvitesWithCanonicalV1AndV2Context() async throws {
         let transport = CapabilityRecordingTransport()
         let controller = makeController(transport: transport)
         let peerID = MCPeerID(displayName: "Remote|capability-peer")
+
+        let browser = MCNearbyServiceBrowser(peer: MCPeerID(displayName: "Local"), serviceType: "myram-verify")
+        controller.browser(browser, foundPeer: peerID, withDiscoveryInfo: nil)
+        await waitUntil { controller.availablePeers.contains { $0.peerID == peerID } }
+        XCTAssertTrue(controller.availablePeers.contains { $0.peerID == peerID })
 
         XCTAssertEqual(
             controller.advertisedBatchSchemaDiscoveryInfo,
@@ -1386,7 +1414,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         await Task.yield()
         XCTAssertFalse(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
 
-        controller.session(session, peer: remotePeerID, didChange: .connected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: remotePeerID, didChange: .connected)
         await Task.yield()
         XCTAssertTrue(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
 
@@ -1408,7 +1436,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         await Task.yield()
         XCTAssertTrue(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
 
-        controller.session(session, peer: remotePeerID, didChange: .notConnected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: remotePeerID, didChange: .notConnected)
         await Task.yield()
         XCTAssertFalse(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
         XCTAssertEqual(
@@ -1416,7 +1444,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             .v1AndV2
         )
 
-        controller.session(session, peer: remotePeerID, didChange: .connected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: remotePeerID, didChange: .connected)
         await Task.yield()
         XCTAssertTrue(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
 
@@ -1490,7 +1518,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         await Task.yield()
         XCTAssertFalse(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
 
-        controller.session(session, peer: remotePeerID, didChange: .connected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: remotePeerID, didChange: .connected)
         await Task.yield()
         XCTAssertTrue(
             controller.hasExplicitPeerV2Support(

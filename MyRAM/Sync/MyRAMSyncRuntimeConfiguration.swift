@@ -14,7 +14,9 @@ struct MyRAMSyncRuntimeConfiguration {
         "com.northsignalstudio.myram.myr227.verification": "myr227-sync",
         "com.northsignalstudio.myram.mac.myr227.verification": "myr227-sync",
         "com.northsignalstudio.myram.myr227.test.verification": "myr227-test",
-        "com.northsignalstudio.myram.mac.myr227.test.verification": "myr227-test"
+        "com.northsignalstudio.myram.mac.myr227.test.verification": "myr227-test",
+        "com.northsignalstudio.myram.myr371.transport.verification": "myr371-ice",
+        "com.northsignalstudio.myram.mac.myr371.transport.verification": "myr371-ice"
     ]
     static let verificationBundleIDs = Set(verificationServicesByBundleID.keys)
 
@@ -24,6 +26,7 @@ struct MyRAMSyncRuntimeConfiguration {
         case offlineRestoreRequiresVerificationIdentity
         case invalidOfflineRestoreValue
         case invalidVerificationNamespace
+        case dedicatedTransportProfileRequiresTransportOnly
     }
 
     enum AdmissionError: Error { case applicationSyncDisabled }
@@ -52,6 +55,12 @@ struct MyRAMSyncRuntimeConfiguration {
             isOfflineRestoreVerification = offlineRestore
         } else {
             isOfflineRestoreVerification = false
+        }
+        // The dedicated physical acceptance identity must never be capable
+        // of application sync, even when a build omits its transport-only flag.
+        if registeredService == "myr371-ice",
+           (transportOnlyValue as? Bool) != true {
+            throw ConfigurationError.dedicatedTransportProfileRequiresTransportOnly
         }
         guard let transportOnlyValue else {
             applicationSyncEnabled = true

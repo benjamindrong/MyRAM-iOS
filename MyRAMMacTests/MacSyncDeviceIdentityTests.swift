@@ -76,8 +76,15 @@ final class MacSyncTransportLifecycleTests: XCTestCase {
         controller.startNetworkingIfNeeded()
         let local = MCPeerID(displayName: "local")
         let remote = MCPeerID(displayName: "remote|myr233-reconnect")
-        let session = MCSession(peer: local, securityIdentity: nil, encryptionPreference: .required)
-        controller.session(session, peer: remote, didChange: .notConnected)
+        let browser = MCNearbyServiceBrowser(peer: local, serviceType: "myram-verify")
+        controller.browser(browser, foundPeer: remote, withDiscoveryInfo: nil)
+        let discoveryDeadline = Date().addingTimeInterval(2)
+        while !controller.availablePeers.contains(where: { $0.peerID == remote }),
+              Date() < discoveryDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(controller.availablePeers.contains { $0.peerID == remote })
+        controller.session(controller.retainedSessionForInvitationTests, peer: remote, didChange: .notConnected)
         // Let the production delegate's main-actor hop finish before reconnecting.
         await Task.yield()
         controller.startNetworkingIfNeeded()
@@ -136,11 +143,11 @@ final class MacSyncTransportLifecycleTests: XCTestCase {
         XCTAssertEqual(acceptedInvitations, 0)
         let session = MCSession(peer: MCPeerID(displayName: "local"), securityIdentity: nil, encryptionPreference: .required)
         members = []
-        controller.session(session, peer: remote, didChange: .notConnected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: remote, didChange: .notConnected)
         await fulfillment(of: [invited], timeout: 2)
         XCTAssertEqual(acceptedInvitations, 1)
         members = [remote]
-        controller.session(session, peer: remote, didChange: .connected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: remote, didChange: .connected)
         let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
         controller.session(session, didReceive: data, fromPeer: remote)
         controller.flushPendingBatch()
@@ -253,18 +260,31 @@ final class MacSyncDeviceIdentityTests: XCTestCase {
             XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
                 bundleIdentifier: id, bonjourServices: bonjour, transportOnlyValue: "true"
             ))
-            let normal = try MyRAMSyncRuntimeConfiguration(
-                bundleIdentifier: id, bonjourServices: bonjour, transportOnlyValue: nil
-            )
-            XCTAssertTrue(normal.applicationSyncEnabled)
-            XCTAssertTrue(normal.recordsTransportDiagnostics)
-            XCTAssertNoThrow(try normal.requireApplicationSync())
+            if service == "myr371-ice" {
+                // This dedicated physical profile can never admit application sync,
+                // including when its Info.plist omits the transport-only flag.
+                XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                    bundleIdentifier: id, bonjourServices: bonjour, transportOnlyValue: nil
+                ))
+                XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                    bundleIdentifier: id, bonjourServices: bonjour, transportOnlyValue: false
+                ))
+            } else {
+                let normal = try MyRAMSyncRuntimeConfiguration(
+                    bundleIdentifier: id, bonjourServices: bonjour, transportOnlyValue: nil
+                )
+                XCTAssertTrue(normal.applicationSyncEnabled)
+                XCTAssertTrue(normal.recordsTransportDiagnostics)
+                XCTAssertNoThrow(try normal.requireApplicationSync())
+            }
         }
     }
 
     func testMYR227VerificationNamespaceDoesNotOverlapMYR233() throws {
         let registrations = MyRAMSyncRuntimeConfiguration.verificationServicesByBundleID
-        XCTAssertEqual(Set(registrations.values), Set(["myram-verify", "myr227-sync", "myr227-test"]))
+        XCTAssertEqual(Set(registrations.values), Set([
+            "myram-verify", "myr227-sync", "myr227-test", "myr371-ice"
+        ]))
         for id in ["com.northsignalstudio.myram.myr227.verification",
                    "com.northsignalstudio.myram.mac.myr227.verification"] {
             XCTAssertEqual(registrations[id], "myr227-sync")
@@ -295,17 +315,31 @@ final class MacSyncDeviceIdentityTests: XCTestCase {
                 bundleIdentifier: identifier, bonjourServices: bonjour,
                 transportOnlyValue: nil, offlineRestoreValue: "true"
             ))
-            let enabled = try MyRAMSyncRuntimeConfiguration(
-                bundleIdentifier: identifier, bonjourServices: bonjour,
-                transportOnlyValue: nil, offlineRestoreValue: true
-            )
-            XCTAssertTrue(enabled.isOfflineRestoreVerification)
-            XCTAssertTrue(enabled.applicationSyncEnabled)
-            let normal = try MyRAMSyncRuntimeConfiguration(
-                bundleIdentifier: identifier, bonjourServices: bonjour,
-                transportOnlyValue: nil
-            )
-            XCTAssertFalse(normal.isOfflineRestoreVerification)
+            if service == "myr371-ice" {
+                XCTAssertThrowsError(try MyRAMSyncRuntimeConfiguration(
+                    bundleIdentifier: identifier, bonjourServices: bonjour,
+                    transportOnlyValue: nil, offlineRestoreValue: true
+                ))
+                let isolated = try MyRAMSyncRuntimeConfiguration(
+                    bundleIdentifier: identifier, bonjourServices: bonjour,
+                    transportOnlyValue: true, offlineRestoreValue: true
+                )
+                XCTAssertTrue(isolated.isOfflineRestoreVerification)
+                XCTAssertFalse(isolated.applicationSyncEnabled)
+                XCTAssertThrowsError(try isolated.requireApplicationSync())
+            } else {
+                let enabled = try MyRAMSyncRuntimeConfiguration(
+                    bundleIdentifier: identifier, bonjourServices: bonjour,
+                    transportOnlyValue: nil, offlineRestoreValue: true
+                )
+                XCTAssertTrue(enabled.isOfflineRestoreVerification)
+                XCTAssertTrue(enabled.applicationSyncEnabled)
+                let normal = try MyRAMSyncRuntimeConfiguration(
+                    bundleIdentifier: identifier, bonjourServices: bonjour,
+                    transportOnlyValue: nil
+                )
+                XCTAssertFalse(normal.isOfflineRestoreVerification)
+            }
         }
     }
 
@@ -695,7 +729,7 @@ final class MyRAMMacSyncBenchmarkProductionTelemetryTests: XCTestCase {
             securityIdentity: nil,
             encryptionPreference: .required
         )
-        controller.session(dummySession, peer: peer, didChange: .connecting)
+        controller.session(controller.retainedSessionForInvitationTests, peer: peer, didChange: .connecting)
 
         let batch = makeBatch(idSuffix: 2181)
         try await controller.acceptLocalBatch(batch)
@@ -949,7 +983,7 @@ final class MyRAMMacSyncBenchmarkProductionTelemetryTests: XCTestCase {
         })
 
         connectedPeers = [peer]
-        controller.session(dummySession, peer: peer, didChange: .connected)
+        controller.session(controller.retainedSessionForInvitationTests, peer: peer, didChange: .connected)
         await waitUntil {
             sends.contains { data in
                 (try? MultipeerSyncMessageCoding.decodeMessage(from: data).kind)

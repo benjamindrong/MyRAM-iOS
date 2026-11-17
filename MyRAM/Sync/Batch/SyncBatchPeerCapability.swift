@@ -49,6 +49,12 @@ struct SyncBatchPeerCapability: Equatable, Sendable {
     }
 }
 
+// A discovery hint for routing only. It is not peer authentication or authorization.
+enum SyncBatchInvitationRole: String, Sendable {
+    case iosInitiator = "ios-inviter-v1"
+    case macResponder = "mac-responder-v1"
+}
+
 enum SyncBatchPeerCapabilityCodecError: Error, Equatable, Sendable {
     case emptyCapability
     case emptyToken
@@ -60,6 +66,7 @@ enum SyncBatchPeerCapabilityCodecError: Error, Equatable, Sendable {
 }
 
 enum SyncBatchPeerCapabilityCodec {
+    static let invitationRoleDiscoveryInfoKey = "mpc-invitation-role"
     static let discoveryInfoKey = "batch-schemas"
     static let bootstrapDiscoveryInfoKey = "bootstrap-snapshot"
     static let bootstrapDiscoveryInfoValue = "1"
@@ -77,6 +84,19 @@ enum SyncBatchPeerCapabilityCodec {
             bootstrapDiscoveryInfoKey: bootstrapDiscoveryInfoValue,
             structuralMarkDiscoveryInfoKey: structuralMarkDiscoveryInfoValue
         ]
+    }
+
+    static func productionDiscoveryInfo(
+        for invitationRole: SyncBatchInvitationRole
+    ) -> [String: String] {
+        var info = productionDiscoveryInfo
+        info[invitationRoleDiscoveryInfoKey] = invitationRole.rawValue
+        return info
+    }
+
+    static func invitationRole(from discoveryInfo: [String: String]?) -> SyncBatchInvitationRole? {
+        guard let value = discoveryInfo?[invitationRoleDiscoveryInfoKey] else { return nil }
+        return SyncBatchInvitationRole(rawValue: value)
     }
 
     static var productionInvitationContext: Data {

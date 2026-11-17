@@ -5,6 +5,9 @@ import SwiftUI
 struct MacTextViewRepresentable: NSViewRepresentable {
     @Binding var attributedText: NSAttributedString
     @ObservedObject var syncBridge: MacEditorSyncBridge
+    @ObservedObject var formattingController: MacFormattingController
+    let noteID: UUID?
+    let editorEnabled: Bool
     var onTextChanged: () -> Void = {}
     /// MYR-195 Slice 2: resign-only seam. Token increment causes the representable to call
     /// makeFirstResponder(nil) only if the text view is currently first responder.
@@ -14,7 +17,7 @@ struct MacTextViewRepresentable: NSViewRepresentable {
     let zoom: CGFloat
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(attributedText: $attributedText, syncBridge: syncBridge, onTextChanged: onTextChanged)
+        Coordinator(attributedText: $attributedText, syncBridge: syncBridge, formattingController: formattingController, onTextChanged: onTextChanged)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -66,12 +69,14 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         MacNoteViewZoom.apply(zoom, to: scrollView)
         context.coordinator.textView = textView
         context.coordinator.register(textView)
+        formattingController.bind(textView: textView, noteID: noteID, enabled: editorEnabled)
         return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.attributedText = $attributedText
         context.coordinator.syncBridge = syncBridge
+        context.coordinator.formattingController = formattingController
         context.coordinator.onTextChanged = onTextChanged
 
         guard let textView = context.coordinator.textView ?? scrollView.documentView as? NSTextView else {
@@ -94,6 +99,7 @@ struct MacTextViewRepresentable: NSViewRepresentable {
             MacNoteViewZoom.apply(zoom, to: scrollView)
         }
 
+        formattingController.bind(textView: textView, noteID: noteID, enabled: editorEnabled)
         if context.coordinator.resignFocusToggleToken != resignFocusToggleToken {
             context.coordinator.resignFocusToggleToken = resignFocusToggleToken
             MacMarkdownPreviewFocusResignation.resignIfOwned(window: textView.window, textView: textView)
@@ -104,6 +110,7 @@ struct MacTextViewRepresentable: NSViewRepresentable {
     final class Coordinator: NSObject, @MainActor NSTextStorageDelegate, NSTextViewDelegate {
         var attributedText: Binding<NSAttributedString>
         var syncBridge: MacEditorSyncBridge
+        var formattingController: MacFormattingController
         var onTextChanged: () -> Void
         weak var textView: NSTextView?
         var isApplyingSwiftUIUpdate = false
@@ -112,10 +119,12 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         init(
             attributedText: Binding<NSAttributedString>,
             syncBridge: MacEditorSyncBridge,
+            formattingController: MacFormattingController,
             onTextChanged: @escaping () -> Void
         ) {
             self.attributedText = attributedText
             self.syncBridge = syncBridge
+            self.formattingController = formattingController
             self.onTextChanged = onTextChanged
         }
 
@@ -138,7 +147,42 @@ struct MacTextViewRepresentable: NSViewRepresentable {
             }
             guard let textView else { return }
 
+            sanitizeEditedFormatting(in: textStorage, range: editedRange, textView: textView)
+            textView.typingAttributes = MacFormattingMutation.supportedTypingAttributes(textView.typingAttributes)
             publishCurrentText(from: textView)
+            formattingController.refreshSelection()
+        }
+
+        /// Canonicalize only the edited span, not an entire large note. Imported rich
+        /// attributes outside MYR-227's six marks are never left as local-only RTF.
+        /// Saving and synchronization still flow through the existing onTextChanged owner.
+        private func sanitizeEditedFormatting(
+            in textStorage: NSTextStorage, range: NSRange, textView: NSTextView
+        ) {
+            guard range.location >= 0, range.length > 0,
+                  range.location <= textStorage.length,
+                  range.length <= textStorage.length - range.location else { return }
+            let current = textStorage.attributedSubstring(from: range)
+            let canonical = MacEditorTextColorPolicy.normalizedForDisplay(
+                MacStructuralFormattingAdapter.render(
+                    projection: MacStructuralFormattingAdapter.project(current)
+                )
+            )
+            guard !current.isEqual(to: canonical) else { return }
+            let selection = textView.selectedRange()
+            isApplyingSwiftUIUpdate = true
+            textStorage.beginEditing()
+            canonical.enumerateAttributes(in: NSRange(location: 0, length: canonical.length)) { attrs, part, _ in
+                textStorage.setAttributes(attrs, range: NSRange(location: range.location + part.location, length: part.length))
+            }
+            textStorage.endEditing()
+            textView.setSelectedRange(selection.macClamped(toLength: textStorage.length))
+            isApplyingSwiftUIUpdate = false
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard !isApplyingSwiftUIUpdate, !syncBridge.isApplyingRemoteSync else { return }
+            formattingController.refreshSelection()
         }
 
         private func publishCurrentText(from textView: NSTextView) {
@@ -164,6 +208,7 @@ struct MacTextViewRepresentable: NSViewRepresentable {
             if let scrollView = textView.enclosingScrollView as? MacNoteReflowingScrollView {
                 scrollView.applyZoomAndReflow()
             }
+            formattingController.refreshSelection()
         }
     }
 }

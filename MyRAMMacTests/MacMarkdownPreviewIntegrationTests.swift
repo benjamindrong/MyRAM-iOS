@@ -28,6 +28,7 @@ final class MacMarkdownPreviewHostState: ObservableObject {
     @Published var mode: MarkdownEditorMode = .edit
     @Published var zoom = MacNoteViewZoom.actualSize
     let syncBridge = MacEditorSyncBridge()
+    let formattingController = MacFormattingController()
     let recorder: MacMarkdownPreviewTestRecorder
     let previewBuilder: MacMarkdownPreviewDocumentBuilder
 
@@ -109,6 +110,7 @@ private struct MacMarkdownPreviewHostedEditor: View {
             attributedText: $state.attributedText,
             markdownEditorMode: state.modeBinding,
             syncBridge: state.syncBridge,
+            formattingController: state.formattingController,
             loadError: nil,
             saveError: nil,
             onTextChanged: { state.recorder.recordTextChanged() },

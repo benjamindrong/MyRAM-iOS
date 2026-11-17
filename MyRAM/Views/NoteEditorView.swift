@@ -534,6 +534,7 @@ struct NoteEditorView: View {
         SelectableTextView(
             text: $content,
             richTextContentData: $richTextContentData,
+            structuralFormattingProjection: $structuralFormattingProjection,
             syncBridge: editorSyncBridge,
             markdownEditorMode: markdownEditorMode,
             pendingPreviewFocusRequest: pendingPreviewFocusRequest,
@@ -563,9 +564,6 @@ struct NoteEditorView: View {
             textColor: editorChromeStyle.editorTextUIColor,
             tintColor: editorChromeStyle.editorTintUIColor,
             onContentChanged: handleContentChanged,
-            onStructuralFormattingProjectionChanged: {
-                structuralFormattingProjection = $0
-            },
             onRemoteAttributedTextPublished: publishRemoteAttributedText,
             onMarkedTextEnded: vm.resumePendingConvergencePresentationIfNeeded,
             onUndoManagerChanged: updateActiveUndoManager,
@@ -3130,9 +3128,10 @@ private final class LiveTextEnabledImageView: UIScrollView, UIScrollViewDelegate
     }
 }
 
-private struct SelectableTextView: UIViewRepresentable {
+struct SelectableTextView: UIViewRepresentable {
     @Binding var text: String
     @Binding var richTextContentData: Data?
+    @Binding var structuralFormattingProjection: NoteStructuralFormattingProjection?
     let syncBridge: UIKitEditorSyncBridge
     let markdownEditorMode: MarkdownEditorMode
     let pendingPreviewFocusRequest: MarkdownPreviewFocusRequest?
@@ -3162,7 +3161,6 @@ private struct SelectableTextView: UIViewRepresentable {
     let textColor: UIColor
     let tintColor: UIColor?
     let onContentChanged: (String, EditorRichTextContentUpdate) -> Void
-    let onStructuralFormattingProjectionChanged: (NoteStructuralFormattingProjection) -> Void
     let onRemoteAttributedTextPublished: (NSAttributedString) -> Void
     let onMarkedTextEnded: () -> Void
     let onUndoManagerChanged: (UndoManager?) -> Void
@@ -3297,6 +3295,7 @@ private struct SelectableTextView: UIViewRepresentable {
         )
         context.coordinator.text = $text
         context.coordinator.richTextContentData = $richTextContentData
+        context.coordinator.structuralFormattingProjection = $structuralFormattingProjection
         context.coordinator.syncBridge = syncBridge
         context.coordinator.onContentChanged = onContentChanged
         context.coordinator.onRemoteAttributedTextPublished = onRemoteAttributedTextPublished
@@ -3455,8 +3454,8 @@ private struct SelectableTextView: UIViewRepresentable {
             syncBridge: syncBridge,
             text: $text,
             richTextContentData: $richTextContentData,
+            structuralFormattingProjection: $structuralFormattingProjection,
             onContentChanged: onContentChanged,
-            onStructuralFormattingProjectionChanged: onStructuralFormattingProjectionChanged,
             onRemoteAttributedTextPublished: onRemoteAttributedTextPublished,
             onUndoManagerChanged: onUndoManagerChanged,
             onFormattingStateChanged: onFormattingStateChanged,
@@ -3472,8 +3471,8 @@ private struct SelectableTextView: UIViewRepresentable {
         var syncBridge: UIKitEditorSyncBridge
         var text: Binding<String>
         var richTextContentData: Binding<Data?>
+        var structuralFormattingProjection: Binding<NoteStructuralFormattingProjection?>
         var onContentChanged: (String, EditorRichTextContentUpdate) -> Void
-        var onStructuralFormattingProjectionChanged: (NoteStructuralFormattingProjection) -> Void
         var onRemoteAttributedTextPublished: (NSAttributedString) -> Void
         var onUndoManagerChanged: (UndoManager?) -> Void
         var onFormattingStateChanged: (EditorFormattingState) -> Void
@@ -3525,8 +3524,8 @@ private struct SelectableTextView: UIViewRepresentable {
             syncBridge: UIKitEditorSyncBridge,
             text: Binding<String>,
             richTextContentData: Binding<Data?>,
+            structuralFormattingProjection: Binding<NoteStructuralFormattingProjection?>,
             onContentChanged: @escaping (String, EditorRichTextContentUpdate) -> Void,
-            onStructuralFormattingProjectionChanged: @escaping (NoteStructuralFormattingProjection) -> Void,
             onRemoteAttributedTextPublished: @escaping (NSAttributedString) -> Void,
             onUndoManagerChanged: @escaping (UndoManager?) -> Void,
             onFormattingStateChanged: @escaping (EditorFormattingState) -> Void,
@@ -3539,9 +3538,8 @@ private struct SelectableTextView: UIViewRepresentable {
             self.syncBridge = syncBridge
             self.text = text
             self.richTextContentData = richTextContentData
+            self.structuralFormattingProjection = structuralFormattingProjection
             self.onContentChanged = onContentChanged
-            self.onStructuralFormattingProjectionChanged =
-                onStructuralFormattingProjectionChanged
             self.onRemoteAttributedTextPublished = onRemoteAttributedTextPublished
             self.onUndoManagerChanged = onUndoManagerChanged
             self.onFormattingStateChanged = onFormattingStateChanged
@@ -3989,7 +3987,8 @@ private struct SelectableTextView: UIViewRepresentable {
                 baseBodyFont: textView.font ?? EditorTypography.defaultTextFont,
                 traitCollection: textView.traitCollection
             )
-            onStructuralFormattingProjectionChanged(projection)
+            let hasStructuralFormattingMutation =
+                structuralFormattingProjection.wrappedValue != projection
             let encodedRichText: Data? = serializesRichTextImmediately
                 ? RichTextContentCodec.encode(storageText)
                 : nil
@@ -4009,7 +4008,13 @@ private struct SelectableTextView: UIViewRepresentable {
                 getBoundRichTextData: { [weak self] in self?.richTextContentData.wrappedValue },
                 setBoundPlainText: { [weak self] plain in self?.text.wrappedValue = plain },
                 setBoundRichTextData: { [weak self] data in self?.richTextContentData.wrappedValue = data },
-                publish: { [weak self] plain, update in self?.onContentChanged(plain, update) },
+                publish: { [weak self] plain, update in
+                    guard let self else { return }
+                    // Publish authoritative formatting with the same generation and
+                    // deferred ordering as body edits, never during updateUIView.
+                    self.structuralFormattingProjection.wrappedValue = projection
+                    self.onContentChanged(plain, update)
+                },
                 recordAppliedContentIfCurrent: { [weak self] generation, owner, plain, richTextWrite in
                     guard let self else { return false }
                     return self.appliedContentAwaitingBinding.recordAppliedContentIfCurrent(
@@ -4040,6 +4045,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 nativePlainText: plainText,
                 richTextBindingDisposition: richTextBindingDisposition,
                 richTextUpdate: richTextUpdate,
+                requiresPublication: hasStructuralFormattingMutation,
                 isUpdatingUIView: isUpdatingUIView,
                 generationOwner: synchronizationGenerationOwner,
                 dependencies: deps,
