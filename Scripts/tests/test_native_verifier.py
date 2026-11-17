@@ -114,6 +114,8 @@ class NativeVerifierTests(unittest.TestCase):
         complete = base + [item("session.state", state) for state in
                            ("state=2", "state=0", "state=2")]
         v.assert_myr371_mac_transport("\n".join(complete))
+        with self.assertRaisesRegex(v.VerificationError, "different process"):
+            v.assert_myr371_mac_transport("\n".join(complete), expected_pid=1234)
         for attempt in (base, complete[:-1], complete + [item("application.send")],
                         base + [item("session.state", state, peer="other") for state in
                                 ("state=2", "state=0", "state=2")]):

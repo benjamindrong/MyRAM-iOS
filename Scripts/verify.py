@@ -166,7 +166,7 @@ def choose_physical_iphone(destinations: str, pinned: str | None) -> str:
     return next(iter(candidates))
 
 
-def assert_myr371_mac_transport(log: str) -> None:
+def assert_myr371_mac_transport(log: str, expected_pid: int | None = None) -> None:
     events = []
     for line in log.splitlines():
         marker = "MYR233_TRANSPORT "
@@ -178,6 +178,8 @@ def assert_myr371_mac_transport(log: str) -> None:
             raise VerificationError("Malformed native Mac transport event") from error
         require(isinstance(item, dict) and item.get("mode") == "transportOnly",
                 "Native Mac transport did not use the dedicated transport-only mode")
+        if expected_pid is not None:
+            require(item.get("pid") == expected_pid, "Mac transport event came from a different process")
         events.append(item)
     require(any(e.get("event") == "owner.created" for e in events),
             "Native Mac transport owner was not observed")
@@ -451,6 +453,11 @@ def physical_phase(evidence: Evidence, root: Path, scratch: Path,
     with mac_log.open("xb") as output:
         process = subprocess.Popen([str(executable)], cwd=root, env=env,
                                    stdout=output, stderr=subprocess.STDOUT)
+        (evidence.raw / "physical-mac-process-identity.json").write_text(
+            json.dumps({"pid": process.pid, "bundle_id": PHYSICAL_MAC_ID,
+                        "executable_sha256": sha_file(executable),
+                        "info_plist_sha256": sha_file(info_path)}) + "\n", encoding="utf-8"
+        )
         try:
             require(process.poll() is None, "Signed MYR371 Mac app exited at launch")
             evidence.run("physical-iphone-tests", [
@@ -478,7 +485,7 @@ def physical_phase(evidence: Evidence, root: Path, scratch: Path,
             "Physical acceptance requires exactly one non-skipped native XCUITest")
     (evidence.raw / "physical-iphone-tests-summary.json").write_text(summary + "\n", encoding="utf-8")
     evidence.phases[-1]["counts"] = counts
-    assert_myr371_mac_transport(mac_log.read_text(encoding="utf-8", errors="replace"))
+    assert_myr371_mac_transport(mac_log.read_text(encoding="utf-8", errors="replace"), expected_pid=process.pid)
     print("PASS: MYR371 native iPhone connection and Mac reconnect lifecycle", flush=True)
 
 
