@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from typing import Any
 
 REPOSITORY = "benjamindrong/MyRAM-iOS"
@@ -168,7 +169,7 @@ def artifacts_in(raw: Path) -> list[dict[str, Any]]:
 class Evidence:
     def __init__(self, root: Path, sha: str, nearby: str, suite: str):
         stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        self.path = root / f"{stamp}-{os.getpid()}-{sha[:12]}"
+        self.path = root / f"{stamp}-{os.getpid()}-{uuid.uuid4().hex[:8]}-{sha[:12]}"
         # Evidence itself may redirect to external storage; project and run roots may not.
         require(not root.is_symlink() and not root.parent.is_symlink(),
                 "Nested evidence authority symlink")
