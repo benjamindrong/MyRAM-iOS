@@ -165,7 +165,7 @@ class VerificationFixtureIdentityTests(unittest.TestCase):
                 manifest = json.loads((worktree / "MYR-221-VERIFICATION-IDENTITY.json").read_text())
                 self.assertEqual(manifest["source_candidate_sha"], sha)
                 self.assertEqual(manifest["profile"], profile)
-                if profile in ("myr227test", "automated"):
+                if profile in ("myr227test", "automated", "myr371"):
                     project_text = (worktree / "MyRAM.xcodeproj" / "project.pbxproj").read_text()
                     expected = module.load_identity(ROOT, profile)
                     for name in (expected["ios"]["test_bundle_identifier"],

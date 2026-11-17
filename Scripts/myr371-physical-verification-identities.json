@@ -12,12 +12,15 @@
     "url_scheme": "myram-myr371-transport-verification",
     "export_type_identifier": "com.northsignalstudio.myram.myr371.transport.verification.export",
     "export_filename_extension": "myram-myr371-transport-verification",
-    "export_mime_type": "application/vnd.northsignalstudio.myram-myr371-transport-verification"
+    "export_mime_type": "application/vnd.northsignalstudio.myram-myr371-transport-verification",
+    "test_bundle_identifier": "com.northsignalstudio.myram.myr371.transport.verification.tests",
+    "ui_test_bundle_identifier": "com.northsignalstudio.myram.myr371.transport.verification.uitests"
   },
   "macos": {
     "app_bundle_identifier": "com.northsignalstudio.myram.mac.myr371.transport.verification",
     "widget_bundle_identifier": "com.northsignalstudio.myram.mac.myr371.transport.verification.widget",
     "widget_app_group_identifier": "group.com.northsignalstudio.myram.mac.myr371.transport.verification.widget",
-    "url_scheme": "myram-mac-myr371-transport-verification"
+    "url_scheme": "myram-mac-myr371-transport-verification",
+    "test_bundle_identifier": "com.northsignalstudio.myram.mac.myr371.transport.verification.tests"
   }
 }
