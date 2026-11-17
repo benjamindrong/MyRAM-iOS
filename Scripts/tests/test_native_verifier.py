@@ -35,6 +35,10 @@ class NativeVerifierTests(unittest.TestCase):
             v.validate_only("ui", ["MyRAMUITests/Tests;rm -rf ~"])
         with self.assertRaises(v.VerificationError):
             v.validate_only("ui", ["MyRAMUITests"])
+        with self.assertRaisesRegex(v.VerificationError, "Duplicate"):
+            v.validate_only("ui", ["MyRAMUITests/TestClass", "MyRAMUITests/TestClass"])
+        with self.assertRaisesRegex(v.VerificationError, "Overlapping"):
+            v.validate_only("ui", ["MyRAMUITests/TestClass/testMethod", "MyRAMUITests/TestClass"])
 
     def test_origin_policy(self):
         for origin in ("https://github.com/benjamindrong/MyRAM-iOS.git",

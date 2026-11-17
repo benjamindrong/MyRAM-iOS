@@ -108,6 +108,12 @@ def validate_only(suite: str, selectors: list[str]) -> None:
         require(len(bits) in (2, 3) and bits[0] == SUITE_TARGETS[suite]
                 and all(re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", part) for part in bits),
                 f"Invalid test selector for {suite}: {selector}")
+    chosen = set(selectors)
+    require(len(chosen) == len(selectors), "Duplicate --only selector")
+    for selector in selectors:
+        bits = selector.split("/")
+        require(len(bits) != 3 or "/".join(bits[:2]) not in chosen,
+                f"Overlapping class and method --only selectors: {selector}")
 
 
 def choose_simulator(devices_json: str, pinned: str | None) -> tuple[str, bool]:
