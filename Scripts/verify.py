@@ -310,23 +310,26 @@ def lock_resources(directory: Path, resources: list[str]):
 def xcode_phase(evidence: Evidence, root: Path, scratch: Path, suite: str,
                 simulator: str | None, selectors: list[str], env: dict[str, str]) -> None:
     target = SUITE_TARGETS[suite]
-    name = f"{suite}-tests"
-    result_path = evidence.raw / (name + ".xcresult")
     destination = "platform=macOS" if suite == "mac" else f"platform=iOS Simulator,id={simulator}"
-    command = ["xcodebuild", "-project", "MyRAM.xcodeproj",
-               "-scheme", "MyRAMMac" if suite == "mac" else "MyRAM",
-               "-configuration", "Debug", "-destination", destination,
-               "-parallel-testing-enabled", "NO", "-derivedDataPath", str(scratch / "DerivedData"),
-               "-resultBundlePath", str(result_path), "CODE_SIGNING_ALLOWED=NO"]
-    command.extend("-only-testing:" + selector for selector in (selectors or [target]))
-    command.append("test")
-    evidence.run(name, command, cwd=root, env=env)
-    summary = run_output("xcrun", "xcresulttool", "get", "test-results", "summary",
-                         "--path", str(result_path))
-    counts = validate_summary(summary)
-    (evidence.raw / f"{name}-summary.json").write_text(summary + "\n", encoding="utf-8")
-    evidence.phases[-1]["counts"] = counts
-    print(f"PASS: {name} total={counts['total']} failed={counts['failed']}", flush=True)
+    selected = selectors or [target]
+    # Each explicit selector must produce its own positive native test result.
+    # An aggregate count can otherwise hide a nonexistent second selector.
+    for ordinal, selector in enumerate(selected, start=1):
+        name = f"{suite}-tests" if len(selected) == 1 else f"{suite}-tests-{ordinal}"
+        result_path = evidence.raw / (name + ".xcresult")
+        command = ["xcodebuild", "-project", "MyRAM.xcodeproj",
+                   "-scheme", "MyRAMMac" if suite == "mac" else "MyRAM",
+                   "-configuration", "Debug", "-destination", destination,
+                   "-parallel-testing-enabled", "NO", "-derivedDataPath", str(scratch / "DerivedData"),
+                   "-resultBundlePath", str(result_path), "CODE_SIGNING_ALLOWED=NO",
+                   "-only-testing:" + selector, "test"]
+        evidence.run(name, command, cwd=root, env=env)
+        summary = run_output("xcrun", "xcresulttool", "get", "test-results", "summary",
+                             "--path", str(result_path))
+        counts = validate_summary(summary)
+        (evidence.raw / f"{name}-summary.json").write_text(summary + "\n", encoding="utf-8")
+        evidence.phases[-1]["counts"] = counts
+        print(f"PASS: {name} total={counts['total']} failed={counts['failed']}", flush=True)
 
 
 def reset_automated_app(evidence: Evidence, simid: str, suite: str, env: dict[str, str]) -> None:

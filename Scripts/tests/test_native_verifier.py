@@ -232,6 +232,44 @@ class NativeVerifierTests(unittest.TestCase):
             self.assertIn("CODE_SIGNING_ALLOWED=NO", e.cmd)
             self.assertIn("-parallel-testing-enabled", e.cmd)
 
+
+    def test_multiple_selectors_require_independent_native_results(self):
+        class ProbeEvidence:
+            def __init__(self, raw):
+                self.raw = raw
+                self.phases = []
+                self.commands = []
+
+            def run(self, name, cmd, cwd=None, env=None):
+                self.commands.append((name, cmd))
+                self.phases.append({})
+
+        passed = json.dumps({"totalTestCount": 1, "failedTests": 0,
+                             "result": "Passed", "passedTests": 1})
+        skipped = json.dumps({"totalTestCount": 1, "failedTests": 0,
+                              "result": "Passed", "passedTests": 0, "skippedTests": 1})
+        selectors = ["MyRAMUITests/ScreenTests/testA", "MyRAMUITests/ScreenTests/testB"]
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = ProbeEvidence(Path(directory))
+            with patch.object(v, "run_output", side_effect=[passed, passed]):
+                v.xcode_phase(evidence, Path(directory), Path(directory), "ui",
+                              "11111111-1111-1111-1111-111111111111", selectors, {})
+            self.assertEqual([name for name, _ in evidence.commands],
+                             ["ui-tests-1", "ui-tests-2"])
+            for (_, command), selector in zip(evidence.commands, selectors):
+                self.assertEqual([arg for arg in command if arg.startswith("-only-testing:")],
+                                 ["-only-testing:" + selector])
+            self.assertTrue((evidence.raw / "ui-tests-1-summary.json").is_file())
+            self.assertTrue((evidence.raw / "ui-tests-2-summary.json").is_file())
+
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = ProbeEvidence(Path(directory))
+            with patch.object(v, "run_output", side_effect=[passed, skipped]):
+                with self.assertRaisesRegex(v.VerificationError, "skipped-only"):
+                    v.xcode_phase(evidence, Path(directory), Path(directory), "ui",
+                                  "11111111-1111-1111-1111-111111111111", selectors, {})
+
+
     def test_profile_is_isolated_from_all_registered_profiles(self):
         root = Path(__file__).resolve().parents[1]
         profiles = [json.loads(p.read_text()) for p in root.glob("*verification-identities.json")]
