@@ -178,6 +178,26 @@ class NativeVerifierTests(unittest.TestCase):
                 second.seal("FAIL")
             self.assertFalse((second.path / "manifests" / "run.json").exists())
 
+    def test_integrity_drift_blocks_publication_before_any_v1_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = v.Evidence(Path(directory) / "MyRAM" / "AutomatedVerification",
+                                  "1" * 40, "2" * 40, "ios")
+            evidence.run("ios-tests", ["/bin/sh", "-c", "printf fixture"])
+            original_hash = v.sha_file
+            changed = [False]
+
+            def mutate_before_integrity_recheck(path):
+                if Path(path).name == "ios-tests.log" and not changed[0]:
+                    changed[0] = True
+                    Path(path).write_bytes(b"changed after initial indexing")
+                return original_hash(path)
+
+            with patch.object(v, "sha_file", side_effect=mutate_before_integrity_recheck):
+                with self.assertRaisesRegex(v.VerificationError, "integrity mismatch"):
+                    evidence.seal("PASS")
+            self.assertTrue(changed[0])
+            self.assertFalse((evidence.path / "manifests" / "run.json").exists())
+
     def test_xcode_phase_only_selector_does_not_expand_to_full_target(self):
         class ProbeEvidence:
             def __init__(self, raw):
