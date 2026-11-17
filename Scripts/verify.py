@@ -141,8 +141,13 @@ def validate_summary(output: str) -> dict[str, int]:
     require(type(total) is int and total > 0, "Test result contains zero or unreported tests")
     require(type(failed) is int and failed == 0 and result == "Passed",
             f"Test summary indicates failures: {result}, failedTests={failed}")
-    return {"total": total, "failed": failed, "passed": data.get("passedTests", 0),
-            "skipped": data.get("skippedTests", 0)}
+    passed = data.get("passedTests")
+    skipped = data.get("skippedTests", 0)
+    require(type(passed) is int and passed > 0,
+            "Test summary has zero or unknown passed tests; skipped-only execution cannot pass")
+    require(type(skipped) is int and skipped >= 0 and passed + skipped == total,
+            "Test summary counts are inconsistent")
+    return {"total": total, "failed": failed, "passed": passed, "skipped": skipped}
 
 
 def sha_file(path: Path) -> str:

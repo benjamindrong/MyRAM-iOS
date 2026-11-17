@@ -74,6 +74,9 @@ class NativeVerifierTests(unittest.TestCase):
         for result in (dict(totalTestCount=0, failedTests=0, result="Passed"),
                        dict(totalTestCount=4, failedTests=1, result="Failed"),
                        dict(totalTestCount=4, failedTests=0, result="Incomplete"),
+                       dict(totalTestCount=4, failedTests=0, result="Passed", passedTests=0, skippedTests=4),
+                       dict(totalTestCount=4, failedTests=0, result="Passed", skippedTests=4),
+                       dict(totalTestCount=4, failedTests=0, result="Passed", passedTests=3),
                        dict(failedTests=0, result="Passed")):
             with self.assertRaises(v.VerificationError):
                 v.validate_summary(json.dumps(result))
