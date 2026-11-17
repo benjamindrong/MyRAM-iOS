@@ -187,8 +187,10 @@ class Evidence:
         log = self.raw / f"{name}.log"
         print(f"RUN: {name}", flush=True)
         start = time.monotonic()
-        with log.open("wb") as output:
+        with log.open("xb") as output:
             result = subprocess.run(cmd, cwd=cwd, env=env, stdout=output, stderr=subprocess.STDOUT, check=False)
+            output.flush()
+            os.fsync(output.fileno())
         self.phases.append({"name": name, "exit_code": result.returncode,
                             "elapsed_seconds": round(time.monotonic() - start, 2), "command": cmd})
         if result.returncode:
@@ -206,6 +208,11 @@ class Evidence:
         for folder in ("raw", "metadata", "manifests"):
             require((self.path / folder).is_dir() and not (self.path / folder).is_symlink(),
                     "Noncanonical run directory")
+        if reason:
+            with (self.raw / "producer-error.txt").open("xb") as output:
+                output.write((reason + "\n").encode("utf-8"))
+                output.flush()
+                os.fsync(output.fileno())
         indexed = artifacts_in(self.raw)
         phases = {p["name"]: f"phase-{i}" for i, p in enumerate(self.phases, 1)}
         evidence, artifacts = [], []
@@ -216,7 +223,7 @@ class Evidence:
             if ".xcresult/" not in relative:
                 evidence.append(dict(
                     evidence_id=relative,
-                    category="runner_output" if name.endswith(".log") else "generated_manifest_report",
+                    category="runner_output" if name.endswith(".log") or name == "producer-error.txt" else "generated_manifest_report",
                     category_detail=None, provenance="machine", availability="present",
                     path=relative, sha256=entry["sha256"], phase_id=phase,
                     attempt_number=1 if phase else None, captured_at=None,
@@ -255,11 +262,6 @@ class Evidence:
                 supporting_bytes_purged=0, supporting_artifacts_purged=0,
             ),
         )
-        location = self.path / "manifests" / "run.json"
-        with location.open("xb") as output:  # no overwrite or parallel legacy manifest
-            output.write((json.dumps(report, indent=2, sort_keys=True) + "\n").encode("utf-8"))
-            output.flush()
-            os.fsync(output.fileno())
         # Recheck recorded originals before reporting any PASS; reject stale or
         # tampered retained test artifacts, including files inside .xcresult.
         for item in artifacts:
@@ -269,6 +271,11 @@ class Evidence:
                     and file.stat().st_size == item["size_bytes"]
                     and sha_file(file) == item["sha256"],
                     "Retained original artifact integrity mismatch")
+        location = self.path / "manifests" / "run.json"
+        with location.open("xb") as output:  # no overwrite or parallel legacy manifest
+            output.write((json.dumps(report, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+            output.flush()
+            os.fsync(output.fileno())
         print(f"evidence_manifest_sha256={sha_file(location)}", flush=True)
         print(f"CANONICAL_MANIFEST={location}", flush=True)
         print(f"evidence_directory={self.path}", flush=True)
@@ -432,7 +439,6 @@ def main(argv: list[str] | None = None) -> int:
                     if have_ios:
                         subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force",
                                         str(ios_worktree)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"VERIFICATION={status} candidate_sha={sha}", flush=True)
         return 0
     except (VerificationError, OSError, ValueError, json.JSONDecodeError) as error:
         reason = str(error)
@@ -442,6 +448,8 @@ def main(argv: list[str] | None = None) -> int:
         if evidence:
             try:
                 evidence.seal(status, reason)
+                if status == "PASS":
+                    print(f"VERIFICATION=PASS candidate_sha={evidence.sha}", flush=True)
             except Exception as error:
                 print(f"ERROR: evidence sealing failed: {error}", file=sys.stderr, flush=True)
                 # No success claim may survive failed sealing.
