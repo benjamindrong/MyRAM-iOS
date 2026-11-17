@@ -101,17 +101,82 @@ class NativeVerifierTests(unittest.TestCase):
             with v.lock_resources(root, ["mac-profile"]):
                 pass
 
-    def test_evidence_sealing_tracks_hashes_and_failed_phase(self):
+    def test_canonical_v1_sealing_tracks_original_logs_and_failed_phase(self):
         with tempfile.TemporaryDirectory() as directory:
-            evidence = v.Evidence(Path(directory), "a" * 40, "b" * 40, "mac")
+            root = Path(directory) / "MyRAM" / "AutomatedVerification"
+            evidence = v.Evidence(root, "a" * 40, "b" * 40, "mac")
             with self.assertRaises(v.VerificationError):
                 evidence.run("failed-probe", ["/bin/sh", "-c", "echo fixture-failure; exit 7"])
             evidence.seal("FAIL", "expected probe failure")
-            manifest = json.loads((evidence.path / "manifest.json").read_text())
-            self.assertEqual(manifest["outcome"], "FAIL")
-            self.assertEqual(manifest["phases"][0]["exit_code"], 7)
-            self.assertEqual(manifest["canonical_artifacts"][0]["sha256"],
-                             v.sha_file(evidence.raw / "failed-probe.log"))
+            location = evidence.path / "manifests" / "run.json"
+            manifest = json.loads(location.read_text())
+            self.assertEqual(manifest["manifest_schema_version"], 1)
+            self.assertEqual(manifest["evidence_contract_version"], 1)
+            self.assertEqual(manifest["project"], "MyRAM")
+            self.assertEqual(manifest["work_unit"], "AutomatedVerification")
+            self.assertEqual(manifest["run_id"], evidence.path.name)
+            self.assertEqual(manifest["status"], "failed")
+            self.assertEqual(manifest["retention_state"], "sealed")
+            self.assertEqual(manifest["source_revision"], "a" * 40)
+            self.assertEqual(manifest["origin"], {"kind": "implementation_unit",
+                                                  "key": "AutomatedVerification"})
+            self.assertEqual(manifest["history_state"], "current")
+            self.assertEqual(manifest["authority_state"], "current")
+            self.assertEqual(manifest["superseded_by_run_id"], None)
+            self.assertTrue(manifest["started_at"])
+            self.assertTrue(manifest["completed_at"])
+            self.assertEqual(manifest["evidence"][0]["category"], "runner_output")
+            self.assertEqual(manifest["evidence"][0]["provenance"], "machine")
+            self.assertEqual(manifest["evidence"][0]["phase_id"], "phase-1")
+            self.assertEqual(manifest["evidence"][0]["attempt_number"], 1)
+            self.assertEqual(set(manifest["evidence"][0]), {
+                "evidence_id", "category", "category_detail", "provenance",
+                "availability", "path", "sha256", "phase_id", "attempt_number",
+                "captured_at", "legacy_source_ref",
+            })
+            original = evidence.raw / "failed-probe.log"
+            self.assertEqual(manifest["artifacts"][0]["sha256"], v.sha_file(original))
+            self.assertFalse((evidence.path / "manifest.json").exists())
+
+    def test_canonical_ui_result_bundle_keeps_native_bytes_and_a_single_index(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = v.Evidence(Path(directory) / "MyRAM" / "AutomatedVerification",
+                                  "c" * 40, "d" * 40, "ui")
+            evidence.run("ui-tests", ["/bin/sh", "-c", "printf 'passed\\n'"])
+            bundle = evidence.raw / "ui-tests.xcresult"
+            bundle.mkdir()
+            original = bundle / "Data"
+            original.write_bytes(b"native-xcresult-unchanged")
+            evidence.seal("PASS")
+            manifest = json.loads((evidence.path / "manifests" / "run.json").read_text())
+            self.assertEqual(manifest["status"], "passed")
+            self.assertEqual(original.read_bytes(), b"native-xcresult-unchanged")
+            bundles = [item for item in manifest["evidence"] if item["category"] == "result_bundle"]
+            self.assertEqual(len(bundles), 1)
+            self.assertEqual(bundles[0]["path"], "raw/ui-tests.xcresult")
+            self.assertIsNone(bundles[0]["sha256"])
+            self.assertEqual(bundles[0]["phase_id"], "phase-1")
+            artifacts = {item["path"]: item for item in manifest["artifacts"]}
+            self.assertEqual(artifacts["raw/ui-tests.xcresult/Data"]["sha256"],
+                             v.sha_file(original))
+            self.assertNotIn("manifest.json", {p.name for p in evidence.path.iterdir()})
+
+    def test_existing_canonical_seal_and_symlink_artifacts_cannot_be_overwritten(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "MyRAM" / "AutomatedVerification"
+            evidence = v.Evidence(root, "e" * 40, "f" * 40, "mac")
+            location = evidence.path / "manifests" / "run.json"
+            location.write_bytes(b"protected independent manifest")
+            with self.assertRaises(FileExistsError):
+                evidence.seal("FAIL", "no phases")
+            self.assertEqual(location.read_bytes(), b"protected independent manifest")
+            second = v.Evidence(root, "f" * 40, "e" * 40, "mac")
+            regular = second.raw / "original.log"
+            regular.write_bytes(b"original")
+            (second.raw / "alias").symlink_to(regular)
+            with self.assertRaises(v.VerificationError):
+                second.seal("FAIL")
+            self.assertFalse((second.path / "manifests" / "run.json").exists())
 
     def test_xcode_phase_only_selector_does_not_expand_to_full_target(self):
         class ProbeEvidence:
