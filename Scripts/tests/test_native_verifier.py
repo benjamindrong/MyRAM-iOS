@@ -72,6 +72,41 @@ class NativeVerifierTests(unittest.TestCase):
         with self.assertRaises(v.VerificationError):
             v.choose_simulator(json.dumps(devices), "33333333-3333-3333-3333-333333333333")
 
+    def test_physical_iphone_selection_never_uses_simulators_or_ineligible_devices(self):
+        inventory = """
+        Available destinations for the "MyRAM" scheme:
+          { platform:iOS, arch:arm64, id:00008110-00001A1234567890, name:Phone A }
+          { platform:iOS, id:dvtdevice-DVTiPhonePlaceholder-iphoneos:placeholder, name:Any iOS Device }
+          { platform:iOS Simulator, id:11111111-1111-1111-1111-111111111111, name:Simulator }
+        Ineligible destinations for the "MyRAM" scheme:
+          { platform:iOS, id:00008120-00001A1234567890, name:Unavailable }
+        """
+        self.assertEqual(v.choose_physical_iphone(inventory, None), "00008110-00001A1234567890")
+        with self.assertRaises(v.VerificationError):
+            v.choose_physical_iphone(inventory, "00008120-00001A1234567890")
+        with self.assertRaises(v.VerificationError):
+            v.choose_physical_iphone("Available destinations\n" + inventory.split("Ineligible destinations")[1], None)
+        multi = inventory.replace("Ineligible destinations", """{ platform:iOS, id:00008130-00001A1234567890, name:Phone B }
+        Ineligible destinations""")
+        with self.assertRaises(v.VerificationError):
+            v.choose_physical_iphone(multi, None)
+
+    def test_myr371_mac_native_trace_requires_connection_loss_and_reconnection(self):
+        def item(event, detail="", peer="iPhone#one"):
+            return "MYR233_TRANSPORT " + json.dumps({
+                "event": event, "mode": "transportOnly",
+                "local": "Mac#one", "peer": peer, "detail": detail
+            })
+        base = [item("owner.created"), item("networking.start"), item("invitation.incoming.accepted")]
+        complete = base + [item("session.state", state) for state in
+                           ("state=2", "state=0", "state=2")]
+        v.assert_myr371_mac_transport("\n".join(complete))
+        for attempt in (base, complete[:-1], complete + [item("application.send")],
+                        base + [item("session.state", state, peer="other") for state in
+                                ("state=2", "state=0", "state=2")]):
+            with self.assertRaises(v.VerificationError):
+                v.assert_myr371_mac_transport("\n".join(attempt))
+
     def test_result_must_report_tests_and_no_failures(self):
         self.assertEqual(v.validate_summary(json.dumps({"totalTestCount": 6, "failedTests": 0,
                                                          "result": "Passed", "passedTests": 6}))["total"], 6)

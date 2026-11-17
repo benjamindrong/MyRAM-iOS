@@ -17,6 +17,7 @@ import fcntl
 import hashlib
 import json
 import os
+import plistlib
 from pathlib import Path
 import re
 import shutil
@@ -32,6 +33,11 @@ DEPENDENCY = "benjamindrong/NearbySyncCore"
 PROFILE = "automated"
 SIMULATOR_ENV = "MYRAM_SIMULATOR_ID"
 IDENTITY = "com.northsignalstudio.myram.automated.verification"
+PHYSICAL_PROFILE = "myr371"
+PHYSICAL_IOS_ID = "com.northsignalstudio.myram.myr371.transport.verification"
+PHYSICAL_MAC_ID = "com.northsignalstudio.myram.mac.myr371.transport.verification"
+PHYSICAL_TEST = "MyRAMUITests/MyRAMUITests/testMYR371PhysicalTransportPairAndReconnect"
+PHYSICAL_DEVICE_ENV = "MYRAM_PHYSICAL_IPHONE_ID"
 SUITE_TARGETS = {"ui": "MyRAMUITests", "ios": "MyRAMTests", "mac": "MyRAMMacTests"}
 
 
@@ -137,6 +143,64 @@ def choose_simulator(devices_json: str, pinned: str | None) -> tuple[str, bool]:
                                        d["name"], d["udid"]))
         chosen = candidates[0]
     return chosen["udid"], chosen["state"] == "Booted"
+
+
+def choose_physical_iphone(destinations: str, pinned: str | None) -> str:
+    available = destinations.split("Ineligible destinations", 1)[0]
+    candidates = set()
+    for entry in re.findall(r"\{([^{}\n]+)\}", available):
+        fields = {}
+        for part in entry.split(","):
+            key, sep, value = part.strip().partition(":")
+            if sep:
+                fields[key] = value.strip()
+        device = fields.get("id", "")
+        if fields.get("platform") == "iOS" and re.fullmatch(r"[0-9a-fA-F-]{16,64}", device):
+            candidates.add(device)
+    require(candidates, "No available physical iOS device; no simulator may substitute")
+    if pinned:
+        match = next((device for device in candidates if device.lower() == pinned.lower()), None)
+        require(match is not None, "Pinned physical iPhone is not an available Xcode destination")
+        return match
+    require(len(candidates) == 1, "Multiple physical iOS devices: set MYRAM_PHYSICAL_IPHONE_ID once")
+    return next(iter(candidates))
+
+
+def assert_myr371_mac_transport(log: str) -> None:
+    events = []
+    for line in log.splitlines():
+        marker = "MYR233_TRANSPORT "
+        if marker not in line:
+            continue
+        try:
+            item = json.loads(line.split(marker, 1)[1])
+        except json.JSONDecodeError as error:
+            raise VerificationError("Malformed native Mac transport event") from error
+        require(isinstance(item, dict) and item.get("mode") == "transportOnly",
+                "Native Mac transport did not use the dedicated transport-only mode")
+        events.append(item)
+    require(any(e.get("event") == "owner.created" for e in events),
+            "Native Mac transport owner was not observed")
+    require(any(e.get("event") == "networking.start" for e in events),
+            "Native Mac transport discovery never started")
+    require(not any(e.get("event") in ("application.send", "application.received") for e in events),
+            "Application synchronization was attempted in transport-only acceptance")
+    invitations = {e.get("peer") for e in events if e.get("event") == "invitation.incoming.accepted"}
+    sessions = {}
+    for event in events:
+        if event.get("event") == "session.state":
+            key = (event.get("local"), event.get("peer"))
+            sessions.setdefault(key, []).append(event.get("detail"))
+    for (local, peer), states in sessions.items():
+        if not local or not peer or peer not in invitations:
+            continue
+        stage = 0
+        for state in states:
+            if state == ("state=0" if stage == 1 else "state=2"):
+                stage += 1
+                if stage == 3:
+                    return
+    raise VerificationError("No real Mac MCSession connected/disconnected/reconnected sequence found")
 
 
 def validate_summary(output: str) -> dict[str, int]:
