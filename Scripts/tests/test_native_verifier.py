@@ -85,7 +85,10 @@ class NativeVerifierTests(unittest.TestCase):
         with self.assertRaises(v.VerificationError):
             v.choose_physical_iphone(inventory, "00008120-00001A1234567890")
         with self.assertRaises(v.VerificationError):
-            v.choose_physical_iphone("Available destinations\n" + inventory.split("Ineligible destinations")[1], None)
+            v.choose_physical_iphone("Available destinations for MyRAM:\n"
+                + "{ platform:iOS Simulator, id:11111111-1111-1111-1111-111111111111 }\n"
+                + "Ineligible destinations for MyRAM:\n"
+                + "{ platform:iOS, id:00008120-00001A1234567890 }", None)
         multi = inventory.replace("Ineligible destinations", """{ platform:iOS, id:00008130-00001A1234567890, name:Phone B }
         Ineligible destinations""")
         with self.assertRaises(v.VerificationError):
