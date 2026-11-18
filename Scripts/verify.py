@@ -181,28 +181,36 @@ def assert_myr371_mac_transport(log: str, expected_pid: int | None = None) -> No
         if expected_pid is not None:
             require(item.get("pid") == expected_pid, "Mac transport event came from a different process")
         events.append(item)
-    require(any(e.get("event") == "owner.created" for e in events),
-            "Native Mac transport owner was not observed")
-    require(any(e.get("event") == "networking.start" for e in events),
-            "Native Mac transport discovery never started")
     require(not any(e.get("event") in ("application.send", "application.received") for e in events),
             "Application synchronization was attempted in transport-only acceptance")
-    invitations = {e.get("peer") for e in events if e.get("event") == "invitation.incoming.accepted"}
+    # Every acceptance event must belong to the same retained MPC session and
+    # diagnostics owner incarnation; combining unrelated sessions is not proof.
+    def owner_key(event: dict) -> tuple[str, str, str]:
+        return (event.get("incarnation", ""), event.get("session", ""), event.get("local", ""))
+
+    created = {owner_key(e) for e in events if e.get("event") == "owner.created"}
+    started = {owner_key(e) for e in events if e.get("event") == "networking.start"}
+    valid_owners = {key for key in created.intersection(started) if all(key)}
+    require(valid_owners, "No same-owner Mac transport creation and discovery found")
+    invitations = {
+        (*owner_key(e), e.get("peer", ""))
+        for e in events if e.get("event") == "invitation.incoming.accepted"
+        and owner_key(e) in valid_owners and e.get("peer")
+    }
     sessions = {}
     for event in events:
         if event.get("event") == "session.state":
-            key = (event.get("local"), event.get("peer"))
-            sessions.setdefault(key, []).append(event.get("detail"))
-    for (local, peer), states in sessions.items():
-        if not local or not peer or peer not in invitations:
-            continue
+            key = (*owner_key(event), event.get("peer", ""))
+            if key in invitations:
+                sessions.setdefault(key, []).append(event.get("detail"))
+    for states in sessions.values():
         stage = 0
         for state in states:
             if state == ("state=0" if stage == 1 else "state=2"):
                 stage += 1
                 if stage == 3:
                     return
-    raise VerificationError("No real Mac MCSession connected/disconnected/reconnected sequence found")
+    raise VerificationError("No single native Mac MCSession connected/disconnected/reconnected sequence found")
 
 
 def validate_summary(output: str) -> dict[str, int]:

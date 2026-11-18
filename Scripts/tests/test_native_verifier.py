@@ -105,10 +105,11 @@ class NativeVerifierTests(unittest.TestCase):
             v.choose_physical_iphone(multi, None)
 
     def test_myr371_mac_native_trace_requires_connection_loss_and_reconnection(self):
-        def item(event, detail="", peer="iPhone#one"):
+        def item(event, detail="", peer="iPhone#one", session="MPC#one",
+                 incarnation="owner-one"):
             return "MYR233_TRANSPORT " + json.dumps({
-                "event": event, "mode": "transportOnly",
-                "local": "Mac#one", "peer": peer, "detail": detail
+                "event": event, "mode": "transportOnly", "incarnation": incarnation,
+                "session": session, "local": "Mac#one", "peer": peer, "detail": detail
             })
         base = [item("owner.created"), item("networking.start"), item("invitation.incoming.accepted")]
         complete = base + [item("session.state", state) for state in
@@ -118,7 +119,14 @@ class NativeVerifierTests(unittest.TestCase):
             v.assert_myr371_mac_transport("\n".join(complete), expected_pid=1234)
         for attempt in (base, complete[:-1], complete + [item("application.send")],
                         base + [item("session.state", state, peer="other") for state in
-                                ("state=2", "state=0", "state=2")]):
+                                ("state=2", "state=0", "state=2")],
+                        base + [item("session.state", state, session="different-session")
+                                for state in ("state=2", "state=0", "state=2")],
+                        base + [item("session.state", state, incarnation="different-owner")
+                                for state in ("state=2", "state=0", "state=2")],
+                        base + [item("session.state", "state=2"),
+                                item("session.state", "state=0", session="new-session"),
+                                item("session.state", "state=2")]):
             with self.assertRaises(v.VerificationError):
                 v.assert_myr371_mac_transport("\n".join(attempt))
 
