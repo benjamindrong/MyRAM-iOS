@@ -63,6 +63,13 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private let unsentBatches: FileBackedSyncBatchQueue
     private var acknowledgementOutbox = SyncBatchAcknowledgementOutbox()
     private var outstandingBatchDeliveries = SyncBatchOutstandingDeliveryTracker()
+    // The durable batch remains authoritative until an application ACK, even
+    // when MCSession.send succeeds but the peer does not acknowledge delivery.
+    private var batchAckRetryTasks: [SyncBatchID: Task<Void, Never>] = [:]
+    private var batchAckRetryAttempts: [SyncBatchID: Int] = [:]
+    private var batchAckRetryDelays: [UInt64] = [
+        3_000_000_000, 6_000_000_000, 12_000_000_000, 24_000_000_000, 30_000_000_000
+    ]
     private var pendingBatchReceives = SyncBatchPendingReceiveTracker()
     private var acknowledgementPeerByRemoteBatchID: [SyncBatchID: String] = [:]
     private let legacyReceiver: MacLegacySyncReceiver
@@ -225,6 +232,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
     deinit {
         readyBatchTask?.cancel()
+        batchAckRetryTasks.values.forEach { $0.cancel() }
         bootstrapRetryTasks.values.forEach { $0.cancel() }
         bootstrapCapabilityResolutionTasks.values.forEach { $0.cancel() }
         if networkingLifecycle != .stopped {
@@ -597,6 +605,11 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         bootstrapRetryDelayNanoseconds = values
     }
 
+    func setBatchAckRetryDelaysForTesting(_ values: [UInt64]) {
+        precondition(!values.isEmpty)
+        batchAckRetryDelays = values
+    }
+
     func unsentBatchQueueSnapshotForTesting() -> FileBackedSyncBatchQueueSnapshot {
         unsentBatches.snapshot()
     }
@@ -616,6 +629,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         guard networkingLifecycle != .stopped else { return }
         transportDiagnostics.record("networking.stop", session: session)
         networkingLifecycle = .stopped
+        batchAckRetryTasks.values.forEach { $0.cancel() }
+        batchAckRetryTasks.removeAll()
+        batchAckRetryAttempts.removeAll()
         readyBatchTask?.cancel()
         bootstrapCapabilityResolutionTasks.values.forEach { $0.cancel() }
         bootstrapRetryTasks.values.forEach { $0.cancel() }
@@ -959,6 +975,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             }
             lastSyncAt = batch.createdAt
             lastErrorMessage = nil
+            scheduleBatchAckRetry(for: batch.id)
             return true
         } catch {
             for entry in reservations {
@@ -974,6 +991,51 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             lastErrorMessage = "Unable to sync nearby batch changes."
             return false
         }
+    }
+
+    /// Re-drive exactly the retained batch identity after a missing ACK. The
+    /// receiver's durable batch-ID deduplication makes redelivery idempotent.
+    private func scheduleBatchAckRetry(for batchID: SyncBatchID) {
+        guard unsentBatches.contains(batchID), batchAckRetryTasks[batchID] == nil else {
+            return
+        }
+        let index = min(
+            batchAckRetryAttempts[batchID, default: 0],
+            batchAckRetryDelays.count - 1
+        )
+        let delay = batchAckRetryDelays[index]
+        batchAckRetryTasks[batchID] = Task { @MainActor [weak self] in
+            do { try await Task.sleep(nanoseconds: delay) }
+            catch { return }
+            guard !Task.isCancelled else { return }
+            await self?.retryUnacknowledgedBatch(batchID)
+        }
+    }
+
+    private func cancelBatchAckRetry(for batchID: SyncBatchID) {
+        batchAckRetryTasks.removeValue(forKey: batchID)?.cancel()
+        batchAckRetryAttempts.removeValue(forKey: batchID)
+    }
+
+    private func retryUnacknowledgedBatch(_ batchID: SyncBatchID) async {
+        batchAckRetryTasks.removeValue(forKey: batchID)?.cancel()
+        guard networkingLifecycle != .stopped, unsentBatches.contains(batchID) else {
+            batchAckRetryAttempts.removeValue(forKey: batchID)
+            return
+        }
+        let connectedIDs = Set(
+            connectedPeersProvider().map { MacSyncPeerIdentity(peerID: $0).deviceID }
+        )
+        guard outstandingBatchDeliveries.pendingOwnersForDiagnostics.contains(where: {
+            $0.batchID == batchID && connectedIDs.contains($0.peerDeviceID)
+        }) else { return }
+        batchAckRetryAttempts[batchID] = min(
+            batchAckRetryAttempts[batchID, default: 0] + 1,
+            batchAckRetryDelays.count - 1
+        )
+        // Release only the session delivery lease, never the durable queue entry.
+        outstandingBatchDeliveries.release(batchID)
+        await flushUnsentBatches()
     }
 
     private func isIntentionallyWithheldBootstrapBatch(
@@ -1045,6 +1107,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         )
         let wasQueued = unsentBatches.contains(acknowledgement.batchID)
         unsentBatches.removeAll(withIDs: [acknowledgement.batchID])
+        if !unsentBatches.contains(acknowledgement.batchID) {
+            cancelBatchAckRetry(for: acknowledgement.batchID)
+        }
         let didDequeue = wasQueued && !unsentBatches.contains(acknowledgement.batchID)
         if didDequeue {
             outstandingBatchDeliveries.release(acknowledgement.batchID)
@@ -1616,6 +1681,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
                 return
             }
             outstandingBatchDeliveries.release(coveredBatchIDs)
+            for batchID in coveredBatchIDs where !unsentBatches.contains(batchID) {
+                cancelBatchAckRetry(for: batchID)
+            }
         } catch {
             lastErrorMessage = "Unable to update pending sync queues."
             return
@@ -1677,6 +1745,10 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     private func handlePeerDisconnect(peerDeviceID: String) {
+        for delivery in outstandingBatchDeliveries.pendingOwnersForDiagnostics
+            where delivery.peerDeviceID == peerDeviceID {
+            cancelBatchAckRetry(for: delivery.batchID)
+        }
         bootstrapCapabilityResolutionTasks.removeValue(forKey: peerDeviceID)?.cancel()
         bootstrapRetryTasks.removeValue(forKey: peerDeviceID)?.cancel()
         bootstrapPreflightRetryAttemptByPeerDeviceID[peerDeviceID] = nil
