@@ -70,6 +70,11 @@ struct SyncConvergencePlanner {
         var routings: [UUID: SyncConvergencePresentationRouting] = [:]
         var processedBodyNoteIDs: Set<UUID> = []
         var processedStructuralMarkNoteIDs: Set<UUID> = []
+        // A batch can contain multiple title changes for one note. Preserve
+        // one aggregate title effect and one result-evidence row, while the
+        // incorporation identity list retains every source operation.
+        var titleEvidenceIndexByNoteID: [UUID: Int] = [:]
+        var projectedTitleWinners: [UUID: SyncConvergenceTitleWinnerProjection] = [:]
         let queueSelection = SyncConvergenceEvidenceSelector().selectQueuedBatches(
             for: input.incomingBatch,
             queuedBatches: input.queuedBatches,
@@ -145,6 +150,7 @@ struct SyncConvergencePlanner {
                     operationIndex: operationIndex,
                     kind: "title"
                 )
+                let previous = notePlans[titleChange.noteID]?.titleEffect
                 guard let current = noteStates[titleChange.noteID] else {
                     let effect = unknownTitleNoopEffect(
                         change: titleChange,
@@ -153,20 +159,37 @@ struct SyncConvergencePlanner {
                     )
                     notePlans[titleChange.noteID, default: PartialNotePlan(noteID: titleChange.noteID)].titleEffect = effect
                     operationIdentities.append(candidateIdentity)
-                    resultEvidence.append(effect.resultEvidence)
+                    if let index = titleEvidenceIndexByNoteID[titleChange.noteID] {
+                        resultEvidence[index] = effect.resultEvidence
+                    } else {
+                        titleEvidenceIndexByNoteID[titleChange.noteID] = resultEvidence.count
+                        resultEvidence.append(effect.resultEvidence)
+                    }
                     continue
                 }
+                // A missing-note compatibility no-op cannot become a real title
+                // mutation later in the same batch without a fresh precondition.
+                guard previous?.verdict != .compatibilityNoopMissingNote else {
+                    return .failedBeforeCommit(.invalidMergePlan(noteID: titleChange.noteID))
+                }
+                let winnerAuthority = projectedTitleWinners[titleChange.noteID].map { [$0] }
+                    ?? input.persistedTitleWinners.filter { $0.noteID == titleChange.noteID }
                 let titleResult = SyncTitleWinnerPlanner().plan(
                     noteID: titleChange.noteID,
                     priorTitle: current.title,
-                    persistedWinners: input.persistedTitleWinners.filter { $0.noteID == titleChange.noteID },
+                    persistedWinners: winnerAuthority,
                     candidateTitle: titleChange.title,
                     candidateIdentity: candidateIdentity
                 )
                 switch titleResult {
                 case .success(let effect):
-                    if effect.verdict == SyncConvergenceTitleVerdict.apply ||
-                        effect.verdict == SyncConvergenceTitleVerdict.idempotent {
+                    if effect.verdict == .apply || effect.verdict == .idempotent {
+                        projectedTitleWinners[titleChange.noteID] = SyncConvergenceTitleWinnerProjection(
+                            noteID: titleChange.noteID,
+                            title: effect.resultingTitle,
+                            canonicalReplayKey: candidateIdentity.canonicalReplayKey,
+                            operationIdentity: candidateIdentity
+                        )
                         noteStates[titleChange.noteID] = SyncConvergenceProjectedNote(
                             noteID: current.noteID,
                             folderID: current.folderID,
@@ -176,10 +199,16 @@ struct SyncConvergencePlanner {
                             modifiedAt: titleChange.modifiedAt
                         )
                     }
-                    notePlans[titleChange.noteID, default: PartialNotePlan(noteID: titleChange.noteID)].titleEffect = effect
+                    let aggregate = previous.map { foldTitleEffect($0, with: effect) } ?? effect
+                    notePlans[titleChange.noteID, default: PartialNotePlan(noteID: titleChange.noteID)].titleEffect = aggregate
                     routings[titleChange.noteID] = routings[titleChange.noteID] ?? SyncConvergencePresentationRouting.none
                     operationIdentities.append(candidateIdentity)
-                    resultEvidence.append(effect.resultEvidence)
+                    if let index = titleEvidenceIndexByNoteID[titleChange.noteID] {
+                        resultEvidence[index] = aggregate.resultEvidence
+                    } else {
+                        titleEvidenceIndexByNoteID[titleChange.noteID] = resultEvidence.count
+                        resultEvidence.append(aggregate.resultEvidence)
+                    }
                 case .failure(let failure):
                     return .failedBeforeCommit(failure)
                 }
@@ -514,6 +543,37 @@ struct SyncConvergencePlanner {
                 postHash: initialBodyHash,
                 canonicalReplayKey: identity.canonicalReplayKey
             )
+        )
+    }
+
+    /// Fold consecutive or interleaved same-note title changes without losing
+    /// their original durable precondition. Per-operation identities remain in
+    /// the incorporation evidence; only the note-level effect is aggregated.
+    private func foldTitleEffect(
+        _ previous: SyncConvergenceTitleEffect,
+        with next: SyncConvergenceTitleEffect
+    ) -> SyncConvergenceTitleEffect {
+        let verdict: SyncConvergenceTitleVerdict
+        if previous.verdict == .apply || next.verdict == .apply {
+            verdict = .apply
+        } else if previous.verdict == .idempotent || next.verdict == .idempotent {
+            verdict = .idempotent
+        } else {
+            verdict = .ignoreOlder
+        }
+        let selected = (next.verdict == .apply || next.verdict == .idempotent)
+            ? next
+            : previous
+        return SyncConvergenceTitleEffect(
+            priorTitle: previous.priorTitle,
+            priorWinningKey: previous.priorWinningKey,
+            candidateTitle: selected.candidateTitle,
+            candidateOperationIdentity: selected.candidateOperationIdentity,
+            candidateCanonicalKey: selected.candidateCanonicalKey,
+            verdict: verdict,
+            resultingTitle: next.resultingTitle,
+            resultingWinningKey: next.resultingWinningKey,
+            resultEvidence: next.resultEvidence
         )
     }
 
@@ -3534,6 +3594,7 @@ struct SyncConvergenceIncorporationExecutor {
             )]
         } ?? []
         var processedBody = false
+        var projectedTitleWinners = persistedWinners
         for (index, change) in input.sourceBatch.changes.enumerated() where index < lifecycleOperationIndex {
             guard change.noteID == notePlan.noteID else { continue }
             switch change {
@@ -3569,12 +3630,18 @@ struct SyncConvergenceIncorporationExecutor {
                 switch SyncTitleWinnerPlanner().plan(
                     noteID: notePlan.noteID,
                     priorTitle: existing.title,
-                    persistedWinners: persistedWinners,
+                    persistedWinners: projectedTitleWinners,
                     candidateTitle: titleChange.title,
                     candidateIdentity: identity
                 ) {
                 case .success(let titleEffect):
                     if titleEffect.verdict == .apply || titleEffect.verdict == .idempotent {
+                        projectedTitleWinners = [SyncConvergenceTitleWinnerProjection(
+                            noteID: notePlan.noteID,
+                            title: titleEffect.resultingTitle,
+                            canonicalReplayKey: identity.canonicalReplayKey,
+                            operationIdentity: identity
+                        )]
                         projected = SyncConvergenceProjectedNote(
                             noteID: existing.noteID,
                             folderID: existing.folderID,

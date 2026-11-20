@@ -93,6 +93,99 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         assertNoPreflightMutation(transaction, "orphaned create-and-title winner")
     }
 
+    func testMYR225ThreeMacTitleOperationsFoldAndIncorporateAtomically() throws {
+        // The retained Mac batch captured three title operations for one note.
+        // This fixture uses its exact batch/note identifiers and operation shape.
+        let noteID = uuid("DF40B58E-7644-4C8A-94AA-C0C63FECB8C5")
+        let batch = SyncBatch(
+            id: uuid("527E25AB-87D4-45DB-9504-FDB2A2329BA3"),
+            originDeviceID: uuid("09B6DC06-B415-4288-BE56-71D5F719AC3F"),
+            createdAt: date(6),
+            changes: [
+                .noteTitleChanged(.init(noteID: noteID, title: "First", modifiedAt: date(3))),
+                .noteTitleChanged(.init(noteID: noteID, title: "Second", modifiedAt: date(4))),
+                .noteTitleChanged(.init(noteID: noteID, title: "Final", modifiedAt: date(5)))
+            ]
+        )
+        let initial = SyncConvergenceMutableNoteRecord(
+            noteID: noteID, folderID: nil, title: "Original", body: "Unchanged body",
+            createdAt: date(1), modifiedAt: date(2)
+        )
+        let outcome = SyncConvergencePlanner().plan(input: .init(
+            incomingBatch: batch,
+            currentNotes: [.init(
+                noteID: noteID, folderID: nil, title: initial.title, body: initial.body,
+                createdAt: initial.createdAt, modifiedAt: initial.modifiedAt
+            )]
+        ))
+        guard case .planned(let validated) = outcome else {
+            return XCTFail("Three-title batch must plan, got \(outcome)")
+        }
+        let titleEffect = try XCTUnwrap(validated.plan.affectedNotePlans.first?.titleEffect)
+        XCTAssertEqual(titleEffect.priorTitle, "Original")
+        XCTAssertNil(titleEffect.priorWinningKey)
+        XCTAssertEqual(titleEffect.verdict, .apply)
+        XCTAssertEqual(titleEffect.resultingTitle, "Final")
+        XCTAssertEqual(titleEffect.candidateOperationIdentity.operationIndex, 2)
+        XCTAssertEqual(validated.plan.incorporationEvidence.operationIdentities.map(\.operationIndex), [0, 1, 2])
+        XCTAssertEqual(validated.plan.incorporationEvidence.resultEvidence.filter { $0.kind == .title }.count, 1)
+
+        let transaction = InMemoryConvergenceTransaction(notes: [noteID: initial])
+        let result = SyncConvergenceIncorporationExecutor().incorporate(
+            input: validated, transaction: transaction, committedAt: date(7)
+        )
+        guard case .incorporated = result else {
+            return XCTFail("Three-title batch must incorporate, got \(result)")
+        }
+        XCTAssertEqual(transaction.notes[noteID]?.title, "Final")
+        XCTAssertEqual(transaction.notes[noteID]?.body, "Unchanged body")
+        XCTAssertEqual(transaction.titleWinners[noteID]?.operationIdentity.operationIndex, 2)
+        XCTAssertEqual(transaction.titleWinnerWriteCount, 1)
+    }
+
+    func testMYR225EarlierSameBatchTitleWinnerSurvivesLaterOlderCandidate() throws {
+        let noteID = uuid("00000000-0000-0000-0000-000000225501")
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000225502"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000225503"),
+            createdAt: date(6),
+            changes: [
+                .noteTitleChanged(.init(noteID: noteID, title: "Winner", modifiedAt: date(5))),
+                .noteTitleChanged(.init(noteID: noteID, title: "Older", modifiedAt: date(3)))
+            ]
+        )
+        let initial = SyncConvergenceMutableNoteRecord(
+            noteID: noteID, folderID: nil, title: "Original", body: "Body",
+            createdAt: date(1), modifiedAt: date(2)
+        )
+        let outcome = SyncConvergencePlanner().plan(input: .init(
+            incomingBatch: batch,
+            currentNotes: [.init(
+                noteID: noteID, folderID: nil, title: initial.title, body: initial.body,
+                createdAt: initial.createdAt, modifiedAt: initial.modifiedAt
+            )]
+        ))
+        guard case .planned(let validated) = outcome else {
+            return XCTFail("Older trailing title must not block planning, got \(outcome)")
+        }
+        let effect = try XCTUnwrap(validated.plan.affectedNotePlans.first?.titleEffect)
+        XCTAssertEqual(effect.priorTitle, "Original")
+        XCTAssertEqual(effect.verdict, .apply)
+        XCTAssertEqual(effect.resultingTitle, "Winner")
+        XCTAssertEqual(effect.candidateOperationIdentity.operationIndex, 0)
+        XCTAssertEqual(validated.plan.incorporationEvidence.operationIdentities.map(\.operationIndex), [0, 1])
+        XCTAssertEqual(validated.plan.incorporationEvidence.resultEvidence.filter { $0.kind == .title }.count, 1)
+        let transaction = InMemoryConvergenceTransaction(notes: [noteID: initial])
+        let incorporation = SyncConvergenceIncorporationExecutor().incorporate(
+            input: validated, transaction: transaction, committedAt: date(7)
+        )
+        guard case .incorporated = incorporation else {
+            return XCTFail("Earlier winner must incorporate, got \(incorporation)")
+        }
+        XCTAssertEqual(transaction.notes[noteID]?.title, "Winner")
+        XCTAssertEqual(transaction.titleWinners[noteID]?.operationIdentity.operationIndex, 0)
+    }
+
     private func creationTitleInput(existing: Bool) throws -> (UUID, ValidatedSyncConvergenceIncorporationInput) {
         let noteID = uuid("00000000-0000-0000-0000-000000233c01")
         let batch = SyncBatch(id: uuid("00000000-0000-0000-0000-000000233c02"),
