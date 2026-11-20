@@ -9,6 +9,7 @@ from pathlib import Path
 import plistlib
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -23,18 +24,60 @@ TEST = "MyRAMUITests/MyRAMUITests/testMYR225PhysicalRetainedMacTitleArrivesAndSu
 DEFAULT_BATCH = "527E25AB-87D4-45DB-9504-FDB2A2329BA3"
 
 
-def run(args, *, cwd=None, env=None, log=None, check=True):
-    if log:
-        with open(log, "wb") as output:
-            process = subprocess.run(args, cwd=cwd, env=env, stdout=output, stderr=subprocess.STDOUT)
-        result = subprocess.CompletedProcess(args, process.returncode, b"", b"")
-    else:
-        result = subprocess.run(args, cwd=cwd, env=env, capture_output=True)
+def run(args, *, cwd=None, env=None, log=None, check=True, timeout_seconds=1800):
+    # No inherited stdin or controlling terminal. Xcode and its helpers must
+    # never solicit a password through this runner; normal device/Keychain GUI
+    # approvals remain owned by macOS and iOS.
+    child_env = dict(os.environ if env is None else env)
+    child_env.update({
+        "GIT_TERMINAL_PROMPT": "0",
+        "GCM_INTERACTIVE": "Never",
+        "GIT_ASKPASS": "/usr/bin/false",
+        "SSH_ASKPASS": "/usr/bin/false",
+        "SSH_ASKPASS_REQUIRE": "never",
+    })
+
+    output = open(log, "wb") if log else None
+    try:
+        process = subprocess.Popen(
+            args, cwd=cwd, env=child_env,
+            stdin=subprocess.DEVNULL,
+            stdout=output if output else subprocess.PIPE,
+            stderr=subprocess.STDOUT if output else subprocess.PIPE,
+            start_new_session=True,  # prevent direct /dev/tty password prompts
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=timeout_seconds)
+        except BaseException:
+            # On Ctrl+C, failure, or timeout, stop the *whole* isolated Xcode
+            # process group before the caller removes its temporary worktree.
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                process.communicate(timeout=8)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.communicate()
+            raise
+        result = subprocess.CompletedProcess(
+            args, process.returncode, stdout or b"", stderr or b""
+        )
+    finally:
+        if output:
+            output.close()
     if check and result.returncode:
         detail = str(log) if log else result.stderr.decode(errors="replace").strip()
-        raise RuntimeError(f"Command exited {result.returncode}: {args[0]} (details: {detail})")
+        raise RuntimeError(
+            f"Command exited {result.returncode}: {args[0]} (details: {detail}). "
+            "No terminal password entry is supported; inspect the logged "
+            "signing/device error instead."
+        )
     return result
-
 
 def git(repo, *args):
     return run(["git", "-C", str(repo), *args]).stdout.decode().strip()
@@ -144,7 +187,7 @@ def main():
     created_worktree = False
     cleanup_error = None
 
-    print(f"runner=MYR225-PHYSICAL-TITLE-UI-v1 candidate={candidate}", flush=True)
+    print(f"runner=MYR225-PHYSICAL-TITLE-UI-v2 candidate={candidate} noninteractive=1", flush=True)
     try:
         print("RUN: exact Test Host worktree and sibling dependency preflight", flush=True)
         nearby = repo.parent / "NearbySyncCore"
@@ -189,7 +232,7 @@ def main():
                     "TEST_RUNNER_MYR225_PREVIOUS_TITLE": args.previous_title,
                     "TEST_RUNNER_MYR225_EXPECTED_TITLE": args.expected_title})
         result_path = run_dir / "raw" / "physical-title.xcresult"
-        print("RUN: candidate iPhone XCUITest (no UITEST_MODE or note mutations)", flush=True)
+        print("RUN: candidate iPhone XCUITest (noninteractive: no password prompts)", flush=True)
         run(common + ["-resultBundlePath", str(result_path),
                       "-only-testing:" + TEST, "test-without-building"],
             cwd=worktree, env=env, log=run_dir / "raw" / "xcode-ui-test.log")
