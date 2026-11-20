@@ -35,6 +35,69 @@ final class MyRAMUITests: XCTestCase {
         XCTAssertTrue(app.buttons["ios-sync-copy-diagnostics"].exists)
     }
 
+    /// Opt-in physical MYR-225 acceptance. The Xcode runner installs the
+    /// candidate Test Host; this test only observes the preserved note UI.
+    /// The companion runner independently verifies the Mac's durable dequeue.
+    func testMYR225PhysicalRetainedMacTitleArrivesAndSurvivesRestart() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard env["MYR225_PHYSICAL_TITLE_SYNC"] == "1" else {
+            throw XCTSkip("Requires the MYR-225 physical Verification runner")
+        }
+        guard let previousTitle = env["MYR225_PREVIOUS_TITLE"], !previousTitle.isEmpty,
+              let expectedTitle = env["MYR225_EXPECTED_TITLE"], !expectedTitle.isEmpty,
+              previousTitle != expectedTitle else {
+            return XCTFail("Physical title verification requires distinct previous and expected titles")
+        }
+
+        let app = XCUIApplication(
+            bundleIdentifier: "com.northsignalstudio.myram.myr227.test.verification"
+        )
+        app.activate()
+
+        let selectedTitle = app.buttons["edit-note-title"]
+        if !selectedTitle.waitForExistence(timeout: 8)
+            || (!selectedTitle.label.contains(previousTitle)
+                && !selectedTitle.label.contains(expectedTitle)) {
+            let previousRow = app.staticTexts[previousTitle].firstMatch
+            let currentRow = app.staticTexts[expectedTitle].firstMatch
+            if previousRow.waitForExistence(timeout: 8) {
+                previousRow.tap()
+            } else {
+                XCTAssertTrue(currentRow.waitForExistence(timeout: 8),
+                              "The preserved target note is absent from the iPhone list")
+                currentRow.tap()
+            }
+        }
+
+        XCTAssertTrue(selectedTitle.waitForExistence(timeout: 8),
+                      "The target note editor did not open")
+        let arrived = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", expectedTitle),
+            object: selectedTitle
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [arrived], timeout: 120), .completed,
+                       "Mac title never appeared in the selected iPhone editor")
+        XCTAssertTrue(selectedTitle.label.contains(expectedTitle))
+
+        let receivedImage = XCTAttachment(screenshot: app.screenshot())
+        receivedImage.name = "MYR225-iPhone-title-received"
+        receivedImage.lifetime = .keepAlways
+        add(receivedImage)
+
+        // Confirm the displayed title was durably restored, not merely projected
+        // into a live editor before persistence.
+        app.terminate()
+        app.activate()
+        let restoredEditorTitle = app.buttons["edit-note-title"]
+        let restoredTitleRow = app.staticTexts[expectedTitle].firstMatch
+        XCTAssertTrue(
+            (restoredEditorTitle.waitForExistence(timeout: 12)
+                && restoredEditorTitle.label.contains(expectedTitle))
+                || restoredTitleRow.waitForExistence(timeout: 12),
+            "The received Mac title did not survive iPhone application restart"
+        )
+    }
+
     /// Opt-in physical acceptance against the preserved Verification fixture.
     /// Uses the installed app and its ordinary restoration flow, without a test store or reset.
     func testMYR233PhysicalRetainedNoteRestoration() throws {

@@ -146,7 +146,36 @@ final class MacNoteViewZoomTests: XCTestCase {
         )
     }
 
-    private func makeFixture(width: CGFloat) -> (
+    func testMYR225BodyMarginsRemainInScreenPointsAtEveryZoomAndAfterResize() {
+        let fixture = makeFixture(width: 360, inset: .zero)
+        let scrollView = fixture.scrollView
+        let textView = fixture.textView
+        let horizontalPadding = MacNoteViewZoom.screenSpaceHorizontalInset
+        let verticalPadding = MacNoteViewZoom.screenSpaceVerticalInset
+        XCTAssertEqual(horizontalPadding, 12)
+        XCTAssertEqual(verticalPadding, 10)
+
+        for zoom in [CGFloat(0.5), 0.8, 1, 1.5, 2, 3, 1] {
+            MacNoteViewZoom.apply(zoom, to: scrollView)
+            scrollView.layoutSubtreeIfNeeded()
+            XCTAssertEqual(horizontalPadding + textView.textContainerInset.width * scrollView.magnification,
+                           12, accuracy: 0.001)
+            XCTAssertEqual(verticalPadding + textView.textContainerInset.height * scrollView.magnification,
+                           10, accuracy: 0.001)
+            XCTAssertFalse(scrollView.hasHorizontalScroller)
+            XCTAssertLessThanOrEqual(
+                textView.frame.width * scrollView.magnification,
+                scrollView.contentSize.width + 1
+            )
+        }
+        scrollView.frame = NSRect(x: 0, y: 0, width: 480, height: 280)
+        scrollView.layoutSubtreeIfNeeded()
+        XCTAssertEqual(textView.textContainerInset, .zero)
+        XCTAssertEqual(scrollView.magnification, 1, accuracy: 0.001)
+        XCTAssertLessThanOrEqual(textView.frame.width, scrollView.contentSize.width + 1)
+    }
+
+    private func makeFixture(width: CGFloat, inset: NSSize = NSSize(width: 12, height: 12)) -> (
         scrollView: MacNoteReflowingScrollView,
         textView: NSTextView
     ) {
@@ -163,7 +192,7 @@ final class MacNoteViewZoomTests: XCTestCase {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = []
-        textView.textContainerInset = NSSize(width: 12, height: 12)
+        textView.textContainerInset = inset
         textView.textContainer?.widthTracksTextView = true
 
         let source = String(

@@ -39,6 +39,10 @@ jobs:
         working-directory: MyRAM-iOS
         run: bash Scripts/verify-myram-verification-isolation.sh
 
+      - name: Verify noninteractive physical-test runner safety
+        working-directory: MyRAM-iOS
+        run: python3 -m unittest discover -s Scripts/tests -p 'test_myr225_physical_title_sync_runner.py' -v
+
       - name: Detect documentation-only changes
         id: changes
         working-directory: MyRAM-iOS

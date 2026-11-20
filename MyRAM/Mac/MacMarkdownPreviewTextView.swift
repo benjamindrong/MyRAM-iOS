@@ -83,7 +83,8 @@ struct MacMarkdownPreviewNSViewRepresentable: NSViewRepresentable {
         textView.isHorizontallyResizable = false
         // Reflow zoom owns document width. AppKit width autoresizing would undo it.
         textView.autoresizingMask = []
-        textView.textContainerInset = NSSize(width: 16, height: 16)
+        // Screen-space margin is outside the zoomed Preview TextKit document.
+        textView.textContainerInset = .zero
         textView.minSize = NSSize(width: 0, height: 0)
         textView.maxSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,

@@ -3,6 +3,30 @@ import XCTest
 
 @MainActor
 final class MacSyncIncomingLocalBoundaryTests: XCTestCase {
+    func testMYR225TitleSnapshotSharesBodyRevisionOwnership() {
+        let noteID = Self.noteID(200)
+        let oldRevision = Self.noteID(201)
+        let newRevision = Self.noteID(202)
+        let stale = MacEditorSaveAttempt(
+            noteID: noteID, editorRevision: oldRevision,
+            attributedContent: NSAttributedString(string: "Old body"),
+            proposedTitle: "Old title"
+        )
+        let current = MacEditorSaveAttempt(
+            noteID: noteID, editorRevision: newRevision,
+            attributedContent: NSAttributedString(string: "New body"),
+            proposedTitle: "New title"
+        )
+        XCTAssertEqual(stale.proposedTitle, "Old title")
+        XCTAssertEqual(current.proposedTitle, "New title")
+        XCTAssertFalse(MacEditorSaveOwnership.owns(
+            selectedNoteID: noteID, editorRevision: newRevision, attempt: stale
+        ))
+        XCTAssertTrue(MacEditorSaveOwnership.owns(
+            selectedNoteID: noteID, editorRevision: newRevision, attempt: current
+        ))
+    }
+
     func testReadySurfaceMapsToSharedReadyPreparation() async {
         let adapter = MacSyncIncomingLocalBoundaryAdapter(
             surface: MacSyncIncomingLocalBoundarySurface(prepareForIncomingBodyMutation: { noteIDs in

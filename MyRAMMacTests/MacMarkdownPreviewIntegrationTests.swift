@@ -128,6 +128,27 @@ private struct MacMarkdownPreviewHostedEditor: View {
 @MainActor
 final class MacMarkdownPreviewIntegrationTests: XCTestCase {
 
+    func testMYR225ProductionHostedEditorHasNoZoomScaledTextInset() throws {
+        let host = makeHostedEditor(text: "A long note body")
+        let editor = try XCTUnwrap(host.state.syncBridge.textView)
+        let scrollView = try XCTUnwrap(editor.enclosingScrollView)
+        XCTAssertEqual(editor.textContainerInset, .zero)
+        XCTAssertEqual(
+            editor.font?.pointSize,
+            MacStructuralFormattingAdapter.defaultBodyFont.pointSize
+        )
+        // Exercise the production SwiftUI zoom binding; directly magnifying
+        // a hosted NSScrollView bypasses the scene owner and can disrupt the host.
+        for zoom in [CGFloat(1.1), 1.2, 1.0] {
+            host.state.zoom = zoom
+            drainMainRunLoop()
+            XCTAssertEqual(scrollView.magnification, zoom, accuracy: 0.0001)
+            XCTAssertEqual(editor.textContainerInset, .zero)
+            XCTAssertFalse(scrollView.hasHorizontalScroller)
+        }
+        XCTAssertEqual(host.state.recorder.onTextChangedCount, 0)
+    }
+
     // MARK: - MYR-196 Production mode binding
 
     func testModeBindingFactoryOrdersPreviewResignationAndIgnoresNoOp() {
@@ -466,10 +487,14 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
         XCTAssertLessThanOrEqual(scrollView.contentView.bounds.origin.y, maximumY)
     }
 
-    func testEmptyEditorDefaultsTo24PointsAndExistingExplicitFontsRemainUnchanged() throws {
+    func testEmptyEditorUsesCurrentDefaultAndExistingExplicitFontsRemainUnchanged() throws {
         let emptyHost = makeHostedEditor(text: "")
         let emptyEditor = try XCTUnwrap(emptyHost.state.syncBridge.textView)
-        XCTAssertEqual(try XCTUnwrap(emptyEditor.font).pointSize, 24, accuracy: 0.0001)
+        XCTAssertEqual(
+            try XCTUnwrap(emptyEditor.font).pointSize,
+            MacStructuralFormattingAdapter.defaultBodyFont.pointSize,
+            accuracy: 0.0001
+        )
         XCTAssertEqual(emptyHost.state.recorder.onTextChangedCount, 0)
 
         XCTAssertTrue(emptyHost.window.makeFirstResponder(emptyEditor))
@@ -478,7 +503,11 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
         let typedFont = try XCTUnwrap(
             emptyEditor.attributedString().attribute(.font, at: 0, effectiveRange: nil) as? NSFont
         )
-        XCTAssertEqual(typedFont.pointSize, 24, accuracy: 0.0001)
+        XCTAssertEqual(
+            typedFont.pointSize,
+            MacStructuralFormattingAdapter.defaultBodyFont.pointSize,
+            accuracy: 0.0001
+        )
 
         let explicit = NSMutableAttributedString(string: "Stored")
         explicit.addAttribute(

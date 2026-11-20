@@ -8,6 +8,8 @@ enum MacNoteViewZoom {
     static let minimum: CGFloat = 0.5
     static let maximum: CGFloat = 3.0
     static let step: CGFloat = 0.1
+    static let screenSpaceHorizontalInset: CGFloat = 12
+    static let screenSpaceVerticalInset: CGFloat = 10
 
     fileprivate static let equalityEpsilon: CGFloat = 0.0001
 
