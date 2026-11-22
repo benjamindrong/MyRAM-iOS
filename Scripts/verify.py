@@ -254,10 +254,10 @@ def artifacts_in(raw: Path) -> list[dict[str, Any]]:
 
 def physical_xcode_readiness_failure(log: str) -> str | None:
     """Identify Xcode's explicit physical-device authorization blockers."""
-    if (re.search(r"Unlock[^\\r\\n]*to Continue", log, re.I)
+    if (re.search(r"Unlock[^\r\n]*to Continue", log, re.I)
             or re.search(r"because the device is locked", log, re.I)):
         return "Physical iPhone is locked. Unlock it and keep it unlocked for Xcode UI-test setup; rerun only after user authorization."
-    if re.search(r"Authentication canceled\\.", log, re.I):
+    if re.search(r"Authentication canceled\.", log, re.I):
         return "Native Xcode UI-testing authentication was canceled; explicitly authorize it on the device before rerunning."
     return None
 
