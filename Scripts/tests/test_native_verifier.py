@@ -130,6 +130,40 @@ class NativeVerifierTests(unittest.TestCase):
             with self.assertRaises(v.VerificationError):
                 v.assert_myr371_mac_transport("\n".join(attempt))
 
+    def test_physical_xcode_user_authorization_blockers_are_explicit(self):
+        self.assertIn("locked", v.physical_xcode_readiness_failure(
+            'Run Destination Preflight: Unlock  iPhone to Continue'))
+        self.assertIn("locked", v.physical_xcode_readiness_failure(
+            "Xcode cannot launch MyRAMUITests because the device is locked."))
+        self.assertIn("canceled", v.physical_xcode_readiness_failure(
+            'Failed to initialize for UI testing: Authentication canceled.'))
+        self.assertIsNone(v.physical_xcode_readiness_failure(
+            "Run Destination Preflight: Waiting for the destination to become ready."))
+        self.assertIsNone(v.physical_xcode_readiness_failure(
+            "Running tests...\nTest Case testMYR371PhysicalTransportPairAndReconnect passed"))
+
+    def test_physical_xcode_readiness_failure_aborts_and_preserves_original_log(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            evidence = v.Evidence(base / "Evidence" / "MyRAM" / "AutomatedVerification",
+                                  "a" * 40, "b" * 40, "physical")
+            script = ('import sys, time; '
+                      'print("Unlock  iPhone to Continue", flush=True); '
+                      'time.sleep(20)')
+            start = time.monotonic()
+            with self.assertRaisesRegex(v.VerificationError, "locked"):
+                evidence.run("physical-iphone-tests",
+                             [sys.executable, "-u", "-c", script],
+                             physical_readiness=True)
+            self.assertLess(time.monotonic() - start, 10)
+            self.assertEqual(len(evidence.phases), 1)
+            self.assertNotEqual(evidence.phases[0]["exit_code"], 0)
+            self.assertIn("locked", evidence.phases[0]["failure_reason"])
+            self.assertIn("Unlock  iPhone to Continue",
+                          (evidence.raw / "physical-iphone-tests.log").read_text())
+            evidence.seal("FAIL", "Device locked")
+            self.assertTrue((evidence.path / "manifests" / "run.json").is_file())
+
     def test_result_must_report_tests_and_no_failures(self):
         self.assertEqual(v.validate_summary(json.dumps({"totalTestCount": 6, "failedTests": 0,
                                                          "result": "Passed", "passedTests": 6}))["total"], 6)

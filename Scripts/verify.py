@@ -21,6 +21,7 @@ import plistlib
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -251,6 +252,30 @@ def artifacts_in(raw: Path) -> list[dict[str, Any]]:
     return entries
 
 
+def physical_xcode_readiness_failure(log: str) -> str | None:
+    """Identify Xcode's explicit physical-device authorization blockers."""
+    if (re.search(r"Unlock[^\\r\\n]*to Continue", log, re.I)
+            or re.search(r"because the device is locked", log, re.I)):
+        return "Physical iPhone is locked. Unlock it and keep it unlocked for Xcode UI-test setup; rerun only after user authorization."
+    if re.search(r"Authentication canceled\\.", log, re.I):
+        return "Native Xcode UI-testing authentication was canceled; explicitly authorize it on the device before rerunning."
+    return None
+
+
+def stop_owned_process_group(process: subprocess.Popen) -> None:
+    """Stop only the xcodebuild process group launched for this invocation."""
+    if process.poll() is not None:
+        return
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=8)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+
+
 class Evidence:
     def __init__(self, root: Path, sha: str, nearby: str, suite: str):
         stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -269,20 +294,48 @@ class Evidence:
         self.suite = suite
         self.phases: list[dict[str, Any]] = []
 
-    def run(self, name: str, cmd: list[str], cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
+    def run(self, name: str, cmd: list[str], cwd: Path | None = None,
+            env: dict[str, str] | None = None, *, physical_readiness: bool = False) -> None:
         log = self.raw / f"{name}.log"
         print(f"RUN: {name}", flush=True)
         start = time.monotonic()
+        early_failure = None
         with log.open("xb") as output:
-            result = subprocess.run(cmd, cwd=cwd, env=env, stdout=output, stderr=subprocess.STDOUT, check=False)
+            if physical_readiness:
+                # Capture Xcode's original output while observing native device
+                # readiness. Do not wait for its lengthy post-failure diagnostics.
+                process = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=output,
+                                           stderr=subprocess.STDOUT, start_new_session=True)
+                with log.open("rb") as observer:
+                    recent = ""
+                    while process.poll() is None:
+                        chunk = observer.read()
+                        if chunk:
+                            recent = (recent + chunk.decode("utf-8", errors="replace"))[-8192:]
+                            early_failure = physical_xcode_readiness_failure(recent)
+                            if early_failure:
+                                stop_owned_process_group(process)
+                                break
+                        time.sleep(0.25)
+                    # Read the final bytes even when Xcode exited between polls.
+                    recent = (recent + observer.read().decode("utf-8", errors="replace"))[-8192:]
+                    early_failure = early_failure or physical_xcode_readiness_failure(recent)
+                exit_code = process.wait()
+            else:
+                result = subprocess.run(cmd, cwd=cwd, env=env, stdout=output,
+                                        stderr=subprocess.STDOUT, check=False)
+                exit_code = result.returncode
             output.flush()
             os.fsync(output.fileno())
-        self.phases.append({"name": name, "exit_code": result.returncode,
-                            "elapsed_seconds": round(time.monotonic() - start, 2), "command": cmd})
-        if result.returncode:
+        phase = {"name": name, "exit_code": exit_code,
+                 "elapsed_seconds": round(time.monotonic() - start, 2), "command": cmd}
+        if early_failure:
+            phase["failure_reason"] = early_failure
+        self.phases.append(phase)
+        if early_failure or exit_code:
             tail = log.read_text(encoding="utf-8", errors="replace").splitlines()[-28:]
-            print(f"ERROR: {name} returned {result.returncode}; log={log}\n" + "\n".join(tail), flush=True)
-            raise VerificationError(f"Phase failed: {name} (exit {result.returncode})")
+            print(f"ERROR: {name} returned {exit_code}; log={log}\n" + "\n".join(tail), flush=True)
+            raise VerificationError(early_failure or f"Phase failed: {name} (exit {exit_code})")
         print(f"PASS: {name}", flush=True)
 
     def seal(self, outcome: str, reason: str | None = None) -> None:
@@ -474,7 +527,7 @@ def physical_phase(evidence: Evidence, root: Path, scratch: Path,
                 "-parallel-testing-enabled", "NO", "-derivedDataPath", str(derived),
                 "-resultBundlePath", str(evidence.raw / "physical-iphone-tests.xcresult"),
                 "-only-testing:" + PHYSICAL_TEST, "test"
-            ], cwd=root, env=mobile_environment)
+            ], cwd=root, env=mobile_environment, physical_readiness=True)
             require(process.poll() is None, "Signed MYR371 Mac app exited during physical acceptance")
         finally:
             if process.poll() is None:
@@ -596,6 +649,7 @@ def main(argv: list[str] | None = None) -> int:
                             json.dumps({"iphone": iphone, "mac_bundle_id": PHYSICAL_MAC_ID,
                                         "iphone_bundle_id": PHYSICAL_IOS_ID}) + "\n", encoding="utf-8"
                         )
+                        print("PHYSICAL_AUTHORIZATION=Keep the iPhone unlocked during Xcode UI-test initialization. Approve required system prompts yourself; no authentication is automated.", flush=True)
                         physical_phase(evidence, ios_worktree, scratch, iphone, env)
                     suites = ([] if args.suite == "physical" else
                               (["mac", "ios", "ui"] if args.suite == "all" else [args.suite]))
