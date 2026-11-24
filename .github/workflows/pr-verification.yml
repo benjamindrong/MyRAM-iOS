@@ -39,6 +39,12 @@ jobs:
         working-directory: MyRAM-iOS
         run: bash Scripts/verify-myram-verification-isolation.sh
 
+      - name: Run host-independent verification regression suites
+        working-directory: MyRAM-iOS
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s Scripts/tests -p 'test_*.py' -v
+
       - name: Detect documentation-only changes
         id: changes
         working-directory: MyRAM-iOS

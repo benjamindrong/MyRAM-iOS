@@ -1,0 +1,26 @@
+{
+  "environment": "verification",
+  "display_name": "MyRAM Automated Tests",
+  "storage_root_name": "MyRAM Automated Tests",
+  "swiftdata_store_name": "MyRAM_Automated_Tests",
+  "multipeer_service_type": "myram-autotest",
+  "bonjour_service": "_myram-autotest._tcp",
+  "ios": {
+    "app_bundle_identifier": "com.northsignalstudio.myram.automated.verification",
+    "widget_bundle_identifier": "com.northsignalstudio.myram.automated.verification.widget",
+    "widget_app_group_identifier": "group.com.northsignalstudio.myram.automated.verification.widget",
+    "url_scheme": "myram-automated-tests",
+    "export_type_identifier": "com.northsignalstudio.myram.automated.tests.export",
+    "export_filename_extension": "myram-automated-test",
+    "export_mime_type": "application/vnd.northsignalstudio.myram-automated-tests",
+    "test_bundle_identifier": "com.northsignalstudio.myram.automated.tests.xctest",
+    "ui_test_bundle_identifier": "com.northsignalstudio.myram.automated.tests.uitests"
+  },
+  "macos": {
+    "app_bundle_identifier": "com.northsignalstudio.myram.mac.automated.verification",
+    "widget_bundle_identifier": "com.northsignalstudio.myram.mac.automated.verification.widget",
+    "widget_app_group_identifier": "group.com.northsignalstudio.myram.mac.automated.verification.widget",
+    "url_scheme": "myram-mac-automated-tests",
+    "test_bundle_identifier": "com.northsignalstudio.myram.mac.automated.tests.xctest"
+  }
+}
