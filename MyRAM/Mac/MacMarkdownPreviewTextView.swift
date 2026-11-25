@@ -85,6 +85,7 @@ struct MacMarkdownPreviewNSViewRepresentable: NSViewRepresentable {
         textView.autoresizingMask = []
         // Screen-space margin is outside the zoomed Preview TextKit document.
         textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
         textView.minSize = NSSize(width: 0, height: 0)
         textView.maxSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,

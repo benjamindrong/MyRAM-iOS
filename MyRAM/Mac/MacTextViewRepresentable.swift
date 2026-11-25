@@ -52,6 +52,7 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         textView.typingAttributes = MacEditorTextColorPolicy.normalizedTypingAttributes(textView.typingAttributes)
         // Screen-space margin is owned by MacNoteEditorView, not magnified TextKit.
         textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
         textView.minSize = NSSize(width: 0, height: 0)
         textView.maxSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,

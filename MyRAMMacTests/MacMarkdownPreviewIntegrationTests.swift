@@ -132,7 +132,13 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
         let host = makeHostedEditor(text: "A long note body")
         let editor = try XCTUnwrap(host.state.syncBridge.textView)
         let scrollView = try XCTUnwrap(editor.enclosingScrollView)
+        let editorContainer = try XCTUnwrap(editor.textContainer)
+        let preview = try XCTUnwrap(previewTextView(in: host.container))
+        let previewContainer = try XCTUnwrap(preview.textContainer)
         XCTAssertEqual(editor.textContainerInset, .zero)
+        XCTAssertEqual(editorContainer.lineFragmentPadding, 0)
+        XCTAssertEqual(preview.textContainerInset, .zero)
+        XCTAssertEqual(previewContainer.lineFragmentPadding, 0)
         XCTAssertEqual(
             editor.font?.pointSize,
             MacStructuralFormattingAdapter.defaultBodyFont.pointSize
@@ -144,7 +150,20 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
             drainMainRunLoop()
             XCTAssertEqual(scrollView.magnification, zoom, accuracy: 0.0001)
             XCTAssertEqual(editor.textContainerInset, .zero)
+            XCTAssertEqual(editorContainer.lineFragmentPadding, 0)
             XCTAssertFalse(scrollView.hasHorizontalScroller)
+        }
+
+        host.state.enterPreview()
+        drainMainRunLoop()
+        let previewScrollView = try XCTUnwrap(preview.enclosingScrollView)
+        for zoom in [CGFloat(0.8), 1.2, 1.0] {
+            host.state.zoom = zoom
+            drainMainRunLoop()
+            XCTAssertEqual(previewScrollView.magnification, zoom, accuracy: 0.0001)
+            XCTAssertEqual(preview.textContainerInset, .zero)
+            XCTAssertEqual(previewContainer.lineFragmentPadding, 0)
+            XCTAssertFalse(previewScrollView.hasHorizontalScroller)
         }
         XCTAssertEqual(host.state.recorder.onTextChangedCount, 0)
     }
