@@ -12,6 +12,16 @@ enum MyRAMMacProcessSyncCompositionRoot {
     )
 }
 
+#if DEBUG
+@MainActor
+private enum PhysicalSyncVerificationClaim {
+    static var started = false
+}
+private enum PhysicalSyncVerificationFailure: Error {
+    case timeout(String)
+}
+#endif
+
 struct MyRAMMacRootView: View {
     @StateObject private var startupCoordinator = MacStartupCoordinator()
     @StateObject private var syncController: MacSyncBatchController
@@ -156,6 +166,9 @@ struct MyRAMMacRootView: View {
             )
         }
         .navigationSplitViewStyle(.balanced)
+        #if DEBUG
+        .task { await runPhysicalSyncVerificationIfRequested() }
+        #endif
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.width
         } action: { width in
@@ -165,6 +178,120 @@ struct MyRAMMacRootView: View {
             handleColumnVisibilityChange(newValue)
         }
     }
+
+    #if DEBUG
+    /// Drive the existing scene's edit/save owner in the signed isolated Test Host.
+    /// Never directly change storage, batch queues or acknowledgement state.
+    @MainActor
+    private func runPhysicalSyncVerificationIfRequested() async {
+        let env = ProcessInfo.processInfo.environment
+        guard Bundle.main.bundleIdentifier == "com.northsignalstudio.myram.mac.myr227.test.verification",
+              let token = env["MYRAM_PHYSICAL_SYNC_TOKEN"],
+              token.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil,
+              let phase = env["MYRAM_PHYSICAL_SYNC_PHASE"],
+              ["roundtrip", "restore"].contains(phase),
+              let candidate = env["MYRAM_PHYSICAL_SYNC_CANDIDATE"],
+              candidate.range(of: "^[0-9a-f]{40}$", options: .regularExpression) != nil,
+              MyRAMSyncRuntimeConfiguration.current().applicationSyncEnabled,
+              MyRAMSyncRuntimeConfiguration.current().testHostCandidate() == candidate,
+              !PhysicalSyncVerificationClaim.started else { return }
+        PhysicalSyncVerificationClaim.started = true
+
+        func emit(_ event: String, _ fields: [String: String] = [:]) {
+            var record = fields
+            record["event"] = event
+            record["token"] = token
+            record["candidate"] = candidate
+            record["pid"] = String(ProcessInfo.processInfo.processIdentifier)
+            if let data = try? JSONSerialization.data(withJSONObject: record, options: .sortedKeys) {
+                FileHandle.standardOutput.write(Data("MYRAM_PHYSICAL_SYNC ".utf8) + data + Data("\n".utf8))
+            }
+        }
+        func title(_ step: String) -> String { "Sync \(token) \(step)" }
+        let initial = "Sync \(token) body"
+        let combined = initial + " Mac"
+        let final = combined + " iPhone"
+        func wait(_ label: String, until condition: () -> Bool) async throws {
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: .seconds(180))
+            while !condition() {
+                guard clock.now < deadline else {
+                    throw PhysicalSyncVerificationFailure.timeout(label)
+                }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        func presented(_ id: UUID, _ expectedTitle: String, _ body: String) -> Bool {
+            selectedNoteID == id && selectedNote?.title == expectedTitle
+                && selectedNote?.content == body && draftTitle == expectedTitle
+                && attributedText.string == body && !hasUnsavedChanges
+                && editorSyncBridge.textView?.string == body
+        }
+        func drained() -> Bool {
+            let lines = Set(syncController.readOnlySyncDiagnostics.split(separator: "\n").map(String.init))
+            return ["unsent_count=0", "pending_incoming_count=0",
+                    "pending_local_obligation_count=0", "pending_incoming_transport_count=0",
+                    "processing_incoming=false"].allSatisfy { lines.contains($0) }
+        }
+        func emitState(_ event: String) {
+            emit(event, ["title": draftTitle, "body": attributedText.string])
+        }
+
+        do {
+            if phase == "restore" {
+                guard let note = notes.first(where: { $0.title == title("E") }),
+                      note.content == final else {
+                    throw PhysicalSyncVerificationFailure.timeout("final note at fresh startup")
+                }
+                selectNote(note)
+                try await wait("restored editor") { presented(note.id, title("E"), final) }
+                let diagnostics = syncController.readOnlySyncDiagnostics
+                guard diagnostics.split(separator: "\n").contains("mc_session_connected_count=0"),
+                      drained() else {
+                    throw PhysicalSyncVerificationFailure.timeout("offline restoration and drained queues")
+                }
+                emit("restored", ["title": draftTitle, "body": attributedText.string, "diagnostics": diagnostics])
+                return
+            }
+            guard !notes.contains(where: { $0.title.hasPrefix("Sync \(token) ") }) else {
+                throw PhysicalSyncVerificationFailure.timeout("fresh unique fixture")
+            }
+            emit("ready", ["device": MacSyncDeviceIdentityProvider().currentIdentity().id.uuidString])
+            try await wait("iPhone-created synthetic note") {
+                notes.contains { $0.title == title("A") && $0.content == initial }
+            }
+            let matches = notes.filter { $0.title == title("A") && $0.content == initial }
+            guard matches.count == 1, let note = matches.first else {
+                throw PhysicalSyncVerificationFailure.timeout("unique synthetic note")
+            }
+            selectNote(note)
+            try await wait("initial editor") { presented(note.id, title("A"), initial) }
+            emitState("seed-received")
+
+            macTitleBinding.wrappedValue = title("B")
+            try await wait("Mac title-only save") { presented(note.id, title("B"), initial) }
+            emitState("mac-title-saved")
+            try await wait("iPhone title-only convergence") { presented(note.id, title("C"), initial) }
+            emitState("iphone-title-received")
+
+            // Both edits enter the existing debounce/revision owner before yielding.
+            guard let editor = editorSyncBridge.textView, editor.string == initial else {
+                throw PhysicalSyncVerificationFailure.timeout("native editor ownership")
+            }
+            macTitleBinding.wrappedValue = title("D")
+            editor.insertText(" Mac", replacementRange: NSRange(location: initial.utf16.count, length: 0))
+            try await wait("Mac combined save") { presented(note.id, title("D"), combined) }
+            emitState("mac-combined-saved")
+            try await wait("iPhone combined convergence") { presented(note.id, title("E"), final) }
+            emitState("iphone-combined-received")
+            try await wait("Mac durable queue drainage") { drained() }
+            emit("drained", ["title": draftTitle, "body": attributedText.string,
+                             "diagnostics": syncController.readOnlySyncDiagnostics])
+        } catch {
+            emit("failed", ["reason": String(describing: error)])
+        }
+    }
+    #endif
 
     private var startupActions: MacStartupCoordinator.Actions {
         MacStartupCoordinator.Actions(

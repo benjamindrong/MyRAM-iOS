@@ -92,6 +92,151 @@ final class MyRAMUITests: XCTestCase {
         app.buttons["Close"].tap()
     }
 
+    /// Physical application-sync scenario; skipped in ordinary UI tests.
+    func testPhysicalApplicationSyncRoundTrip() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let token = env["MYRAM_PHYSICAL_SYNC_TOKEN"] else {
+            throw XCTSkip("Requires Scripts/verify.py physical-sync")
+        }
+        XCTAssertNotNil(token.range(of: "^[0-9a-f]{32}$", options: .regularExpression))
+        let pair = try XCTUnwrap(env["MYRAM_PHYSICAL_SYNC_PAIR"])
+        let app = XCUIApplication(bundleIdentifier: "com.northsignalstudio.myram.myr227.test.verification")
+        app.launch()
+        defer { app.terminate() }
+
+        func title(_ step: String) -> String { "Sync \(token) \(step)" }
+        let initial = "Sync \(token) body"
+        let combined = initial + " Mac"
+        let final = combined + " iPhone"
+        let status = app.buttons["sync-status-indicator"]
+        XCTAssertTrue(status.waitForExistence(timeout: 30))
+        status.tap()
+        let manualSync = app.buttons["Manual Sync"]
+        XCTAssertTrue(manualSync.waitForExistence(timeout: 10))
+        if !manualSync.isEnabled {
+            let actions = app.buttons.matching(NSPredicate(format: "label == %@ OR label == %@", "Pair", "Reconnect"))
+            XCTAssertTrue(actions.firstMatch.waitForExistence(timeout: 30))
+            XCTAssertEqual(actions.count, 1, "Physical sync must discover exactly one eligible peer")
+            actions.firstMatch.tap()
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == YES"), object: manualSync)], timeout: 60), .completed)
+        let done = app.buttons["Done"]
+        XCTAssertTrue(done.waitForExistence(timeout: 10))
+        done.tap()
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND value == %@", pair),
+            object: status)], timeout: 30), .completed, "Exact candidate pair required")
+        XCTAssertFalse(app.staticTexts[title("A")].exists, "Fixture must be new")
+        openNewNote(in: app)
+
+        let titleButton = app.buttons["edit-note-title"]
+        let body = findElement("note-editor-body", in: app)
+        func rename(_ from: String, _ to: String) {
+            titleButton.tap()
+            let alert = app.alerts["Edit Title"]
+            XCTAssertTrue(alert.waitForExistence(timeout: 10))
+            replaceText(in: alert.textFields.firstMatch, with: to, fallbackExistingText: from)
+            alert.buttons["Save"].tap()
+        }
+        func assertEditor(_ expectedTitle: String, _ expectedBody: String) {
+            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == true AND label CONTAINS %@", expectedTitle),
+                object: titleButton)], timeout: 180), .completed)
+            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == true AND value == %@", expectedBody),
+                object: body)], timeout: 180), .completed)
+            let attachment = XCTAttachment(string: "title=\(titleButton.label)\nbody=\(body.value as? String ?? "")")
+            attachment.name = expectedTitle
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+
+        rename("Untitled", title("A"))
+        XCTAssertTrue(body.waitForExistence(timeout: 10))
+        body.tap()
+        body.typeText(initial)
+        assertEditor(title("B"), initial)
+        rename(title("B"), title("C"))
+        assertEditor(title("D"), combined)
+        rename(title("D"), title("E"))
+        body.tap()
+        body.typeText(" iPhone")
+        assertEditor(title("E"), final)
+
+        // Opening diagnostics from the editor invokes its ordinary persistence gate.
+        status.tap()
+        let diagnostics = app.buttons["ios-sync-readonly-diagnostics"]
+        XCTAssertTrue(diagnostics.waitForExistence(timeout: 10))
+        let required = ["unsent_count=0", "legacy_pending_count=0",
+                        "local_convergence_pending_count=0", "pending_incoming_durable_count=0",
+                        "pending_incoming_transport_count=0", "processing_incoming=false",
+                        "queue_health_issue_count=0", "session_connected_count=1"]
+        let deadline = Date().addingTimeInterval(120)
+        var drained = false
+        repeat {
+            diagnostics.tap()
+            let snapshot = app.staticTexts.matching(NSPredicate(
+                format: "label CONTAINS %@", "schema=myram.iphone.sync-diagnostics.v1")).firstMatch
+            XCTAssertTrue(snapshot.waitForExistence(timeout: 10))
+            let lines = Set(snapshot.label.split(separator: "\n").map(String.init))
+            drained = required.allSatisfy { lines.contains($0) }
+            if drained {
+                let attachment = XCTAttachment(string: snapshot.label)
+                attachment.name = "physical-sync-iPhone-drained"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+            app.buttons["Close"].tap()
+        } while !drained && Date() < deadline
+        XCTAssertTrue(drained, "Physical iPhone durable queues did not drain")
+        done.tap()
+
+    }
+
+    /// A separate native launch with the Mac stopped proves local restoration.
+    func testPhysicalApplicationSyncOfflineRestoration() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let token = env["MYRAM_PHYSICAL_SYNC_RESTORE_TOKEN"] else {
+            throw XCTSkip("Requires completed physical-sync round trip")
+        }
+        XCTAssertNotNil(token.range(of: "^[0-9a-f]{32}$", options: .regularExpression))
+        let app = XCUIApplication(bundleIdentifier: "com.northsignalstudio.myram.myr227.test.verification")
+        app.launch()
+        defer { app.terminate() }
+        let finalTitle = "Sync \(token) E"
+        let finalBody = "Sync \(token) body Mac iPhone"
+        let titleButton = app.buttons["edit-note-title"]
+        if !titleButton.exists {
+            let row = app.staticTexts[finalTitle].firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 30))
+            row.tap()
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND label CONTAINS %@", finalTitle),
+            object: titleButton)], timeout: 30), .completed)
+        let body = findElement("note-editor-body", in: app)
+        XCTAssertTrue(body.waitForExistence(timeout: 10))
+        XCTAssertEqual(body.value as? String, finalBody)
+        app.buttons["sync-status-indicator"].tap()
+        let diagnostics = app.buttons["ios-sync-readonly-diagnostics"]
+        XCTAssertTrue(diagnostics.waitForExistence(timeout: 10))
+        diagnostics.tap()
+        let snapshot = app.staticTexts.matching(NSPredicate(
+            format: "label CONTAINS %@", "schema=myram.iphone.sync-diagnostics.v1")).firstMatch
+        XCTAssertTrue(snapshot.waitForExistence(timeout: 10))
+        let lines = Set(snapshot.label.split(separator: "\n").map(String.init))
+        XCTAssertTrue(["session_connected_count=0", "unsent_count=0",
+                       "local_convergence_pending_count=0", "pending_incoming_durable_count=0",
+                       "pending_incoming_transport_count=0", "processing_incoming=false",
+                       "queue_health_issue_count=0", "legacy_pending_count=0"].allSatisfy { lines.contains($0) },
+                      "Offline restart requires zero connected peers and zero pending durable work")
+        let attachment = XCTAttachment(string: "title=\(finalTitle)\nbody=\(body.value as? String ?? "")\n\(snapshot.label)")
+        attachment.name = "physical-sync-iPhone-offline-restoration"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     /// Opt-in physical MYR-225 acceptance. The Xcode runner installs the
     /// candidate Test Host; this test only observes the preserved note UI.
     /// The companion runner independently verifies the Mac's durable dequeue.

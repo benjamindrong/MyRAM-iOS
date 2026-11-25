@@ -7,6 +7,7 @@ Examples:
   python3 Scripts/verify.py ios --only MyRAMTests/EditorFormattingMutationApplierTests
   python3 Scripts/verify.py mac
   python3 Scripts/verify.py all
+  python3 Scripts/verify.py physical-sync
 """
 from __future__ import annotations
 
@@ -39,6 +40,13 @@ PHYSICAL_IOS_ID = "com.northsignalstudio.myram.myr371.transport.verification"
 PHYSICAL_MAC_ID = "com.northsignalstudio.myram.mac.myr371.transport.verification"
 PHYSICAL_TEST = "MyRAMUITests/MyRAMUITests/testMYR371PhysicalTransportPairAndReconnect"
 PHYSICAL_DEVICE_ENV = "MYRAM_PHYSICAL_IPHONE_ID"
+SYNC_PROFILE = "myr227test"
+SYNC_IOS_ID = "com.northsignalstudio.myram.myr227.test.verification"
+SYNC_MAC_ID = "com.northsignalstudio.myram.mac.myr227.test.verification"
+SYNC_SERVICE = "_myr227-test._tcp"
+SYNC_TEST = "MyRAMUITests/MyRAMUITests/testPhysicalApplicationSyncRoundTrip"
+SYNC_RESTORE_TEST = "MyRAMUITests/MyRAMUITests/testPhysicalApplicationSyncOfflineRestoration"
+PHYSICAL_SUITES = ("physical", "physical-sync")
 SUITE_TARGETS = {"ui": "MyRAMUITests", "ios": "MyRAMTests", "mac": "MyRAMMacTests"}
 
 
@@ -304,23 +312,27 @@ class Evidence:
             if physical_readiness:
                 # Capture Xcode's original output while observing native device
                 # readiness. Do not wait for its lengthy post-failure diagnostics.
-                process = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=output,
+                process = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=output,
                                            stderr=subprocess.STDOUT, start_new_session=True)
-                with log.open("rb") as observer:
-                    recent = ""
-                    while process.poll() is None:
-                        chunk = observer.read()
-                        if chunk:
-                            recent = (recent + chunk.decode("utf-8", errors="replace"))[-8192:]
-                            early_failure = physical_xcode_readiness_failure(recent)
+                try:
+                    with log.open("rb") as observer:
+                        recent = ""
+                        while process.poll() is None:
+                            chunk = observer.read()
+                            if chunk:
+                                recent = (recent + chunk.decode("utf-8", errors="replace"))[-8192:]
+                                early_failure = physical_xcode_readiness_failure(recent)
+                            if time.monotonic() - start > 1800:
+                                early_failure = "Physical Xcode phase exceeded 30-minute bound"
                             if early_failure:
                                 stop_owned_process_group(process)
                                 break
-                        time.sleep(0.25)
-                    # Read the final bytes even when Xcode exited between polls.
-                    recent = (recent + observer.read().decode("utf-8", errors="replace"))[-8192:]
-                    early_failure = early_failure or physical_xcode_readiness_failure(recent)
-                exit_code = process.wait()
+                            time.sleep(0.25)
+                        recent = (recent + observer.read().decode("utf-8", errors="replace"))[-8192:]
+                        early_failure = early_failure or physical_xcode_readiness_failure(recent)
+                    exit_code = process.wait()
+                finally:
+                    stop_owned_process_group(process)
             else:
                 result = subprocess.run(cmd, cwd=cwd, env=env, stdout=output,
                                         stderr=subprocess.STDOUT, check=False)
@@ -440,6 +452,41 @@ def lock_resources(directory: Path, resources: list[str]):
             handle.close()
 
 
+@contextlib.contextmanager
+def verification_scratch(workspace: Path):
+    scratch = Path(tempfile.mkdtemp(prefix=".myram-native-verify-", dir=workspace))
+    try:
+        yield scratch
+    finally:
+        if any((scratch / name).exists() for name in ("MyRAM-iOS", "NearbySyncCore")):
+            print(f"Preserved verification scratch: {scratch}", file=sys.stderr, flush=True)
+        else:
+            shutil.rmtree(scratch)
+
+
+def worktree_state(path: Path) -> tuple[str, str]:
+    return (run_output("git", "-C", str(path), "status", "--porcelain=v1",
+                       "--untracked-files=all", "--ignored"),
+            run_output("git", "-C", str(path), "diff", "--binary", "HEAD"))
+
+
+def remove_verified_worktree(repo: Path, path: Path, expected: tuple[str, str]) -> None:
+    require(worktree_state(path) == expected, f"Unexpected worktree changes; preserving {path}")
+    if expected != ("", ""):
+        require(not run_output("git", "-C", str(path), "diff", "--cached", "--name-only")
+                and all(line.startswith("M ") or line.startswith(" M ")
+                        for line in expected[0].splitlines()),
+                f"Unexpected staged/untracked/ignored content; preserving {path}")
+        changed = run_output("git", "-C", str(path), "diff", "--name-only").splitlines()
+        require(bool(changed), "Missing generated profile changes")
+        run_output("git", "-C", str(path), "restore", "--source=HEAD", "--worktree", "--", *changed)
+    require(worktree_state(path) == ("", ""), f"Worktree not clean; preserving {path}")
+    run_output("git", "-C", str(repo), "worktree", "remove", str(path))
+    require(not path.exists() and f"worktree {path}" not in run_output(
+        "git", "-C", str(repo), "worktree", "list", "--porcelain").splitlines(),
+        f"Worktree cleanup was not verified: {path}")
+
+
 def xcode_phase(evidence: Evidence, root: Path, scratch: Path, suite: str,
                 simulator: str | None, selectors: list[str], env: dict[str, str]) -> None:
     target = SUITE_TARGETS[suite]
@@ -550,9 +597,169 @@ def physical_phase(evidence: Evidence, root: Path, scratch: Path,
     print("PASS: MYR371 native iPhone connection and Mac reconnect lifecycle", flush=True)
 
 
+def sync_events(log: str, token: str, candidate: str, pid: int) -> list[dict]:
+    events = []
+    for line in log.splitlines():
+        if not line.startswith("MYRAM_PHYSICAL_SYNC "):
+            continue
+        item = json.loads(line.removeprefix("MYRAM_PHYSICAL_SYNC "))
+        require(isinstance(item, dict) and item.get("token") == token
+                and item.get("candidate") == candidate and item.get("pid") == str(pid),
+                "Physical sync event identity mismatch")
+        require(item.get("event") != "failed", "Mac physical sync failed: " + str(item.get("reason")))
+        events.append(item)
+    return events
+
+
+def assert_mac_sync_drained(event: dict, *, offline: bool = False) -> None:
+    lines = set(event.get("diagnostics", "").splitlines())
+    required = {"unsent_count=0", "pending_incoming_count=0",
+                "pending_local_obligation_count=0", "pending_incoming_transport_count=0",
+                "processing_incoming=false"}
+    if offline:
+        required.add("mc_session_connected_count=0")
+    require(required <= lines, "Mac durable sync queues or offline restoration not verified")
+
+
+def assert_sync_roundtrip(events: list[dict], token: str) -> None:
+    expected = [
+        ("seed-received", "A", ""),
+        ("mac-title-saved", "B", ""),
+        ("iphone-title-received", "C", ""),
+        ("mac-combined-saved", "D", " Mac"),
+        ("iphone-combined-received", "E", " Mac iPhone"),
+        ("drained", "E", " Mac iPhone"),
+    ]
+    require([e.get("event") for e in events] == ["ready"] + [e[0] for e in expected],
+            "Mac physical sync phases missing, duplicated, or out of order")
+    for item, (_, title, suffix) in zip(events[1:], expected):
+        require(item.get("title") == f"Sync {token} {title}"
+                and item.get("body") == f"Sync {token} body{suffix}",
+                "Mac physical sync state differs from the unique fixture")
+    assert_mac_sync_drained(events[-1])
+
+
+def assert_sync_bundle(app: Path, bundle: str, candidate: str, *, mac: bool) -> None:
+    info_path = app / ("Contents/Info.plist" if mac else "Info.plist")
+    require(info_path.is_file(), "Signed physical sync app not built")
+    with info_path.open("rb") as source:
+        info = plistlib.load(source)
+    require(info.get("CFBundleIdentifier") == bundle
+            and info.get("MyRAMVerificationCandidateSHA") == candidate
+            and info.get("NSBonjourServices") == [SYNC_SERVICE]
+            and info.get("MyRAMVerificationTransportOnly", False) is False,
+            "Physical sync app identity is not the exact isolated application-sync candidate")
+
+
+@contextlib.contextmanager
+def sync_mac_process(evidence: Evidence, executable: Path, root: Path,
+                     env: dict[str, str], token: str, phase: str):
+    log = evidence.raw / f"physical-sync-mac-{phase}.log"
+    launch_env = dict(env, MYRAM_PHYSICAL_SYNC_TOKEN=token,
+                      MYRAM_PHYSICAL_SYNC_CANDIDATE=evidence.sha, MYRAM_PHYSICAL_SYNC_PHASE=phase)
+    with log.open("xb") as output:
+        process = subprocess.Popen([str(executable)], cwd=root, env=launch_env,
+                                   stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
+                                   start_new_session=True)
+        try:
+            (evidence.raw / f"physical-sync-mac-{phase}-identity.json").write_text(
+                json.dumps({"pid": process.pid, "sha": evidence.sha,
+                            "executable_sha256": sha_file(executable), "bundle_id": SYNC_MAC_ID,
+                            "token": token, "phase": phase}) + "\n", encoding="utf-8")
+            yield process, log
+        finally:
+            stop_owned_process_group(process)
+            output.flush()
+            os.fsync(output.fileno())
+
+
+def wait_sync_event(process: subprocess.Popen, log: Path, token: str,
+                    candidate: str, event: str, seconds: int) -> list[dict]:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        require(process.poll() is None, "Isolated Mac sync app exited")
+        # A concurrent writer can leave a partial final line. Never interpret it
+        # as an event until the native producer writes the terminating newline.
+        contents = log.read_text(encoding="utf-8", errors="replace")
+        complete = contents[:contents.rfind("\n") + 1]
+        events = sync_events(complete, token, candidate, process.pid)
+        if any(e.get("event") == event for e in events):
+            return events
+        time.sleep(0.25)
+    raise VerificationError("Timed out waiting for native Mac physical sync event: " + event)
+
+
+def physical_sync_phase(evidence: Evidence, root: Path, scratch: Path,
+                        iphone: str, env: dict[str, str]) -> None:
+    # Never start a second process against the same persistent Test Host store.
+    check_running = ('import AppKit; import Darwin; exit(NSRunningApplication.'
+                     'runningApplications(withBundleIdentifier: "' + SYNC_MAC_ID + '").isEmpty ? 0 : 1)')
+    evidence.run("physical-sync-existing-host-preflight", ["xcrun", "swift", "-e", check_running], env=env)
+    derived = scratch / "PhysicalSyncDerivedData"
+    common = ["xcodebuild", "-project", "MyRAM.xcodeproj", "-configuration", "Debug",
+              "-derivedDataPath", str(derived), "-parallel-testing-enabled", "NO"]
+    mobile = common + ["-scheme", "MyRAM", "-destination", f"platform=iOS,id={iphone}"]
+    evidence.run("physical-sync-mac-build", common + ["-scheme", "MyRAMMac",
+                 "-destination", "platform=macOS", "build"], cwd=root, env=env)
+    evidence.run("physical-sync-iphone-build", mobile + ["build-for-testing"], cwd=root, env=env,
+                 physical_readiness=True)
+    mac = derived / "Build/Products/Debug/MyRAMMac.app"
+    ios = derived / "Build/Products/Debug-iphoneos/MyRAM.app"
+    for app, bundle, is_mac in ((mac, SYNC_MAC_ID, True), (ios, SYNC_IOS_ID, False)):
+        assert_sync_bundle(app, bundle, evidence.sha, mac=is_mac)
+        evidence.run("physical-sync-" + ("mac" if is_mac else "iphone") + "-signature",
+                     ["codesign", "--verify", "--strict", "--deep", str(app)], env=env)
+    executable = mac / "Contents/MacOS/MyRAMMac"
+    require(executable.is_file(), "Physical sync Mac executable missing")
+    token = uuid.uuid4().hex
+    result = evidence.raw / "physical-sync-iphone.xcresult"
+    evidence.run("physical-sync-exclusive-launch-preflight", ["xcrun", "swift", "-e", check_running], env=env)
+    with sync_mac_process(evidence, executable, root, env, token, "roundtrip") as (process, log):
+        events = wait_sync_event(process, log, token, evidence.sha, "ready", 90)
+        require(len(events) == 1, "Unexpected Mac sync activity before phone test")
+        device = str(uuid.UUID(events[0]["device"])).upper()
+        pair = f"{evidence.sha}|{evidence.sha}|{device}"
+        test_env = dict(env, TEST_RUNNER_MYRAM_PHYSICAL_SYNC_TOKEN=token,
+                        TEST_RUNNER_MYRAM_PHYSICAL_SYNC_PAIR=pair)
+        evidence.run("physical-sync-iphone", mobile + ["-resultBundlePath", str(result),
+                     "-only-testing:" + SYNC_TEST, "test-without-building"], cwd=root,
+                     env=test_env, physical_readiness=True)
+        assert_sync_roundtrip(wait_sync_event(process, log, token, evidence.sha, "drained", 180), token)
+    def require_native_pass(path: Path, name: str) -> None:
+        summary = run_output("xcrun", "xcresulttool", "get", "test-results", "summary", "--path", str(path))
+        counts = validate_summary(summary)
+        require(counts["total"] == counts["passed"] == 1 and counts["skipped"] == 0,
+                "Physical sync requires exactly one passing native XCUITest per phase")
+        (evidence.raw / f"{name}-summary.json").write_text(summary + "\n", encoding="utf-8")
+
+    require_native_pass(result, "physical-sync-iphone")
+    # No Mac Test Host may be running while the phone proves local restoration.
+    evidence.run("physical-sync-offline-iphone-preflight", ["xcrun", "swift", "-e", check_running], env=env)
+    restore_result = evidence.raw / "physical-sync-iphone-restore.xcresult"
+    evidence.run("physical-sync-iphone-restore", mobile + ["-resultBundlePath", str(restore_result),
+                 "-only-testing:" + SYNC_RESTORE_TEST, "test-without-building"], cwd=root,
+                 env=dict(env, TEST_RUNNER_MYRAM_PHYSICAL_SYNC_RESTORE_TOKEN=token),
+                 physical_readiness=True)
+    require_native_pass(restore_result, "physical-sync-iphone-restore")
+    evidence.run("physical-sync-offline-mac-preflight", ["xcrun", "swift", "-e", check_running], env=env)
+    with sync_mac_process(evidence, executable, root, env, token, "restore") as (process, log):
+        restored = wait_sync_event(process, log, token, evidence.sha, "restored", 90)
+        require(len(restored) == 1 and restored[0].get("title") == f"Sync {token} E"
+                and restored[0].get("body") == f"Sync {token} body Mac iPhone",
+                "Fresh Mac process did not restore exact final fixture")
+        assert_mac_sync_drained(restored[0], offline=True)
+        for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+            marker = "MYR233_TRANSPORT "
+            if marker in line:
+                item = json.loads(line.split(marker, 1)[1])
+                require(not (item.get("event") == "session.state" and item.get("detail") == "state=2"),
+                        "Mac restoration saw a remote connection")
+    print("PASS: bidirectional title/body sync, durable queues and both offline app restarts", flush=True)
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run MyRAM native tests against clean HEAD in isolated Verification")
-    parser.add_argument("suite", choices=("ui", "ios", "mac", "all", "physical"), nargs="?", default="ui")
+    parser.add_argument("suite", choices=("ui", "ios", "mac", "all", *PHYSICAL_SUITES), nargs="?", default="ui")
     parser.add_argument("--only", action="append", default=[], metavar="TARGET/CLASS[/TEST]",
                         help="Repeatable exact Xcode test selector for a single suite")
     parser.add_argument("--simulator", metavar="EXISTING-UDID", help="Use this existing iPhone Simulator UUID")
@@ -562,8 +769,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
-    if args.suite == "physical":
-        require(not args.only and not args.simulator, "Physical MYR371 uses its dedicated native test; --only/--simulator are forbidden")
+    if args.suite in PHYSICAL_SUITES:
+        require(not args.only and not args.simulator, "Physical modes use dedicated native tests; --only/--simulator are forbidden")
     else:
         require(not args.iphone_udid, "--iphone-udid requires the physical suite")
         validate_only(args.suite, args.only)
@@ -585,7 +792,8 @@ def main(argv: list[str] | None = None) -> int:
         xcode_version = run_output("xcodebuild", "-version")
         run_output("xcrun", "--find", "xcresulttool")
         print(f"candidate_sha={sha}\nnearby_sha={near_sha}\njava_home={java_home}\n{xcode_version}", flush=True)
-        profile = PHYSICAL_PROFILE if args.suite == "physical" else PROFILE
+        profile = (SYNC_PROFILE if args.suite == "physical-sync" else
+                   PHYSICAL_PROFILE if args.suite == "physical" else PROFILE)
         simid = None
         booted = True
         if args.suite in ("ui", "ios", "all"):
@@ -597,15 +805,15 @@ def main(argv: list[str] | None = None) -> int:
         evidence = Evidence(authority / "MyRAM" / "AutomatedVerification", sha, near_sha, args.suite)
         (evidence.raw / "execution.json").write_text(json.dumps({"sha": sha, "nearby": near_sha,
                        "profile": profile, "simulator": simid, "xcode": xcode_version}, indent=2) + "\n", encoding="utf-8")
-        resources = (["sim-" + simid] if simid else []) + (["mac-profile"] if args.suite in ("mac", "all", "physical") else [])
-        if args.suite == "physical":
+        resources = (["sim-" + simid] if simid else []) + (["mac-profile"] if args.suite in ("mac", "all", *PHYSICAL_SUITES) else [])
+        if args.suite in PHYSICAL_SUITES:
             resources.append("physical-iphone")
         with lock_resources(evidence.path.parent / ".locks", resources):
-            with tempfile.TemporaryDirectory(prefix=".myram-native-verify-", dir=repo.parent) as directory:
-                scratch = Path(directory)
+            with verification_scratch(repo.parent) as scratch:
                 ios_worktree = scratch / "MyRAM-iOS"
                 nearby_worktree = scratch / "NearbySyncCore"
                 have_ios, have_nearby = False, False
+                generated_state = ("", "")
                 try:
                     evidence.run("worktree-myram", ["git", "-C", str(repo), "worktree", "add", "--detach",
                                                   str(ios_worktree), sha])
@@ -627,16 +835,24 @@ def main(argv: list[str] | None = None) -> int:
                         profile_args.append("--transport-only")
                     evidence.run("verification-profile", profile_args, cwd=ios_worktree, env=env)
                     isolated = json.loads((evidence.raw / "isolation.json").read_text(encoding="utf-8"))
-                    expected_id = PHYSICAL_IOS_ID if args.suite == "physical" else IDENTITY
+                    require(set(run_output("git", "-C", str(ios_worktree), "diff", "--name-only").splitlines())
+                            == set(isolated["generated_changed_files"]),
+                            "Generated profile change scope differs from its audit")
+                    generated_state = worktree_state(ios_worktree)
+                    expected_id = (SYNC_IOS_ID if args.suite == "physical-sync" else
+                                   PHYSICAL_IOS_ID if args.suite == "physical" else IDENTITY)
                     require(isolated.get("source_candidate_sha") == sha and isolated.get("profile") == profile
                             and isolated.get("application_identifiers", {}).get("verification_ios") == expected_id
-                            and (args.suite != "physical" or isolated.get("transport_mode") == "transportOnly"),
+                            and (args.suite != "physical" or isolated.get("transport_mode") == "transportOnly")
+                            and (args.suite != "physical-sync" or (
+                                isolated.get("transport_mode") == "application"
+                                and isolated.get("application_identifiers", {}).get("verification_macos") == SYNC_MAC_ID)),
                             "Disposable Verification identity audit did not match exact candidate")
                     if simid is not None:
                         if not booted:
                             evidence.run("boot-existing-simulator", ["xcrun", "simctl", "boot", simid], env=env)
                         evidence.run("simulator-ready", ["xcrun", "simctl", "bootstatus", simid, "-b"], env=env)
-                    if args.suite == "physical":
+                    if args.suite in PHYSICAL_SUITES:
                         evidence.run("physical-device-discovery", [
                             "xcodebuild", "-project", "MyRAM.xcodeproj",
                             "-scheme", "MyRAM", "-showdestinations"
@@ -646,12 +862,16 @@ def main(argv: list[str] | None = None) -> int:
                             args.iphone_udid or os.environ.get(PHYSICAL_DEVICE_ENV)
                         )
                         (evidence.raw / "physical-device-identity.json").write_text(
-                            json.dumps({"iphone": iphone, "mac_bundle_id": PHYSICAL_MAC_ID,
-                                        "iphone_bundle_id": PHYSICAL_IOS_ID}) + "\n", encoding="utf-8"
+                            json.dumps({"iphone": iphone,
+                                        "mac_bundle_id": SYNC_MAC_ID if args.suite == "physical-sync" else PHYSICAL_MAC_ID,
+                                        "iphone_bundle_id": expected_id}) + "\n", encoding="utf-8"
                         )
                         print("PHYSICAL_AUTHORIZATION=Keep the iPhone unlocked during Xcode UI-test initialization. Approve required system prompts yourself; no authentication is automated.", flush=True)
-                        physical_phase(evidence, ios_worktree, scratch, iphone, env)
-                    suites = ([] if args.suite == "physical" else
+                        if args.suite == "physical-sync":
+                            physical_sync_phase(evidence, ios_worktree, scratch, iphone, env)
+                        else:
+                            physical_phase(evidence, ios_worktree, scratch, iphone, env)
+                    suites = ([] if args.suite in PHYSICAL_SUITES else
                               (["mac", "ios", "ui"] if args.suite == "all" else [args.suite]))
                     for suite in suites:
                         require(run_output("git", "-C", str(ios_worktree), "rev-parse", "HEAD") == sha,
@@ -664,17 +884,21 @@ def main(argv: list[str] | None = None) -> int:
                         xcode_release(evidence, ios_worktree, scratch, "mac", env)
                         xcode_release(evidence, ios_worktree, scratch, "ios", env)
                     require(current_candidate(repo) == sha, "Primary source state drifted during verification")
-                    status = "PASS"
                 finally:
-                    # Worktree removal is scoped to paths created by this invocation, never active checkouts.
-                    if have_nearby:
-                        subprocess.run(["git", "-C", str(nearby), "worktree", "remove", "--force",
-                                        str(nearby_worktree)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    if have_ios:
-                        subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force",
-                                        str(ios_worktree)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    cleanup_failures = []
+                    for exists, owner, path, expected in (
+                        (have_nearby, nearby, nearby_worktree, ("", "")),
+                        (have_ios, repo, ios_worktree, generated_state),
+                    ):
+                        if exists:
+                            try:
+                                remove_verified_worktree(owner, path, expected)
+                            except Exception as error:
+                                cleanup_failures.append(str(error))
+                    require(not cleanup_failures, "; ".join(cleanup_failures))
+        status = "PASS"
         return 0
-    except (VerificationError, OSError, ValueError, json.JSONDecodeError) as error:
+    except (VerificationError, OSError, ValueError, KeyError, KeyboardInterrupt) as error:
         reason = str(error)
         print(f"ERROR: {reason}", file=sys.stderr, flush=True)
         return 1

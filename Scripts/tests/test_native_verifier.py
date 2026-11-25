@@ -30,6 +30,83 @@ class NativeVerifierTests(unittest.TestCase):
         with self.assertRaisesRegex(v.VerificationError, "requires the physical suite"):
             v.main(["ui", "--iphone-udid", "00008110-00001A1234567890"])
 
+    def test_physical_sync_cli_has_its_own_fixed_native_mode(self):
+        self.assertEqual(v.parse_args(["physical-sync"]).suite, "physical-sync")
+        with self.assertRaisesRegex(v.VerificationError, "forbidden"):
+            v.main(["physical-sync", "--only", "MyRAMUITests/Any"])
+        with self.assertRaisesRegex(v.VerificationError, "forbidden"):
+            v.main(["physical-sync", "--simulator", "fake"])
+
+    def test_physical_sync_rejects_wrong_run_identity_missing_phases_and_queue_work(self):
+        token, candidate, pid = "a" * 32, "b" * 40, 123
+        def event(name, title=None, suffix=""):
+            row = dict(event=name, token=token, candidate=candidate, pid=str(pid))
+            if title:
+                row.update(title=f"Sync {token} {title}", body=f"Sync {token} body{suffix}")
+            return row
+        events = [event("ready"), event("seed-received", "A"), event("mac-title-saved", "B"),
+                  event("iphone-title-received", "C"), event("mac-combined-saved", "D", " Mac"),
+                  event("iphone-combined-received", "E", " Mac iPhone"),
+                  event("drained", "E", " Mac iPhone")]
+        events[-1]["diagnostics"] = "\n".join(["unsent_count=0", "pending_incoming_count=0",
+            "pending_local_obligation_count=0", "pending_incoming_transport_count=0", "processing_incoming=false"])
+        log = "\n".join("MYRAM_PHYSICAL_SYNC " + json.dumps(e) for e in events)
+        v.assert_sync_roundtrip(v.sync_events(log, token, candidate, pid), token)
+        for bad in (events[:-1], events[:3] + events[4:], events + [events[-1]],
+                    events[:-1] + [dict(events[-1], diagnostics="unsent_count=1")],
+                    events[:-1] + [dict(events[-1], body="different")]):
+            with self.assertRaises(v.VerificationError):
+                v.assert_sync_roundtrip(bad, token)
+        with self.assertRaises(v.VerificationError):
+            v.sync_events(log, token, candidate, pid + 1)
+        with self.assertRaises(v.VerificationError):
+            v.sync_events(log, "c" * 32, candidate, pid)
+        with self.assertRaises(v.VerificationError):
+            v.assert_mac_sync_drained(events[-1], offline=True)
+        v.assert_mac_sync_drained(dict(events[-1], diagnostics=events[-1]["diagnostics"]
+            + "\nmc_session_connected_count=0"), offline=True)
+
+    def test_physical_sync_bundle_identity_rejects_transport_and_stale_candidates(self):
+        import plistlib
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory)
+            values = dict(CFBundleIdentifier=v.SYNC_IOS_ID, MyRAMVerificationCandidateSHA="a"*40,
+                          NSBonjourServices=[v.SYNC_SERVICE])
+            path = app / "Info.plist"
+            path.write_bytes(plistlib.dumps(values))
+            v.assert_sync_bundle(app, v.SYNC_IOS_ID, "a"*40, mac=False)
+            for wrong in (dict(values, MyRAMVerificationCandidateSHA="b"*40),
+                          dict(values, MyRAMVerificationTransportOnly=True),
+                          dict(values, CFBundleIdentifier="com.northsignalstudio.myram")):
+                path.write_bytes(plistlib.dumps(wrong))
+                with self.assertRaises(v.VerificationError):
+                    v.assert_sync_bundle(app, v.SYNC_IOS_ID, "a"*40, mac=False)
+
+    def test_worktree_cleanup_removes_only_audited_changes_and_preserves_unknown_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            repo, worktree = base / "repo", base / "worktree"
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            (repo / "profile").write_text("original\n")
+            (repo / ".gitignore").write_text("ignored\n")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(repo), "-c", "user.name=fixture",
+                            "-c", "user.email=fixture@example.org", "commit", "-qm", "base"], check=True)
+            subprocess.run(["git", "-C", str(repo), "worktree", "add", "--detach", str(worktree)], check=True)
+            (worktree / "profile").write_text("generated\n")
+            expected = v.worktree_state(worktree)
+            for name in ("untracked", "ignored"):
+                extra = worktree / name
+                extra.write_text("preserve\n")
+                with self.assertRaisesRegex(v.VerificationError, "preserving"):
+                    v.remove_verified_worktree(repo, worktree, expected)
+                self.assertEqual(extra.read_text(), "preserve\n")
+                self.assertEqual((worktree / "profile").read_text(), "generated\n")
+                extra.unlink()
+            v.remove_verified_worktree(repo, worktree, expected)
+            self.assertFalse(worktree.exists())
+            self.assertEqual((repo / "profile").read_text(), "original\n")
+
     def test_default_mode_is_ui(self):
         self.assertEqual(v.parse_args([]).suite, "ui")
         self.assertEqual(v.parse_args(["all"]).suite, "all")
