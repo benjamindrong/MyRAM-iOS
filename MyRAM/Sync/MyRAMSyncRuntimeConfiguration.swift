@@ -5,6 +5,8 @@ import CryptoKit
 /// An immutable diagnostic mode belonging only to the isolated Verification apps.
 /// Defaults/preferences and launch arguments cannot enable it in a production app.
 struct MyRAMSyncRuntimeConfiguration {
+    static let candidateKey = "MyRAMVerificationCandidateSHA"
+    static let candidateDiscoveryKey = "candidate-sha"
     static let transportOnlyKey = "MyRAMVerificationTransportOnly"
     static let offlineRestoreKey = "MyRAMVerificationOfflineRestore"
     // A bundle may advertise only the service assigned to its registered verification profile.
@@ -86,6 +88,11 @@ struct MyRAMSyncRuntimeConfiguration {
         } catch {
             preconditionFailure("Invalid Verification transport configuration: \(error)")
         }
+    }
+
+    func testHostCandidate(bundle: Bundle = .main) -> String? {
+        guard verificationServiceType == "myr227-test" else { return nil }
+        return bundle.object(forInfoDictionaryKey: Self.candidateKey) as? String
     }
 
     func requireApplicationSync() throws {

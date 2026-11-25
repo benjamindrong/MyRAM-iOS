@@ -13,6 +13,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 
 BRANCH = "MYR-225-Mac-editor-visual-parity-title-editing-and-stable-zoom-geometry"
 REPOSITORY = "benjamindrong/MyRAM-iOS"
@@ -20,6 +21,7 @@ BLACKSMITH_SHA = "4109afce20c80fa5cc0ca67b799f36dd521268be"
 IOS_BUNDLE = "com.northsignalstudio.myram.myr227.test.verification"
 MAC_BUNDLE = "com.northsignalstudio.myram.mac.myr227.test.verification"
 PROFILE = "myr227test"
+CANDIDATE_KEY = "MyRAMVerificationCandidateSHA"
 TEST = "MyRAMUITests/MyRAMUITests/testMYR225PhysicalRetainedMacTitleArrivesAndSurvivesRestart"
 DEFAULT_BATCH = "527E25AB-87D4-45DB-9504-FDB2A2329BA3"
 
@@ -94,6 +96,12 @@ def snapshot_queue(path, batch_id, copy=None):
     return batch_id.upper() in ids, len(ids), hashlib.sha256(raw).hexdigest()
 
 
+def require_candidate_bundle(info_plist, bundle_id, candidate):
+    info = plistlib.loads(info_plist.read_bytes())
+    if (info.get("CFBundleIdentifier"), info.get(CANDIDATE_KEY)) != (bundle_id, candidate):
+        raise RuntimeError(f"{info_plist} does not identify the requested Test Host candidate")
+
+
 def physical_iphone(worktree):
     result = run(["xcodebuild", "-project", "MyRAM.xcodeproj", "-scheme", "MyRAM", "-showdestinations"], cwd=worktree)
     output = result.stdout.decode(errors="replace").split("Ineligible destinations")[0]
@@ -141,19 +149,21 @@ def main():
     repo = Path(args.repo).resolve()
     evidence = Path("/Users/Shared/Dev/Evidence")
     volume = Path("/Volumes/DevArchive")
-    if not os.path.ismount(volume) or not evidence.exists():
-        raise RuntimeError("External DevArchive / canonical Evidence is not mounted")
-    if not str(evidence.resolve()).startswith(str(volume.resolve()) + "/"):
-        raise RuntimeError("Canonical Evidence must resolve onto the mounted DevArchive")
+    disk = plistlib.loads(run(["diskutil", "info", "-plist", str(volume)]).stdout)
+    if (not os.path.ismount(volume)
+            or evidence.resolve() != volume / "Evidence"
+            or disk.get("MountPoint") != str(volume)
+            or disk.get("VolumeUUID", "").upper() != "0A0B33E2-61C1-4767-8FA3-9124DF44B70B"
+            or disk.get("Internal") is not False
+            or disk.get("WritableVolume") is not True
+            or not os.access(evidence / "MyRAM" / "MYR-225", os.W_OK)):
+        raise RuntimeError("Canonical Evidence must resolve to the mounted, writable external DevArchive")
     if REPOSITORY.lower() not in git(repo, "remote", "get-url", "origin").lower():
         # HTTPS and SSH remote URLs both identify the exact same canonical repository.
         remote = git(repo, "remote", "get-url", "origin")
         if "benjamindrong/MyRAM-iOS" not in remote:
             raise RuntimeError("Repository origin is not benjamindrong/MyRAM-iOS")
     mac_app = Path.home() / "Applications" / "MyRAM MYR-227 Test Host.app"
-    with (mac_app / "Contents" / "Info.plist").open("rb") as source:
-        if plistlib.load(source).get("CFBundleIdentifier") != MAC_BUNDLE:
-            raise RuntimeError("Existing Mac app does not have the registered MYR-227 Test Host identity")
     mac_queue = Path.home() / "Library" / "Application Support" / "MyRAM MYR227 Test Host" / "mac-unsent-batch-queue.json"
     if not mac_queue.is_file():
         raise RuntimeError("Existing Mac Test Host durable outgoing queue is missing")
@@ -170,6 +180,13 @@ def main():
     except RuntimeError:
         git(repo, "fetch", "origin", BRANCH)
     git(repo, "cat-file", "-e", f"{candidate}^{{commit}}")
+    require_candidate_bundle(mac_app / "Contents" / "Info.plist", MAC_BUNDLE, candidate)
+    run(["codesign", "--verify", "--deep", "--strict", str(mac_app)])
+    mac_origin = next(
+        batch["originDeviceID"] for batch in json.loads(mac_queue.read_bytes())["batches"]
+        if uuid.UUID(batch["id"]) == uuid.UUID(args.batch_id)
+    )
+    expected_pair = f"{candidate}|{candidate}|{str(uuid.UUID(mac_origin)).upper()}"
     run_id = "MYR225-PHYSICAL-TITLE-UI-" + dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     run_dir = evidence / "MyRAM" / "MYR-225" / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -219,9 +236,7 @@ def main():
         print("RUN: physical iPhone signed build-for-testing (external DerivedData)", flush=True)
         run(common + ["build-for-testing"], cwd=worktree, log=run_dir / "raw" / "xcode-build.log")
         built_app = derived / "Build" / "Products" / "Debug-iphoneos" / "MyRAM.app"
-        with (built_app / "Info.plist").open("rb") as source:
-            if plistlib.load(source).get("CFBundleIdentifier") != IOS_BUNDLE:
-                raise RuntimeError("Built iPhone app identity does not match MYR-227 Test Host")
+        require_candidate_bundle(built_app / "Info.plist", IOS_BUNDLE, candidate)
         run(["codesign", "--verify", "--deep", "--strict", str(built_app)])
         pending, _, _ = snapshot_queue(mac_queue, args.batch_id)
         if not pending:
@@ -229,6 +244,7 @@ def main():
 
         env = os.environ.copy()
         env.update({"TEST_RUNNER_MYR225_PHYSICAL_TITLE_SYNC": "1",
+                    "TEST_RUNNER_MYR225_EXPECTED_CONNECTED_PAIR": expected_pair,
                     "TEST_RUNNER_MYR225_PREVIOUS_TITLE": args.previous_title,
                     "TEST_RUNNER_MYR225_EXPECTED_TITLE": args.expected_title})
         result_path = run_dir / "raw" / "physical-title.xcresult"

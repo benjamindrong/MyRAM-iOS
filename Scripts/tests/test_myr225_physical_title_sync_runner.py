@@ -2,9 +2,11 @@
 
 import importlib.util
 from pathlib import Path
+import plistlib
 import signal
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -17,6 +19,21 @@ SPEC.loader.exec_module(MODULE)
 
 
 class MYR225PhysicalTitleSyncRunnerTests(unittest.TestCase):
+    def test_matching_bundle_without_matching_candidate_is_rejected(self):
+        candidate = "b" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            info = Path(directory) / "Info.plist"
+            for stamp in (None, "a" * 40, candidate):
+                values = {"CFBundleIdentifier": MODULE.MAC_BUNDLE}
+                if stamp is not None:
+                    values[MODULE.CANDIDATE_KEY] = stamp
+                info.write_bytes(plistlib.dumps(values))
+                if stamp == candidate:
+                    MODULE.require_candidate_bundle(info, MODULE.MAC_BUNDLE, candidate)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "requested Test Host candidate"):
+                        MODULE.require_candidate_bundle(info, MODULE.MAC_BUNDLE, candidate)
+
     def test_child_cannot_read_operator_terminal_or_standard_input(self):
         probe = (
             "import os, sys\n"

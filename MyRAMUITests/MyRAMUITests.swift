@@ -54,6 +54,19 @@ final class MyRAMUITests: XCTestCase {
         )
         app.activate()
 
+        let expectedPair = try XCTUnwrap(env["MYR225_EXPECTED_CONNECTED_PAIR"])
+        let syncStatus = findElement("sync-status-indicator", in: app)
+        let connectedPair = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND value == %@", expectedPair),
+            object: syncStatus
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [connectedPair], timeout: 30), .completed,
+                       "The iPhone and retained batch's Mac must be connected on the exact candidate")
+        let pairEvidence = XCTAttachment(string: expectedPair)
+        pairEvidence.name = "MYR225-exact-connected-pair"
+        pairEvidence.lifetime = .keepAlways
+        add(pairEvidence)
+
         let selectedTitle = app.buttons["edit-note-title"]
         if !selectedTitle.waitForExistence(timeout: 8)
             || (!selectedTitle.label.contains(previousTitle)

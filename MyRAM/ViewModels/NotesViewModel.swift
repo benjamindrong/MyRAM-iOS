@@ -225,6 +225,8 @@ final class NotesViewModel: ObservableObject {
     private var didCompleteStartupModelInitialization = false
     private var syncBatchReadyTask: Task<Void, Never>?
     private var pendingConvergenceResumeTask: Task<Void, Never>?
+    private var convergenceResumeRequested = false
+    private var incomingConvergenceStatus = "notRun"
     private var nextSyncBatchCaptureID: UInt64 = 0
     private var syncBatchCaptureTasks: [UInt64: Task<Void, Never>] = [:]
     private lazy var editorLifecyclePersistence = NoteEditorLifecyclePersistenceCore(
@@ -317,7 +319,7 @@ final class NotesViewModel: ObservableObject {
             await self?.advanceSyncBaselines(forAcknowledgedLocalChanges: changes)
         }
         self.syncController?.onBatchReceived = { [weak self] batch in
-            await self?.applyIncomingSyncBatch(batch) ?? .acknowledgementPermitted
+            await self?.applyIncomingSyncBatch(batch) ?? .acknowledgementDeferred
         }
         self.syncController?.onDurablyCaptureIncomingBatch = { [weak self] batch in
             self?.durablyCaptureIncomingBatch(batch) ?? false
@@ -325,6 +327,12 @@ final class NotesViewModel: ObservableObject {
         if let statusController = syncController as? MyRAMSyncConvergenceStatusConfiguring {
             statusController.localConvergencePendingCountProvider = { [weak self] in
                 self?.pendingLocalConvergenceBatches.pendingCount ?? 0
+            }
+            statusController.durableIncomingBatchesProvider = { [weak self] in
+                self?.pendingIncomingBatches.pendingBatches ?? []
+            }
+            statusController.incomingConvergenceStatusProvider = { [weak self] in
+                self?.incomingConvergenceStatus ?? "unavailable"
             }
             statusController.onFlushLocalConvergenceRequested = { [weak self] in
                 await self?.resumePendingConvergencePresentation()
@@ -3094,9 +3102,14 @@ final class NotesViewModel: ObservableObject {
 
     func applyIncomingSyncBatch(_ batch: SyncBatch) async -> SyncConvergenceRemoteBatchDisposition {
         guard (try? SyncBatchAnchoredPayloadPolicy.validateInbound(batch)) != nil else {
-            return .acknowledgementPermitted
+            return .acknowledgementDeferred
         }
         guard !batch.changes.isEmpty else { return .acknowledgementPermitted }
+        guard !isStartupSyncRecoveryPending else {
+            incomingConvergenceStatus = "startupRecoveryPending"
+            return .acknowledgementDeferred
+        }
+        registerRetainedIncomingAcknowledgementRoutes()
         let completion = await syncConvergenceRuntime.submitRemoteBatchAwaitingDrainOwnership(batch)
         let outcome = completion.outcome
         await handleConvergenceRuntimeOutcome(outcome)
@@ -3120,7 +3133,6 @@ final class NotesViewModel: ObservableObject {
             return false
         }
         guard !batch.changes.isEmpty else { return true }
-        if pendingIncomingBatches.contains(batch.id) { return true }
         do {
             try pendingIncomingBatches.enqueueIncoming(batch)
             return true
@@ -3245,6 +3257,7 @@ final class NotesViewModel: ObservableObject {
             }
         }
 
+        registerRetainedIncomingAcknowledgementRoutes()
         let outcome = await syncConvergenceRuntime.resumePendingWork()
         await handleConvergenceRuntimeOutcome(outcome)
         switch outcome {
@@ -3402,8 +3415,7 @@ final class NotesViewModel: ObservableObject {
         guard syncController?.applicationSyncEnabled != false else { return }
         switch await durablyAdmitPreparedLocalCollection(collection) {
         case .admitted:
-            let outcome = await syncConvergenceRuntime.resumePendingWork()
-            await handleConvergenceRuntimeOutcome(outcome)
+            await resumePendingConvergencePresentation()
         case .retryableCapacity, .retryablePersistenceFailure:
             syncBatchErrorMessage =
                 "Nearby sync is waiting to durably save the latest local changes."
@@ -3415,18 +3427,29 @@ final class NotesViewModel: ObservableObject {
 
     func resumePendingConvergencePresentationIfNeeded() {
         guard syncController?.applicationSyncEnabled != false else { return }
+        convergenceResumeRequested = true
         guard pendingConvergenceResumeTask == nil else { return }
         pendingConvergenceResumeTask = Task { [weak self] in
-            await self?.resumePendingConvergencePresentation()
-            await MainActor.run {
-                self?.pendingConvergenceResumeTask = nil
+            while !Task.isCancelled, self?.convergenceResumeRequested == true {
+                self?.convergenceResumeRequested = false
+                await self?.resumePendingConvergencePresentation()
             }
+            self?.pendingConvergenceResumeTask = nil
         }
     }
 
+    private func registerRetainedIncomingAcknowledgementRoutes() {
+        (syncController as? MyRAMSyncConvergenceStatusConfiguring)?
+            .registerRetainedIncomingAcknowledgementRoutes()
+    }
+
     private func resumePendingConvergencePresentation() async {
-        guard !isStartupSyncRecoveryPending else { return }
+        guard !isStartupSyncRecoveryPending else {
+            incomingConvergenceStatus = "startupRecoveryPending"
+            return
+        }
         guard syncController?.applicationSyncEnabled != false else { return }
+        registerRetainedIncomingAcknowledgementRoutes()
         let outcome = await syncConvergenceRuntime.resumePendingWork()
         await handleConvergenceRuntimeOutcome(outcome)
     }
@@ -3434,18 +3457,22 @@ final class NotesViewModel: ObservableObject {
     private func handleConvergenceRuntimeOutcome(_ outcome: SyncConvergenceRuntimeOutcome) async {
         switch outcome {
         case .drained:
+            incomingConvergenceStatus = "drained"
             syncBatchErrorMessage = nil
         case .pending:
-            break
+            incomingConvergenceStatus = "postCommitPending"
         case .deferred(let deferred):
+            incomingConvergenceStatus = "deferred:incoming=\(deferred.incoming.count),local=\(deferred.localObligations.count),postCommit=\(deferred.postCommit.count)"
             if let message = Self.syncErrorMessage(for: deferred) {
                 syncBatchErrorMessage = message
             }
         case .quarantined:
+            incomingConvergenceStatus = "quarantined"
             syncBatchErrorMessage = "Pending local sync evidence needs recovery before this note can continue syncing."
         case .alreadyDraining:
             break
         case .blocked(let failure):
+            incomingConvergenceStatus = "blocked:\(failure.kind)"
             syncBatchErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
         }
         await refreshPendingSyncStatusForLocalConvergenceMutation?()

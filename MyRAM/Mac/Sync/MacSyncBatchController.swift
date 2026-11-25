@@ -154,11 +154,11 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             securityIdentity: nil,
             encryptionPreference: .required
         )
+        var discoveryInfo = SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(for: .macResponder)
+        discoveryInfo[MyRAMSyncRuntimeConfiguration.candidateDiscoveryKey] = configuration.testHostCandidate(bundle: configurationBundle)
         let retainedAdvertiser = MCNearbyServiceAdvertiser(
             peer: retainedPeerID,
-            discoveryInfo: SyncBatchPeerCapabilityCodec.productionDiscoveryInfo(
-                for: .macResponder
-            ),
+            discoveryInfo: discoveryInfo,
             serviceType: effectiveServiceType
         )
         let retainedBrowser = MCNearbyServiceBrowser(

@@ -17,6 +17,7 @@ struct SyncStatusIndicator: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityText)
+        .accessibilityValue(syncController.connectedVerificationPair ?? "")
         .accessibilityIdentifier("sync-status-indicator")
     }
 
