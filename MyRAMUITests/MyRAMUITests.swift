@@ -147,25 +147,32 @@ final class MyRAMUITests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter.wait(for: [arrived], timeout: 120), .completed,
                        "Mac title never appeared in the selected iPhone editor")
-        XCTAssertTrue(selectedTitle.label.contains(expectedTitle))
-
-        let receivedImage = XCTAttachment(screenshot: app.screenshot())
-        receivedImage.name = "MYR225-iPhone-title-received"
-        receivedImage.lifetime = .keepAlways
-        add(receivedImage)
+        let receivedTitle = selectedTitle.label
+        XCTAssertTrue(receivedTitle.contains(expectedTitle))
 
         // Confirm the displayed title was durably restored, not merely projected
-        // into a live editor before persistence.
+        // into a live editor before persistence. Image capture is not part of
+        // title acceptance and must not prevent the restart assertion.
         app.terminate()
         app.activate()
         let restoredEditorTitle = app.buttons["edit-note-title"]
         let restoredTitleRow = app.staticTexts[expectedTitle].firstMatch
-        XCTAssertTrue(
-            (restoredEditorTitle.waitForExistence(timeout: 12)
-                && restoredEditorTitle.label.contains(expectedTitle))
-                || restoredTitleRow.waitForExistence(timeout: 12),
-            "The received Mac title did not survive iPhone application restart"
-        )
+        let restoredTitle: String
+        if restoredEditorTitle.waitForExistence(timeout: 12),
+           restoredEditorTitle.label.contains(expectedTitle) {
+            restoredTitle = restoredEditorTitle.label
+        } else {
+            XCTAssertTrue(restoredTitleRow.waitForExistence(timeout: 12),
+                          "The received Mac title did not survive iPhone application restart")
+            restoredTitle = restoredTitleRow.label
+        }
+        XCTAssertTrue(restoredTitle.contains(expectedTitle),
+                      "The received Mac title did not survive iPhone application restart")
+
+        let titleEvidence = XCTAttachment(string: "received=\(receivedTitle)\nrestored=\(restoredTitle)")
+        titleEvidence.name = "MYR225-iPhone-title-received-and-restored"
+        titleEvidence.lifetime = .keepAlways
+        add(titleEvidence)
     }
 
     /// Opt-in physical acceptance against the preserved Verification fixture.
