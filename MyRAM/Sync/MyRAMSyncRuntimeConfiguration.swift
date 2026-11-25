@@ -18,7 +18,9 @@ struct MyRAMSyncRuntimeConfiguration {
         "com.northsignalstudio.myram.myr227.test.verification": "myr227-test",
         "com.northsignalstudio.myram.mac.myr227.test.verification": "myr227-test",
         "com.northsignalstudio.myram.myr371.transport.verification": "myr371-ice",
-        "com.northsignalstudio.myram.mac.myr371.transport.verification": "myr371-ice"
+        "com.northsignalstudio.myram.mac.myr371.transport.verification": "myr371-ice",
+        "com.northsignalstudio.myram.automated.verification": "myram-autotest",
+        "com.northsignalstudio.myram.mac.automated.verification": "myram-autotest"
     ]
     static let verificationBundleIDs = Set(verificationServicesByBundleID.keys)
 
@@ -42,6 +44,13 @@ struct MyRAMSyncRuntimeConfiguration {
 
     init(bundleIdentifier: String?, bonjourServices: [String]?, transportOnlyValue: Any?, offlineRestoreValue: Any? = nil) throws {
         let registeredService = Self.verificationServicesByBundleID[bundleIdentifier ?? ""]
+        // Unknown MyRAM Verification bundles must never silently use production networking.
+        if let bundleIdentifier,
+           bundleIdentifier.hasPrefix("com.northsignalstudio.myram."),
+           bundleIdentifier.hasSuffix(".verification"),
+           registeredService == nil {
+            throw ConfigurationError.invalidVerificationNamespace
+        }
         // An incomplete verification identity cannot silently use production networking.
         if let registeredService, bonjourServices != ["_\(registeredService)._tcp"] {
             throw ConfigurationError.invalidVerificationNamespace

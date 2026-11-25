@@ -35,6 +35,63 @@ final class MyRAMUITests: XCTestCase {
         XCTAssertTrue(app.buttons["ios-sync-copy-diagnostics"].exists)
     }
 
+    /// Native XCUITest over a real iPhone connection to a running MYR371 Mac app.
+    /// Only the explicitly selected isolated physical test may execute this path.
+    func testMYR371PhysicalTransportPairAndReconnect() throws {
+        guard ProcessInfo.processInfo.environment["MYR371_PHYSICAL_TRANSPORT"] == "1" else {
+            throw XCTSkip("Requires explicitly selected MYR371 physical transport acceptance")
+        }
+
+        let app = XCUIApplication(
+            bundleIdentifier: "com.northsignalstudio.myram.myr371.transport.verification"
+        )
+        app.launch()
+        assertMYR371TransportConnected(in: app)
+
+        // Reconnect must be a fresh process/session, not the first connection
+        // merely staying alive. No app store or production identity is touched.
+        app.terminate()
+        app.launch()
+        assertMYR371TransportConnected(in: app)
+    }
+
+    private func assertMYR371TransportConnected(in app: XCUIApplication) {
+        let status = app.buttons["sync-status-indicator"]
+        XCTAssertTrue(status.waitForExistence(timeout: 20),
+                      "Expected the isolated MYR371 iPhone app to launch")
+        status.tap()
+
+        let manualSync = app.buttons["Manual Sync"]
+        XCTAssertTrue(manualSync.waitForExistence(timeout: Timeout.standard))
+        if !manualSync.isEnabled {
+            let peerActions = app.buttons.matching(NSPredicate(
+                format: "label == %@ OR label == %@", "Pair", "Reconnect"
+            ))
+            XCTAssertTrue(peerActions.firstMatch.waitForExistence(timeout: 25),
+                          "MYR371 Mac peer was not discovered")
+            XCTAssertEqual(peerActions.count, 1,
+                           "Isolated transport must discover exactly one eligible Mac peer")
+            peerActions.firstMatch.tap()
+        }
+
+        let connected = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == YES"),
+            object: manualSync
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [connected], timeout: 45), .completed,
+                       "Actual MCSession did not reach a connected state")
+
+        let diagnostics = app.buttons["ios-sync-readonly-diagnostics"]
+        XCTAssertTrue(diagnostics.waitForExistence(timeout: Timeout.standard))
+        diagnostics.tap()
+        let snapshot = app.staticTexts.matching(NSPredicate(
+            format: "label CONTAINS %@", "session_connected_count=1"
+        )).firstMatch
+        XCTAssertTrue(snapshot.waitForExistence(timeout: Timeout.standard),
+                      "Native transport snapshot did not confirm exactly one connected peer")
+        app.buttons["Close"].tap()
+    }
+
     /// Opt-in physical MYR-225 acceptance. The Xcode runner installs the
     /// candidate Test Host; this test only observes the preserved note UI.
     /// The companion runner independently verifies the Mac's durable dequeue.

@@ -39,9 +39,11 @@ jobs:
         working-directory: MyRAM-iOS
         run: bash Scripts/verify-myram-verification-isolation.sh
 
-      - name: Verify noninteractive physical-test runner safety
+      - name: Run host-independent verification regression suites
         working-directory: MyRAM-iOS
-        run: python3 -m unittest discover -s Scripts/tests -p 'test_myr225_physical_title_sync_runner.py' -v
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s Scripts/tests -p 'test_*.py' -v
 
       - name: Detect documentation-only changes
         id: changes
