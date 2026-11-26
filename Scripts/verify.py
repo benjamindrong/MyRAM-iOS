@@ -621,22 +621,57 @@ def assert_mac_sync_drained(event: dict, *, offline: bool = False) -> None:
     require(required <= lines, "Mac durable sync queues or offline restoration not verified")
 
 
-def assert_sync_roundtrip(events: list[dict], token: str) -> None:
+def valid_sync_source_edit(token: str, body: str) -> bool:
+    combined = f"Sync {token} body Mac"
+    insertion = " iPhone"
+    return (isinstance(body, str) and len(body) == len(combined) + len(insertion)
+            and body.replace(insertion, "") == combined)
+
+
+def assert_sync_roundtrip(events: list[dict], token: str) -> str:
     expected = [
         ("seed-received", "A", ""),
         ("mac-title-saved", "B", ""),
         ("iphone-title-received", "C", ""),
         ("mac-combined-saved", "D", " Mac"),
-        ("iphone-combined-received", "E", " Mac iPhone"),
-        ("drained", "E", " Mac iPhone"),
+        ("iphone-combined-received", "E", None),
+        ("drained", "E", None),
     ]
     require([e.get("event") for e in events] == ["ready"] + [e[0] for e in expected],
             "Mac physical sync phases missing, duplicated, or out of order")
+    final = events[-2].get("body")
+    require(valid_sync_source_edit(token, final), "Mac did not receive exactly one native iPhone insertion")
     for item, (_, title, suffix) in zip(events[1:], expected):
-        require(item.get("title") == f"Sync {token} {title}"
-                and item.get("body") == f"Sync {token} body{suffix}",
+        body = final if suffix is None else f"Sync {token} body{suffix}"
+        require(item.get("title") == f"Sync {token} {title}" and item.get("body") == body,
                 "Mac physical sync state differs from the unique fixture")
     assert_mac_sync_drained(events[-1])
+    return final
+
+
+def read_sync_source_edit(directory: Path, token: str) -> str:
+    # xcresulttool's exported manifest maps native attachment names to files.
+    # Select exactly the one run-bound source observation, never a screenshot,
+    # a Mac projection, or a caller-supplied expectation.
+    manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+    matches = [
+        a for test in manifest for a in test["attachments"]
+        if a["suggestedHumanReadableName"].startswith("physical-sync-source-edit-" + token)
+    ]
+    require(len(matches) == 1, "Missing or ambiguous native iPhone source-edit attachment")
+    filename = matches[0]["exportedFileName"]
+    require(Path(filename).name == filename, "Invalid source attachment filename")
+    path = directory / filename
+    require(path.is_file() and not path.is_symlink(), "Invalid native source attachment")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    require(value.get("token") == token and value.get("title") == f"Sync {token} E"
+            and valid_sync_source_edit(token, value.get("body")),
+            "Native iPhone source edit has invalid identity or content")
+    return value["body"]
+
+
+def require_sync_source_matches(mac_body: str, source_body: str) -> None:
+    require(mac_body == source_body, "Mac convergence differs from the exact native iPhone edit")
 
 
 def assert_sync_bundle(app: Path, bundle: str, candidate: str, *, mac: bool) -> None:
@@ -728,7 +763,7 @@ def physical_sync_phase(evidence: Evidence, root: Path, scratch: Path,
         evidence.run("physical-sync-iphone", mobile + ["-resultBundlePath", str(result),
                      "-only-testing:" + SYNC_TEST, "test-without-building"], cwd=root,
                      env=test_env, physical_readiness=True)
-        assert_sync_roundtrip(wait_sync_event(process, log, token, evidence.sha, "drained", 180), token)
+        mac_body = assert_sync_roundtrip(wait_sync_event(process, log, token, evidence.sha, "drained", 180), token)
     def require_native_pass(path: Path, name: str) -> None:
         summary = run_output("xcrun", "xcresulttool", "get", "test-results", "summary", "--path", str(path))
         counts = validate_summary(summary)
@@ -737,19 +772,29 @@ def physical_sync_phase(evidence: Evidence, root: Path, scratch: Path,
         (evidence.raw / f"{name}-summary.json").write_text(summary + "\n", encoding="utf-8")
 
     require_native_pass(result, "physical-sync-iphone")
+    # The exported copy is disposable: the original native attachment remains
+    # retained in the canonical xcresult bundle.
+    attachments = scratch / "physical-sync-source-attachments"
+    attachments.mkdir()
+    evidence.run("physical-sync-source-export", ["xcrun", "xcresulttool", "export", "attachments",
+                 "--path", str(result), "--output-path", str(attachments)], env=env)
+    source_body = read_sync_source_edit(attachments, token)
+    require_sync_source_matches(mac_body, source_body)
     # No Mac Test Host may be running while the phone proves local restoration.
     evidence.run("physical-sync-offline-iphone-preflight", ["xcrun", "swift", "-e", check_running], env=env)
     restore_result = evidence.raw / "physical-sync-iphone-restore.xcresult"
     evidence.run("physical-sync-iphone-restore", mobile + ["-resultBundlePath", str(restore_result),
                  "-only-testing:" + SYNC_RESTORE_TEST, "test-without-building"], cwd=root,
-                 env=dict(env, TEST_RUNNER_MYRAM_PHYSICAL_SYNC_RESTORE_TOKEN=token),
+                 env=dict(env, TEST_RUNNER_MYRAM_PHYSICAL_SYNC_RESTORE_TOKEN=token,
+                          TEST_RUNNER_MYRAM_PHYSICAL_SYNC_EXPECTED_BODY=source_body),
                  physical_readiness=True)
     require_native_pass(restore_result, "physical-sync-iphone-restore")
     evidence.run("physical-sync-offline-mac-preflight", ["xcrun", "swift", "-e", check_running], env=env)
-    with sync_mac_process(evidence, executable, root, env, token, "restore") as (process, log):
+    restore_env = dict(env, MYRAM_PHYSICAL_SYNC_EXPECTED_BODY=source_body)
+    with sync_mac_process(evidence, executable, root, restore_env, token, "restore") as (process, log):
         restored = wait_sync_event(process, log, token, evidence.sha, "restored", 90)
         require(len(restored) == 1 and restored[0].get("title") == f"Sync {token} E"
-                and restored[0].get("body") == f"Sync {token} body Mac iPhone",
+                and restored[0].get("body") == source_body,
                 "Fresh Mac process did not restore exact final fixture")
         assert_mac_sync_drained(restored[0], offline=True)
         for line in log.read_text(encoding="utf-8", errors="replace").splitlines():

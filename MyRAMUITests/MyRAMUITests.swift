@@ -107,7 +107,7 @@ final class MyRAMUITests: XCTestCase {
         func title(_ step: String) -> String { "Sync \(token) \(step)" }
         let initial = "Sync \(token) body"
         let combined = initial + " Mac"
-        let final = combined + " iPhone"
+        let insertion = " iPhone"
         let status = app.buttons["sync-status-indicator"]
         XCTAssertTrue(status.waitForExistence(timeout: 30))
         status.tap()
@@ -158,8 +158,24 @@ final class MyRAMUITests: XCTestCase {
         assertEditor(title("D"), combined)
         rename(title("D"), title("E"))
         XCTAssertTrue(waitForStableHitTarget(body), "Body must be interactive after title save")
+        // A native body tap selects a caret according to text layout; it is
+        // not an append command. Verify exactly one insertion into the source
+        // text, then carry the actual result through the remote/restart checks.
+        XCTAssertEqual(body.value as? String, combined)
         body.tap()
-        body.typeText(" iPhone")
+        body.typeText(insertion)
+        let final = try XCTUnwrap(body.value as? String)
+        XCTAssertEqual(final.utf8.count, combined.utf8.count + insertion.utf8.count)
+        XCTAssertEqual(final.replacingOccurrences(of: insertion, with: ""), combined,
+                       "Native edit must insert the marker without losing or rearranging existing text")
+        XCTAssertEqual(titleButton.label, title("E"))
+        let source = try JSONSerialization.data(withJSONObject: [
+            "token": token, "title": titleButton.label, "body": final
+        ], options: .sortedKeys)
+        let sourceAttachment = XCTAttachment(data: source, uniformTypeIdentifier: "public.json")
+        sourceAttachment.name = "physical-sync-source-edit-\(token)"
+        sourceAttachment.lifetime = .keepAlways
+        add(sourceAttachment)
         assertEditor(title("E"), final)
 
         // Opening diagnostics from the editor invokes its ordinary persistence gate.
@@ -189,7 +205,7 @@ final class MyRAMUITests: XCTestCase {
         } while !drained && Date() < deadline
         XCTAssertTrue(drained, "Physical iPhone durable queues did not drain")
         done.tap()
-
+        assertEditor(title("E"), final)
     }
 
     /// A separate native launch with the Mac stopped proves local restoration.
@@ -203,7 +219,7 @@ final class MyRAMUITests: XCTestCase {
         app.launch()
         defer { app.terminate() }
         let finalTitle = "Sync \(token) E"
-        let finalBody = "Sync \(token) body Mac iPhone"
+        let finalBody = try XCTUnwrap(env["MYRAM_PHYSICAL_SYNC_EXPECTED_BODY"])
         let titleButton = app.buttons["edit-note-title"]
         if !titleButton.exists {
             let row = app.staticTexts[finalTitle].firstMatch

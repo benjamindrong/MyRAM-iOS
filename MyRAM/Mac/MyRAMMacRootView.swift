@@ -210,7 +210,11 @@ struct MyRAMMacRootView: View {
         func title(_ step: String) -> String { "Sync \(token) \(step)" }
         let initial = "Sync \(token) body"
         let combined = initial + " Mac"
-        let final = combined + " iPhone"
+        let insertion = " iPhone"
+        func validSourceEdit(_ body: String) -> Bool {
+            body.utf8.count == combined.utf8.count + insertion.utf8.count
+                && body.replacingOccurrences(of: insertion, with: "") == combined
+        }
         func wait(_ label: String, until condition: () -> Bool) async throws {
             let clock = ContinuousClock()
             let deadline = clock.now.advanced(by: .seconds(180))
@@ -239,7 +243,8 @@ struct MyRAMMacRootView: View {
 
         do {
             if phase == "restore" {
-                guard let note = notes.first(where: { $0.title == title("E") }),
+                guard let final = env["MYRAM_PHYSICAL_SYNC_EXPECTED_BODY"], validSourceEdit(final),
+                      let note = notes.first(where: { $0.title == title("E") }),
                       note.content == final else {
                     throw PhysicalSyncVerificationFailure.timeout("final note at fresh startup")
                 }
@@ -282,9 +287,15 @@ struct MyRAMMacRootView: View {
             editor.insertText(" Mac", replacementRange: NSRange(location: initial.utf16.count, length: 0))
             try await wait("Mac combined save") { presented(note.id, title("D"), combined) }
             emitState("mac-combined-saved")
-            try await wait("iPhone combined convergence") { presented(note.id, title("E"), final) }
+            try await wait("iPhone combined convergence") {
+                guard let body = selectedNote?.content, validSourceEdit(body) else { return false }
+                return presented(note.id, title("E"), body)
+            }
+            let final = attributedText.string
             emitState("iphone-combined-received")
-            try await wait("Mac durable queue drainage") { drained() }
+            try await wait("Mac durable queue drainage") {
+                drained() && presented(note.id, title("E"), final)
+            }
             emit("drained", ["title": draftTitle, "body": attributedText.string,
                              "diagnostics": syncController.readOnlySyncDiagnostics])
         } catch {

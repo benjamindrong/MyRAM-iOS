@@ -66,6 +66,37 @@ class NativeVerifierTests(unittest.TestCase):
         v.assert_mac_sync_drained(dict(events[-1], diagnostics=events[-1]["diagnostics"]
             + "\nmc_session_connected_count=0"), offline=True)
 
+    def test_physical_sync_source_edit_is_caret_independent_but_exact(self):
+        token = "a" * 32
+        combined = f"Sync {token} body Mac"
+        # Reproduce the actual failed fixture: a native tap placed the caret
+        # before Mac, rather than at the end of the text.
+        inserted = f"Sync {token} body  iPhoneMac"
+        appended = combined + " iPhone"
+        for observed in (inserted, appended, " iPhone" + combined):
+            self.assertTrue(v.valid_sync_source_edit(token, observed))
+        for invalid in (combined, combined + " iPhone iPhone",
+                        combined.replace("Mac", " iPhone"), None):
+            self.assertFalse(v.valid_sync_source_edit(token, invalid))
+        v.require_sync_source_matches(inserted, inserted)
+        with self.assertRaisesRegex(v.VerificationError, "exact native iPhone edit"):
+            v.require_sync_source_matches(inserted, appended)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "source.json"
+            item = {"suggestedHumanReadableName": "physical-sync-source-edit-" + token,
+                    "exportedFileName": path.name}
+            manifest = root / "manifest.json"
+            manifest.write_text(json.dumps([{"attachments": [item]}]))
+            path.write_text(json.dumps({"token": token, "title": f"Sync {token} E", "body": inserted}))
+            self.assertEqual(v.read_sync_source_edit(root, token), inserted)
+            path.write_text(json.dumps({"token": token, "title": f"Sync {token} E", "body": combined}))
+            with self.assertRaisesRegex(v.VerificationError, "invalid identity or content"):
+                v.read_sync_source_edit(root, token)
+            manifest.write_text(json.dumps([{"attachments": [item, item]}]))
+            with self.assertRaisesRegex(v.VerificationError, "ambiguous"):
+                v.read_sync_source_edit(root, token)
+
     def test_physical_sync_bundle_identity_rejects_transport_and_stale_candidates(self):
         import plistlib
         with tempfile.TemporaryDirectory() as directory:
