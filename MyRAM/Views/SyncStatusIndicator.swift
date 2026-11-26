@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SyncStatusIndicator: View {
     @ObservedObject var syncController: MyRAMSyncController
+    var accessibilityID = "sync-status-indicator"
     var action: (() -> Void)? = nil
 
     var body: some View {
@@ -18,7 +19,7 @@ struct SyncStatusIndicator: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityText)
         .accessibilityValue(syncController.connectedVerificationPair ?? "")
-        .accessibilityIdentifier("sync-status-indicator")
+        .accessibilityIdentifier(accessibilityID)
     }
 
     private var content: some View {

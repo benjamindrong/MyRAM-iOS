@@ -92,6 +92,32 @@ final class MyRAMUITests: XCTestCase {
         app.buttons["Close"].tap()
     }
 
+    func testEditorSyncDiagnosticsUsesDistinctControls() throws {
+        let app = makeApp()
+        app.launch()
+        openNewNote(in: app)
+        let editorStatus = app.buttons["editor-sync-status-indicator"]
+        XCTAssertTrue(waitForStableHitTarget(editorStatus))
+        XCTAssertEqual(app.buttons.matching(identifier: "editor-sync-status-indicator").count, 1)
+        XCTAssertLessThanOrEqual(app.buttons.matching(identifier: "sync-status-indicator").count, 1)
+        editorStatus.tap()
+        let diagnostics = app.buttons["ios-sync-readonly-diagnostics"]
+        XCTAssertTrue(diagnostics.waitForExistence(timeout: 10))
+        diagnostics.tap()
+        let snapshot = app.staticTexts["ios-sync-diagnostics-snapshot"]
+        XCTAssertTrue(snapshot.waitForExistence(timeout: 10))
+        XCTAssertTrue(snapshot.label.contains("schema=myram.iphone.sync-diagnostics.v1"))
+        app.buttons["ios-sync-diagnostics-close"].tap()
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: snapshot)], timeout: 10), .completed)
+        let done = app.buttons["editor-sync-done"]
+        XCTAssertTrue(waitForStableHitTarget(done))
+        done.tap()
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: done)], timeout: 10), .completed)
+        XCTAssertTrue(waitForStableHitTarget(editorStatus))
+    }
+
     /// Physical application-sync scenario; skipped in ordinary UI tests.
     func testPhysicalApplicationSyncRoundTrip() throws {
         let env = ProcessInfo.processInfo.environment
@@ -178,8 +204,11 @@ final class MyRAMUITests: XCTestCase {
         add(sourceAttachment)
         assertEditor(title("E"), final)
 
-        // Opening diagnostics from the editor invokes its ordinary persistence gate.
-        status.tap()
+        // The list remains in the accessibility tree beneath the editor sheet.
+        // Only the editor-owned sync control opens this editor's Nearby Sync.
+        let editorStatus = app.buttons["editor-sync-status-indicator"]
+        XCTAssertTrue(waitForStableHitTarget(editorStatus))
+        editorStatus.tap()
         let diagnostics = app.buttons["ios-sync-readonly-diagnostics"]
         XCTAssertTrue(diagnostics.waitForExistence(timeout: 10))
         let required = ["unsent_count=0", "legacy_pending_count=0",
@@ -190,21 +219,29 @@ final class MyRAMUITests: XCTestCase {
         var drained = false
         repeat {
             diagnostics.tap()
-            let snapshot = app.staticTexts.matching(NSPredicate(
-                format: "label CONTAINS %@", "schema=myram.iphone.sync-diagnostics.v1")).firstMatch
+            let snapshot = app.staticTexts["ios-sync-diagnostics-snapshot"]
             XCTAssertTrue(snapshot.waitForExistence(timeout: 10))
             let lines = Set(snapshot.label.split(separator: "\n").map(String.init))
             drained = required.allSatisfy { lines.contains($0) }
+            if !drained {
+                print("SYNC_DRAIN_PENDING: " + required.filter { !lines.contains($0) }.joined(separator: ", "))
+            }
             if drained {
                 let attachment = XCTAttachment(string: snapshot.label)
                 attachment.name = "physical-sync-iPhone-drained"
                 attachment.lifetime = .keepAlways
                 add(attachment)
             }
-            app.buttons["Close"].tap()
+            app.buttons["ios-sync-diagnostics-close"].tap()
+            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == false"), object: snapshot)], timeout: 10), .completed)
         } while !drained && Date() < deadline
         XCTAssertTrue(drained, "Physical iPhone durable queues did not drain")
-        done.tap()
+        let editorDone = app.buttons["editor-sync-done"]
+        XCTAssertTrue(waitForStableHitTarget(editorDone))
+        editorDone.tap()
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: editorDone)], timeout: 10), .completed)
         assertEditor(title("E"), final)
     }
 
@@ -232,12 +269,13 @@ final class MyRAMUITests: XCTestCase {
         let body = findElement("note-editor-body", in: app)
         XCTAssertTrue(body.waitForExistence(timeout: 10))
         XCTAssertEqual(body.value as? String, finalBody)
-        app.buttons["sync-status-indicator"].tap()
+        let editorStatus = app.buttons["editor-sync-status-indicator"]
+        XCTAssertTrue(waitForStableHitTarget(editorStatus))
+        editorStatus.tap()
         let diagnostics = app.buttons["ios-sync-readonly-diagnostics"]
         XCTAssertTrue(diagnostics.waitForExistence(timeout: 10))
         diagnostics.tap()
-        let snapshot = app.staticTexts.matching(NSPredicate(
-            format: "label CONTAINS %@", "schema=myram.iphone.sync-diagnostics.v1")).firstMatch
+        let snapshot = app.staticTexts["ios-sync-diagnostics-snapshot"]
         XCTAssertTrue(snapshot.waitForExistence(timeout: 10))
         let lines = Set(snapshot.label.split(separator: "\n").map(String.init))
         XCTAssertTrue(["session_connected_count=0", "unsent_count=0",

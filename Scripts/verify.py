@@ -284,6 +284,35 @@ def stop_owned_process_group(process: subprocess.Popen) -> None:
         process.wait()
 
 
+def failure_excerpt(log: str) -> list[str]:
+    lines = log.splitlines()
+    # Xcode's post-failure device diagnostics can bury the actual assertion.
+    # Prefer the native error lines; keep a bounded generic fallback.
+    errors = [line.strip() for line in lines if re.search(
+        r"(?i)(?:\berror:|\bfatal error:|\bXCTAssert\w* failed\b|\bfailed to tap\b)", line)]
+    pending = [line.strip() for line in lines if "SYNC_DRAIN_PENDING:" in line]
+    return (errors[-12:] if errors else lines[-28:]) + pending[-1:]
+
+
+def print_sync_progress(log: Path) -> None:
+    if not log.is_file():
+        return
+    for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.startswith("MYRAM_PHYSICAL_SYNC "):
+            continue
+        try:
+            item = json.loads(line.removeprefix("MYRAM_PHYSICAL_SYNC "))
+            if not isinstance(item, dict):
+                continue
+            event = item.get("event")
+            if isinstance(event, str):
+                print(f"MAC_SYNC_PHASE={event}" +
+                      (f" reason={item.get('reason', 'unknown')}" if event == "failed" else ""),
+                      flush=True)
+        except ValueError:
+            continue
+
+
 class Evidence:
     def __init__(self, root: Path, sha: str, nearby: str, suite: str):
         stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -345,8 +374,11 @@ class Evidence:
             phase["failure_reason"] = early_failure
         self.phases.append(phase)
         if early_failure or exit_code:
-            tail = log.read_text(encoding="utf-8", errors="replace").splitlines()[-28:]
-            print(f"ERROR: {name} returned {exit_code}; log={log}\n" + "\n".join(tail), flush=True)
+            excerpt = failure_excerpt(log.read_text(encoding="utf-8", errors="replace"))
+            print(f"ERROR: {name} returned {exit_code}; log={log}\n" + "\n".join(excerpt), flush=True)
+            if self.suite == "physical-sync":
+                for phase in ("roundtrip", "restore"):
+                    print_sync_progress(self.raw / f"physical-sync-mac-{phase}.log")
             raise VerificationError(early_failure or f"Phase failed: {name} (exit {exit_code})")
         print(f"PASS: {name}", flush=True)
 

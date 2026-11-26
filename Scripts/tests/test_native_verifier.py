@@ -30,6 +30,13 @@ class NativeVerifierTests(unittest.TestCase):
         with self.assertRaisesRegex(v.VerificationError, "requires the physical suite"):
             v.main(["ui", "--iphone-udid", "00008110-00001A1234567890"])
 
+    def test_failure_excerpt_preserves_native_assertion_before_long_diagnostics(self):
+        assertion = 'MyRAMUITests.swift:182: error: Failed to tap: Multiple matching elements found'
+        log = "\n".join([assertion] + ["Apple device diagnostics"] * 100)
+        self.assertIn(assertion, v.failure_excerpt(log))
+        self.assertNotIn("Apple device diagnostics", v.failure_excerpt(log))
+        self.assertEqual(v.failure_excerpt("first\nlast"), ["first", "last"])
+
     def test_physical_sync_cli_has_its_own_fixed_native_mode(self):
         self.assertEqual(v.parse_args(["physical-sync"]).suite, "physical-sync")
         with self.assertRaisesRegex(v.VerificationError, "forbidden"):
