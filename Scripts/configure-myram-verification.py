@@ -344,7 +344,7 @@ def configure_project(root: Path, identity: dict[str, Any]) -> None:
     )
 
 
-def configure_plists(root: Path, identity: dict[str, Any], fixture: dict[str, Any] | None = None, transport_only: bool = False) -> None:
+def configure_plists(root: Path, identity: dict[str, Any], fixture: dict[str, Any] | None = None, transport_only: bool = False, candidate: str | None = None) -> None:
     ios_path = root / "MyRAM" / "Info.plist"
     with ios_path.open("rb") as handle:
         ios_plist = plistlib.load(handle)
@@ -361,6 +361,8 @@ def configure_plists(root: Path, identity: dict[str, Any], fixture: dict[str, An
         ios_plist["MyRAMVerificationFixtureDeviceID"] = fixture["iphone"]
     if transport_only:
         ios_plist["MyRAMVerificationTransportOnly"] = True
+    if candidate:
+        ios_plist["MyRAMVerificationCandidateSHA"] = candidate
     ios_plist["CFBundleDisplayName"] = identity["display_name"]
     ios_plist["NSBonjourServices"] = [identity["bonjour_service"]]
     url_types[0]["CFBundleURLSchemes"] = [ios["url_scheme"]]
@@ -403,6 +405,8 @@ def configure_plists(root: Path, identity: dict[str, Any], fixture: dict[str, An
         mac_plist["MyRAMVerificationFixtureDeviceID"] = fixture["mac"]
     if transport_only:
         mac_plist["MyRAMVerificationTransportOnly"] = True
+    if candidate:
+        mac_plist["MyRAMVerificationCandidateSHA"] = candidate
     mac_plist["CFBundleDisplayName"] = identity["display_name"]
     mac_plist["NSBonjourServices"] = [identity["bonjour_service"]]
     mac_url_types[0]["CFBundleURLSchemes"] = [macos["url_scheme"]]
@@ -553,6 +557,9 @@ def audit(root: Path, identity: dict[str, Any], source_sha: str, fixture: dict[s
     for platform, values in (("iphone", ios_plist), ("mac", mac_plist)):
         if values.get("MyRAMVerificationTransportOnly", False) is not transport_only:
             fail(f"{platform}: Verification transport mode audit failed.")
+        expected_candidate = source_sha if profile == "myr227test" else None
+        if values.get("MyRAMVerificationCandidateSHA") != expected_candidate:
+            fail(f"{platform}: Verification candidate identity audit failed.")
         expected_fixture_id = fixture[platform] if fixture else None
         if values.get("MyRAMVerificationFixtureDeviceID") != expected_fixture_id:
             fail(f"{platform}: Verification fixture device identity audit failed.")
@@ -644,7 +651,8 @@ def main() -> int:
         identity = load_identity(root, args.profile)
         fixture = load_fixture_identity(args.fixture_manifest)
         configure_project(root, identity)
-        configure_plists(root, identity, fixture, args.transport_only)
+        configure_plists(root, identity, fixture, args.transport_only,
+                         source_sha if args.profile == "myr227test" else None)
         configure_storage_roots(root, identity)
         configure_runtime_identities(root, identity)
         report = audit(root, identity, source_sha, fixture, args.transport_only, args.profile)

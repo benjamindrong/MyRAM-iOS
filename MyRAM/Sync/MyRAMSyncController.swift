@@ -161,6 +161,9 @@ enum CheckedConflictPublicationError: Error, Equatable {
 protocol MyRAMSyncConvergenceStatusConfiguring: AnyObject {
     var onFlushLocalConvergenceRequested: (() async -> Void)? { get set }
     var localConvergencePendingCountProvider: (() -> Int)? { get set }
+    var durableIncomingBatchesProvider: (() -> [SyncBatch])? { get set }
+    var incomingConvergenceStatusProvider: (() -> String)? { get set }
+    func registerRetainedIncomingAcknowledgementRoutes()
 
     func refreshPendingSyncStatus() async
 }
@@ -269,6 +272,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     var onDurablyCaptureIncomingBatch: ((SyncBatch) async -> Bool)?
     var onFlushLocalConvergenceRequested: (() async -> Void)?
     var localConvergencePendingCountProvider: (() -> Int)?
+    var durableIncomingBatchesProvider: (() -> [SyncBatch])?
+    var incomingConvergenceStatusProvider: (() -> String)?
     var onPrepareLocalOwnershipForBootstrap:
         (() async -> SyncBootstrapLocalOwnershipPreparationResult)?
     var localBootstrapOwnershipSnapshotProvider: (() -> FileBackedSyncBatchQueueSnapshot)?
@@ -346,6 +351,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private var checkedPublicationLeaseCount = 0
     private var recoveryRequested = false
     private var hasStartedNetworking = false
+    private let verificationCandidate: String?
+    @Published private var discoveredMacCandidateByPeerID: [MCPeerID: String] = [:]
     private var pendingIncomingBatchWork: [IncomingBatchWork] = []
     private var isProcessingIncomingBatchWork = false
     private var pendingReceivedBootstrapByPeerDeviceID: [String: PendingReceivedBootstrap] = [:]
@@ -361,6 +368,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         // Only validated Verification identities may bind the isolated MPC service.
         let effectiveServiceType = configuration.verificationServiceType ?? serviceType
         runtimeConfiguration = configuration
+        verificationCandidate = configuration.testHostCandidate(bundle: configurationBundle)
         transportDiagnostics = MyRAMSyncTransportDiagnostics(configuration: configuration)
         let deviceName = MyRAMDeviceIdentity.currentDisplayName()
         let storedDeviceID = MyRAMDeviceIdentity.currentDeviceID()
@@ -446,6 +454,15 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         !session.connectedPeers.isEmpty
     }
 
+    var connectedVerificationPair: String? {
+        guard let verificationCandidate,
+              session.connectedPeers.count == 1,
+              let peer = session.connectedPeers.first,
+              let peerCandidate = discoveredMacCandidateByPeerID[peer],
+              let peerID = UUID(uuidString: MyRAMPeerIdentity(peerID: peer).deviceID) else { return nil }
+        return "\(verificationCandidate)|\(peerCandidate)|\(peerID.uuidString)"
+    }
+
     /// No network operations, conflict resolution, queue drains, or writes.
     /// Only the currently retained receiver snapshot and in-memory queue
     /// projections are used; results cannot reconstruct a previous process.
@@ -463,6 +480,12 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             "processing_incoming=\(isProcessingIncomingBatchWork)",
             "queue_health_issue_count=\(pendingSyncStatus.healthIssues.count)"
         ]
+        let durableIncoming = durableIncomingBatchesProvider?() ?? []
+        lines.append("pending_incoming_durable_count=\(durableIncoming.count)")
+        lines.append("pending_incoming_durable_hashes=" + durableIncoming.map {
+            Self.diagnosticHash($0.id.uuidString)
+        }.sorted().joined(separator: ","))
+        lines.append("incoming_convergence=" + (incomingConvergenceStatusProvider?() ?? "unavailable"))
         let connectedIDs = Set(session.connectedPeers.map {
             MyRAMPeerIdentity(peerID: $0).deviceID
         })
@@ -1510,15 +1533,6 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
     private func enqueueIncomingBatch(_ batch: SyncBatch, from peerID: MCPeerID) {
         let peerDeviceID = MyRAMPeerIdentity(peerID: peerID).deviceID
-        if acknowledgementPeerByRemoteBatchID[batch.id] != nil {
-            MyRAMSyncBenchmarkTelemetry.shared.record(
-                .batchCaptureCompleted,
-                batchID: String(describing: batch.id),
-                peerDeviceID: peerDeviceID,
-                outcome: "duplicateAlreadyDurable"
-            )
-            return
-        }
         guard pendingBatchReceives.begin(batch.id) else {
             MyRAMSyncBenchmarkTelemetry.shared.record(
                 .batchCaptureCompleted,
@@ -1551,7 +1565,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             )
             if captured {
                 acknowledgementPeerByRemoteBatchID[work.batch.id] = peerDeviceID
-                let disposition = await onBatchReceived?(work.batch) ?? .acknowledgementPermitted
+                let disposition = await onBatchReceived?(work.batch) ?? (work.batch.changes.isEmpty
+                    ? .acknowledgementPermitted : .acknowledgementDeferred)
                 MyRAMSyncBenchmarkTelemetry.shared.record(
                     .batchConvergenceCompleted,
                     batchID: String(describing: work.batch.id),
@@ -2187,7 +2202,16 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
 extension MyRAMSyncController: MyRAMSyncControlling {}
 
-extension MyRAMSyncController: MyRAMSyncConvergenceStatusConfiguring {}
+extension MyRAMSyncController: MyRAMSyncConvergenceStatusConfiguring {
+    func registerRetainedIncomingAcknowledgementRoutes() {
+        guard let retained = durableIncomingBatchesProvider?() else { return }
+        for batch in retained where acknowledgementPeerByRemoteBatchID[batch.id] == nil {
+            // Nearby batch senders queue their own operations. On recovery, use
+            // the persisted origin only as a fallback for the lost live route.
+            acknowledgementPeerByRemoteBatchID[batch.id] = batch.originDeviceID.uuidString
+        }
+    }
+}
 
 extension MyRAMSyncController: MyRAMSyncBootstrapConfiguring {}
 
@@ -2329,6 +2353,7 @@ extension MyRAMSyncController: MCSessionDelegate {
                 cancelReconnectRetry(for: identity.deviceID)
                 rememberTrustedPeer(peerID)
                 await flushBatchAcknowledgements(forPeerDeviceID: identity.deviceID)
+                Task { await onFlushLocalConvergenceRequested?() }
                 await sendBootstrapCapabilityAnnouncement(to: peerID)
                 await beginBootstrap(to: peerID)
                 startBootstrapCapabilityResolution(for: peerID)
@@ -2579,6 +2604,11 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
             if let existing = availablePeers.first(where: { $0.deviceID == identity.deviceID }),
                existing.peerID != peerID {
                 invitationRoleByPeerID.removeValue(forKey: existing.peerID)
+                discoveredMacCandidateByPeerID.removeValue(forKey: existing.peerID)
+            }
+            if verificationCandidate != nil,
+               SyncBatchPeerCapabilityCodec.invitationRole(from: info) == .macResponder {
+                discoveredMacCandidateByPeerID[peerID] = info?[MyRAMSyncRuntimeConfiguration.candidateDiscoveryKey]
             }
             addOrUpdateAvailablePeer(discoveredPeer)
             // A discovered Mac responder remains a responder for this exact
@@ -2632,6 +2662,7 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
             let identity = MyRAMPeerIdentity(peerID: peerID)
             guard availablePeers.contains(where: { $0.deviceID == identity.deviceID && $0.peerID == peerID }) else { return }
             lastConnectionEvent = "Lost \(identity.displayName)"
+            discoveredMacCandidateByPeerID.removeValue(forKey: peerID)
             invitationRoleByPeerID.removeValue(forKey: peerID)
             // Discovery loss cancels a queued retry but never resets the
             // invitation's terminality or replenishes its retry budget.

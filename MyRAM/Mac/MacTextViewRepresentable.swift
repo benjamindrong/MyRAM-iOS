@@ -35,7 +35,9 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         textView.effectiveAppearanceDidChange = { [weak coordinator = context.coordinator] in
             coordinator?.refreshDisplayText()
         }
-        let displayText = MacEditorTextColorPolicy.normalizedForDisplay(attributedText)
+        let displayText = MacStructuralFormattingAdapter.applyingDefaultBodyFontIfMissing(
+            MacEditorTextColorPolicy.normalizedForDisplay(attributedText)
+        )
         textView.textStorage?.setAttributedString(displayText)
         textView.isEditable = true
         textView.isSelectable = true
@@ -43,12 +45,14 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         textView.isRichText = true
         textView.importsGraphics = false
         textView.usesFindBar = true
-        textView.font = .systemFont(ofSize: 24)
+        textView.font = MacStructuralFormattingAdapter.defaultBodyFont
         textView.textColor = .textColor
         textView.backgroundColor = .textBackgroundColor
         textView.insertionPointColor = .controlAccentColor
         textView.typingAttributes = MacEditorTextColorPolicy.normalizedTypingAttributes(textView.typingAttributes)
-        textView.textContainerInset = NSSize(width: 24, height: 20)
+        // Screen-space margin is owned by MacNoteEditorView, not magnified TextKit.
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
         textView.minSize = NSSize(width: 0, height: 0)
         textView.maxSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,
@@ -87,7 +91,9 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         context.coordinator.register(textView)
         textView.textStorage?.delegate = context.coordinator
         MacNoteViewZoom.apply(zoom, to: scrollView)
-        let displayText = MacEditorTextColorPolicy.normalizedForDisplay(attributedText)
+        let displayText = MacStructuralFormattingAdapter.applyingDefaultBodyFontIfMissing(
+            MacEditorTextColorPolicy.normalizedForDisplay(attributedText)
+        )
         let currentText = textView.attributedString()
         if !currentText.isEqual(to: displayText) {
             let selectedRange = textView.selectedRange()
@@ -198,7 +204,9 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         func refreshDisplayText() {
             guard let textView else { return }
 
-            let displayText = MacEditorTextColorPolicy.normalizedForDisplay(attributedText.wrappedValue)
+            let displayText = MacStructuralFormattingAdapter.applyingDefaultBodyFontIfMissing(
+                MacEditorTextColorPolicy.normalizedForDisplay(attributedText.wrappedValue)
+            )
             let selectedRange = textView.selectedRange()
             isApplyingSwiftUIUpdate = true
             textView.textStorage?.setAttributedString(displayText)

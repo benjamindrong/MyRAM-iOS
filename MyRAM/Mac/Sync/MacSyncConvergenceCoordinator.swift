@@ -437,6 +437,19 @@ struct MacEditorSaveAttempt {
     let noteID: UUID
     let editorRevision: UUID
     let attributedContent: NSAttributedString
+    let proposedTitle: String?
+
+    init(
+        noteID: UUID,
+        editorRevision: UUID,
+        attributedContent: NSAttributedString,
+        proposedTitle: String? = nil
+    ) {
+        self.noteID = noteID
+        self.editorRevision = editorRevision
+        self.attributedContent = attributedContent
+        self.proposedTitle = proposedTitle
+    }
 }
 
 enum MacNoteSaveMutationKind {

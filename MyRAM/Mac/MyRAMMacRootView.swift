@@ -12,6 +12,16 @@ enum MyRAMMacProcessSyncCompositionRoot {
     )
 }
 
+#if DEBUG
+@MainActor
+private enum PhysicalSyncVerificationClaim {
+    static var started = false
+}
+private enum PhysicalSyncVerificationFailure: Error {
+    case timeout(String)
+}
+#endif
+
 struct MyRAMMacRootView: View {
     @StateObject private var startupCoordinator = MacStartupCoordinator()
     @StateObject private var syncController: MacSyncBatchController
@@ -21,6 +31,7 @@ struct MyRAMMacRootView: View {
     @State private var notes: [Note] = []
     @State private var selectedNoteID: UUID?
     @State private var attributedText = NSAttributedString(string: "")
+    @State private var draftTitle = ""
     @State private var loadError: String?
     @State private var saveError: String?
     @State private var saveTask: Task<Void, Never>?
@@ -142,6 +153,7 @@ struct MyRAMMacRootView: View {
         } detail: {
             MacNoteEditorView(
                 note: selectedNote,
+                title: macTitleBinding,
                 attributedText: $attributedText,
                 markdownEditorMode: macModeBinding,
                 syncBridge: editorSyncBridge,
@@ -154,6 +166,9 @@ struct MyRAMMacRootView: View {
             )
         }
         .navigationSplitViewStyle(.balanced)
+        #if DEBUG
+        .task { await runPhysicalSyncVerificationIfRequested() }
+        #endif
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.width
         } action: { width in
@@ -163,6 +178,131 @@ struct MyRAMMacRootView: View {
             handleColumnVisibilityChange(newValue)
         }
     }
+
+    #if DEBUG
+    /// Drive the existing scene's edit/save owner in the signed isolated Test Host.
+    /// Never directly change storage, batch queues or acknowledgement state.
+    @MainActor
+    private func runPhysicalSyncVerificationIfRequested() async {
+        let env = ProcessInfo.processInfo.environment
+        guard Bundle.main.bundleIdentifier == "com.northsignalstudio.myram.mac.myr227.test.verification",
+              let token = env["MYRAM_PHYSICAL_SYNC_TOKEN"],
+              token.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil,
+              let phase = env["MYRAM_PHYSICAL_SYNC_PHASE"],
+              ["roundtrip", "restore"].contains(phase),
+              let candidate = env["MYRAM_PHYSICAL_SYNC_CANDIDATE"],
+              candidate.range(of: "^[0-9a-f]{40}$", options: .regularExpression) != nil,
+              MyRAMSyncRuntimeConfiguration.current().applicationSyncEnabled,
+              MyRAMSyncRuntimeConfiguration.current().testHostCandidate() == candidate,
+              !PhysicalSyncVerificationClaim.started else { return }
+        PhysicalSyncVerificationClaim.started = true
+
+        func emit(_ event: String, _ fields: [String: String] = [:]) {
+            var record = fields
+            record["event"] = event
+            record["token"] = token
+            record["candidate"] = candidate
+            record["pid"] = String(ProcessInfo.processInfo.processIdentifier)
+            if let data = try? JSONSerialization.data(withJSONObject: record, options: .sortedKeys) {
+                FileHandle.standardOutput.write(Data("MYRAM_PHYSICAL_SYNC ".utf8) + data + Data("\n".utf8))
+            }
+        }
+        func title(_ step: String) -> String { "Sync \(token) \(step)" }
+        let initial = "Sync \(token) body"
+        let combined = initial + " Mac"
+        let insertion = " iPhone"
+        func validSourceEdit(_ body: String) -> Bool {
+            body.utf8.count == combined.utf8.count + insertion.utf8.count
+                && body.replacingOccurrences(of: insertion, with: "") == combined
+        }
+        func wait(_ label: String, until condition: () -> Bool) async throws {
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: .seconds(180))
+            while !condition() {
+                guard clock.now < deadline else {
+                    throw PhysicalSyncVerificationFailure.timeout(label)
+                }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        func presented(_ id: UUID, _ expectedTitle: String, _ body: String) -> Bool {
+            selectedNoteID == id && selectedNote?.title == expectedTitle
+                && selectedNote?.content == body && draftTitle == expectedTitle
+                && attributedText.string == body && !hasUnsavedChanges
+                && editorSyncBridge.textView?.string == body
+        }
+        func drained() -> Bool {
+            let lines = Set(syncController.readOnlySyncDiagnostics.split(separator: "\n").map(String.init))
+            return ["unsent_count=0", "pending_incoming_count=0",
+                    "pending_local_obligation_count=0", "pending_incoming_transport_count=0",
+                    "processing_incoming=false"].allSatisfy { lines.contains($0) }
+        }
+        func emitState(_ event: String) {
+            emit(event, ["title": draftTitle, "body": attributedText.string])
+        }
+
+        do {
+            if phase == "restore" {
+                guard let final = env["MYRAM_PHYSICAL_SYNC_EXPECTED_BODY"], validSourceEdit(final),
+                      let note = notes.first(where: { $0.title == title("E") }),
+                      note.content == final else {
+                    throw PhysicalSyncVerificationFailure.timeout("final note at fresh startup")
+                }
+                selectNote(note)
+                try await wait("restored editor") { presented(note.id, title("E"), final) }
+                let diagnostics = syncController.readOnlySyncDiagnostics
+                guard diagnostics.split(separator: "\n").contains("mc_session_connected_count=0"),
+                      drained() else {
+                    throw PhysicalSyncVerificationFailure.timeout("offline restoration and drained queues")
+                }
+                emit("restored", ["title": draftTitle, "body": attributedText.string, "diagnostics": diagnostics])
+                return
+            }
+            guard !notes.contains(where: { $0.title.hasPrefix("Sync \(token) ") }) else {
+                throw PhysicalSyncVerificationFailure.timeout("fresh unique fixture")
+            }
+            emit("ready", ["device": MacSyncDeviceIdentityProvider().currentIdentity().id.uuidString])
+            try await wait("iPhone-created synthetic note") {
+                notes.contains { $0.title == title("A") && $0.content == initial }
+            }
+            let matches = notes.filter { $0.title == title("A") && $0.content == initial }
+            guard matches.count == 1, let note = matches.first else {
+                throw PhysicalSyncVerificationFailure.timeout("unique synthetic note")
+            }
+            selectNote(note)
+            try await wait("initial editor") { presented(note.id, title("A"), initial) }
+            emitState("seed-received")
+
+            macTitleBinding.wrappedValue = title("B")
+            try await wait("Mac title-only save") { presented(note.id, title("B"), initial) }
+            emitState("mac-title-saved")
+            try await wait("iPhone title-only convergence") { presented(note.id, title("C"), initial) }
+            emitState("iphone-title-received")
+
+            // Both edits enter the existing debounce/revision owner before yielding.
+            guard let editor = editorSyncBridge.textView, editor.string == initial else {
+                throw PhysicalSyncVerificationFailure.timeout("native editor ownership")
+            }
+            macTitleBinding.wrappedValue = title("D")
+            editor.insertText(" Mac", replacementRange: NSRange(location: initial.utf16.count, length: 0))
+            try await wait("Mac combined save") { presented(note.id, title("D"), combined) }
+            emitState("mac-combined-saved")
+            try await wait("iPhone combined convergence") {
+                guard let body = selectedNote?.content, validSourceEdit(body) else { return false }
+                return presented(note.id, title("E"), body)
+            }
+            let final = attributedText.string
+            emitState("iphone-combined-received")
+            try await wait("Mac durable queue drainage") {
+                drained() && presented(note.id, title("E"), final)
+            }
+            emit("drained", ["title": draftTitle, "body": attributedText.string,
+                             "diagnostics": syncController.readOnlySyncDiagnostics])
+        } catch {
+            emit("failed", ["reason": String(describing: error)])
+        }
+    }
+    #endif
 
     private var startupActions: MacStartupCoordinator.Actions {
         MacStartupCoordinator.Actions(
@@ -207,6 +347,17 @@ struct MyRAMMacRootView: View {
         return notes.first { $0.id == selectedNoteID }
     }
 
+    private var macTitleBinding: Binding<String> {
+        Binding(
+            get: { draftTitle },
+            set: { newTitle in
+                guard selectedNoteID != nil, draftTitle != newTitle else { return }
+                draftTitle = newTitle
+                scheduleSave()
+            }
+        )
+    }
+
     private var macFormattingActions: MacFormattingSceneActions {
         MacFormattingSceneActions(
             enabled: startupCoordinator.state == .ready && selectedNoteID != nil && markdownEditorMode == .edit,
@@ -242,7 +393,7 @@ struct MyRAMMacRootView: View {
 
     /// Routes user mode changes through the same production seam used by hosted tests.
     private var macModeBinding: Binding<MarkdownEditorMode> {
-        MacMarkdownModeBindingFactory.make(
+        let standardBinding = MacMarkdownModeBindingFactory.make(
             mode: $markdownEditorMode,
             resignFocusToggleToken: $macResignFocusToggleToken,
             prepareForPreview: {
@@ -251,6 +402,23 @@ struct MyRAMMacRootView: View {
                     window: textView.window,
                     textView: textView
                 )
+            }
+        )
+        return Binding(
+            get: { markdownEditorMode },
+            set: { target in
+                guard target != markdownEditorMode else { return }
+                guard target == .preview && hasUnsavedChanges else {
+                    standardBinding.wrappedValue = target
+                    return
+                }
+                let originalNoteID = selectedNoteID
+                Task { @MainActor in
+                    guard await flushPendingSave(),
+                          selectedNoteID == originalNoteID,
+                          markdownEditorMode == .edit else { return }
+                    standardBinding.wrappedValue = target
+                }
             }
         )
     }
@@ -293,6 +461,7 @@ struct MyRAMMacRootView: View {
         let newID = loadedNotes.first?.id
         updateMarkdownModeForSelectionChange(from: selectedNoteID, to: newID)
         selectedNoteID = newID
+        draftTitle = loadedNotes.first?.title ?? ""
         attributedText = loadedNotes.first.map {
             MacNotePersistenceAdapter().attributedContent(for: $0)
         } ?? NSAttributedString(string: "")
@@ -308,6 +477,7 @@ struct MyRAMMacRootView: View {
             notes = loadedNotes
             if let selectedNoteID, loadedNotes.contains(where: { $0.id == selectedNoteID }) {
                 // Same note still exists: reload buffer but do NOT reset mode.
+                draftTitle = selectedNote?.title ?? ""
                 attributedText = selectedNote.map {
                     MacNotePersistenceAdapter().attributedContent(for: $0)
                 } ?? NSAttributedString(string: "")
@@ -316,6 +486,7 @@ struct MyRAMMacRootView: View {
                 let newID = loadedNotes.first?.id
                 updateMarkdownModeForSelectionChange(from: selectedNoteID, to: newID)
                 selectedNoteID = newID
+                draftTitle = loadedNotes.first?.title ?? ""
                 attributedText = loadedNotes.first.map {
                     MacNotePersistenceAdapter().attributedContent(for: $0)
                 } ?? NSAttributedString(string: "")
@@ -337,12 +508,16 @@ struct MyRAMMacRootView: View {
                 let newID = loadedNotes.first?.id
                 updateMarkdownModeForSelectionChange(from: selectedNoteID, to: newID)
                 selectedNoteID = newID
+                draftTitle = loadedNotes.first?.title ?? ""
                 attributedText = loadedNotes.first.map {
                     MacNotePersistenceAdapter().attributedContent(for: $0)
                 } ?? NSAttributedString(string: "")
                 hasUnsavedChanges = false
                 editorRevision = UUID()
                 return
+            }
+            if !hasUnsavedChanges {
+                draftTitle = loadedNotes.first(where: { $0.id == selectedNoteID })?.title ?? draftTitle
             }
             loadError = nil
         } catch {
@@ -362,6 +537,7 @@ struct MyRAMMacRootView: View {
                 let oldID = selectedNoteID
                 selectedNoteID = nil
                 updateMarkdownModeForSelectionChange(from: oldID, to: nil)
+                draftTitle = ""
                 attributedText = NSAttributedString(string: "")
                 hasUnsavedChanges = false
                 editorRevision = UUID()
@@ -467,6 +643,7 @@ struct MyRAMMacRootView: View {
         }
 
         guard outcome == .reloaded else { return false }
+        draftTitle = selectedNote?.title ?? ""
         editorRevision = UUID()
         saveError = nil
         return true
@@ -480,6 +657,7 @@ struct MyRAMMacRootView: View {
             let oldID = selectedNoteID
             selectedNoteID = note.id
             updateMarkdownModeForSelectionChange(from: oldID, to: note.id)
+            draftTitle = note.title
             attributedText = MacNotePersistenceAdapter().attributedContent(for: note)
             hasUnsavedChanges = false
             editorRevision = UUID()
@@ -510,6 +688,7 @@ struct MyRAMMacRootView: View {
                 let oldID = selectedNoteID
                 selectedNoteID = newNote.id
                 updateMarkdownModeForSelectionChange(from: oldID, to: newNote.id)
+                draftTitle = newNote.title
                 attributedText = MacNotePersistenceAdapter().attributedContent(for: newNote)
                 hasUnsavedChanges = false
                 editorRevision = UUID()
@@ -706,6 +885,7 @@ struct MyRAMMacRootView: View {
         let oldID = selectedNoteID
         selectedNoteID = importedNote.id
         updateMarkdownModeForSelectionChange(from: oldID, to: importedNote.id)
+        draftTitle = importedNote.title
         attributedText = adapter.attributedContent(for: importedNote)
         hasUnsavedChanges = false
         editorRevision = UUID()
@@ -720,6 +900,7 @@ struct MyRAMMacRootView: View {
         let oldID = selectedNoteID
         selectedNoteID = note.id
         updateMarkdownModeForSelectionChange(from: oldID, to: note.id)
+        draftTitle = note.title
         attributedText = adapter.attributedContent(for: note)
         hasUnsavedChanges = false
         editorRevision = UUID()
@@ -782,6 +963,7 @@ struct MyRAMMacRootView: View {
     private func scheduleSave() {
         guard let noteID = selectedNoteID else { return }
         let contentToSave = NSAttributedString(attributedString: attributedText)
+        let titleToSave = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         editorRevision = UUID()
         hasUnsavedChanges = true
 
@@ -789,7 +971,12 @@ struct MyRAMMacRootView: View {
         saveTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard !Task.isCancelled, selectedNoteID == noteID else { return }
-            _ = await saveNote(id: noteID, attributedContent: contentToSave, publication: .ordinary)
+            _ = await saveNote(
+                id: noteID,
+                attributedContent: contentToSave,
+                proposedTitle: titleToSave,
+                publication: .ordinary
+            )
         }
     }
 
@@ -798,7 +985,12 @@ struct MyRAMMacRootView: View {
         saveTask = nil
 
         guard hasUnsavedChanges, let selectedNoteID else { return true }
-        let result = await saveNote(id: selectedNoteID, attributedContent: attributedText, publication: .ordinary)
+        let result = await saveNote(
+            id: selectedNoteID,
+            attributedContent: attributedText,
+            proposedTitle: draftTitle.trimmingCharacters(in: .whitespacesAndNewlines),
+            publication: .ordinary
+        )
         return MacEditorSaveOwnership.flushMayProceed(for: result)
     }
 
@@ -810,7 +1002,8 @@ struct MyRAMMacRootView: View {
         let attempt = MacEditorSaveAttempt(
             noteID: noteID,
             editorRevision: editorRevision,
-            attributedContent: NSAttributedString(attributedString: attributedContent)
+            attributedContent: NSAttributedString(attributedString: attributedContent),
+            proposedTitle: draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         )
         let completion = await completeSaveAttempt(attempt, publication: .incomingBoundary)
         return await boundaryResult(for: completion, requestedAttempt: attempt)
@@ -819,12 +1012,14 @@ struct MyRAMMacRootView: View {
     private func saveNote(
         id noteID: UUID,
         attributedContent: NSAttributedString,
+        proposedTitle: String,
         publication: MacLocalSavePublication
     ) async -> MacPendingSaveResult {
         let attempt = MacEditorSaveAttempt(
             noteID: noteID,
             editorRevision: editorRevision,
-            attributedContent: NSAttributedString(attributedString: attributedContent)
+            attributedContent: NSAttributedString(attributedString: attributedContent),
+            proposedTitle: proposedTitle
         )
         let completion = await completeSaveAttempt(attempt, publication: publication)
         return pendingSaveResult(for: completion, requestedAttempt: attempt)
@@ -854,7 +1049,8 @@ struct MyRAMMacRootView: View {
         do {
             prepared = try await adapter.prepareProductionLocalNoteEdit(
                 noteID: attempt.noteID,
-                proposedAttributedContent: attempt.attributedContent
+                proposedAttributedContent: attempt.attributedContent,
+                proposedTitle: attempt.proposedTitle
             )
         } catch MacPendingSaveFailure.noteMissing {
             return .failed(attempt: attempt, failure: .noteMissing(noteID: attempt.noteID))
@@ -862,6 +1058,10 @@ struct MyRAMMacRootView: View {
             return .failed(attempt: attempt, failure: .captureFailed(noteID: attempt.noteID))
         }
 
+        // Preparing may suspend. Discard a snapshot superseded by later title/body edits.
+        guard stillOwnsEditorState(attempt) else {
+            return .supersededBeforeStart(attempt: attempt)
+        }
         guard prepared.hasAnyAuthoritativeMutation || prepared.previousRichTextContentData != prepared.proposedRichTextContentData else {
             return .completed(attempt: attempt, mutationKind: .none, publication: .none)
         }
@@ -909,6 +1109,11 @@ struct MyRAMMacRootView: View {
         var state = editorSaveState
         let result = state.pendingResult(for: completion, requestedAttempt: requestedAttempt)
         applyEditorSaveState(state)
+        if case .completed(let attempt, _, _) = completion,
+           stillOwnsEditorState(attempt),
+           !hasUnsavedChanges {
+            draftTitle = selectedNote?.title ?? draftTitle
+        }
         switch result {
         case .noChanges, .savedWithoutBodyMutation, .savedWithPendingBodyMutation:
             resumeSyncConvergence()

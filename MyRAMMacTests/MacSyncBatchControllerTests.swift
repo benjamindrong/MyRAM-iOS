@@ -2743,6 +2743,163 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(controller.lastSyncAt, batch.createdAt)
     }
 
+
+    func testMYR225LostTitleAckRetransmitsDurableBatchUntilAcknowledged() async throws {
+        let peer = MCPeerID(displayName: "phone|title-ack-retry")
+        let queueURL = temporaryQueueFileURL(named: "mac-title-ack-retry.json")
+        var sent: [SyncBatch] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: queueURL,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in
+                let envelope = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+                if envelope.kind == .batchSync {
+                    sent.append(try MultipeerSyncMessageCoding.decodeBatchPayload(envelope.payload).batch)
+                }
+            }
+        )
+        defer { controller.stopNetworking() }
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "title-ack-retry")
+        controller.setBatchAckRetryDelaysForTesting([40_000_000])
+        let batch = makeTitleBatch(idSuffix: 225911)
+
+        try await controller.acceptLocalBatch(batch)
+        XCTAssertEqual(sent, [batch])
+        XCTAssertEqual(controller.unsentBatchQueueSnapshotForTesting().pendingBatches, [batch])
+        await waitUntil { sent.count >= 2 }
+        XCTAssertEqual(Array(sent.prefix(2)), [batch, batch])
+        XCTAssertEqual(controller.unsentBatchQueueSnapshotForTesting().pendingBatches, [batch])
+
+        await controller.handleBatchAcknowledgementForTesting(
+            SyncBatchAcknowledgement(batchID: batch.id), from: peer
+        )
+        XCTAssertTrue(controller.unsentBatchQueueSnapshotForTesting().pendingBatches.isEmpty)
+        let sendsAfterAcknowledgement = sent.count
+        try await Task.sleep(for: .milliseconds(90))
+        XCTAssertEqual(sent.count, sendsAfterAcknowledgement)
+    }
+
+    func testMYR225DisconnectPreservesTitleBatchAndCancelsOldSessionRetry() async throws {
+        let peer = MCPeerID(displayName: "phone|title-disconnect")
+        let queueURL = temporaryQueueFileURL(named: "mac-title-disconnect.json")
+        var connected = [peer]
+        var sent: [SyncBatch] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: queueURL,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { connected },
+            sendBatchDataOperation: { data, _, _ in
+                let envelope = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+                if envelope.kind == .batchSync {
+                    sent.append(try MultipeerSyncMessageCoding.decodeBatchPayload(envelope.payload).batch)
+                }
+            }
+        )
+        defer { controller.stopNetworking() }
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "title-disconnect")
+        controller.setBatchAckRetryDelaysForTesting([50_000_000])
+        let batch = makeTitleBatch(idSuffix: 225912)
+        try await controller.acceptLocalBatch(batch)
+        XCTAssertEqual(sent, [batch])
+        connected = []
+        controller.handlePeerDisconnectForTesting(peerDeviceID: "title-disconnect")
+        try await Task.sleep(for: .milliseconds(90))
+        XCTAssertEqual(sent, [batch])
+        XCTAssertEqual(controller.unsentBatchQueueSnapshotForTesting().pendingBatches, [batch])
+        connected = [peer]
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "title-disconnect")
+        controller.flushPendingBatch()
+        await waitUntil { sent.count >= 2 }
+        XCTAssertEqual(Array(sent.prefix(2)), [batch, batch])
+    }
+
+    func testMYR225FailedSendsRetainRetryOwnershipUntilAcknowledged() async throws {
+        let peer = MCPeerID(displayName: "phone|title-send-retry")
+        let queueURL = temporaryQueueFileURL(named: "mac-title-send-retry.json")
+        let batch = makeTitleBatch(idSuffix: 225913)
+        var attempted: [SyncBatch] = []
+        var delivered: [SyncBatch] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: queueURL,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in
+                let envelope = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+                guard envelope.kind == .batchSync else { return }
+                let sent = try MultipeerSyncMessageCoding.decodeBatchPayload(envelope.payload).batch
+                attempted.append(sent)
+                // Fail both the initial send and a later ACK-timeout resend.
+                if attempted.count == 1 || attempted.count == 3 {
+                    throw NSError(domain: "MYR225InjectedTransportFailure", code: 1)
+                }
+                delivered.append(sent)
+            }
+        )
+        defer { controller.stopNetworking() }
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "title-send-retry")
+        controller.setBatchAckRetryDelaysForTesting([40_000_000])
+
+        try await controller.acceptLocalBatch(batch)
+        XCTAssertEqual(attempted, [batch])
+        XCTAssertTrue(delivered.isEmpty)
+        XCTAssertEqual(controller.unsentBatchQueueSnapshotForTesting().pendingBatches, [batch])
+        await waitUntil { delivered.count >= 2 }
+        XCTAssertEqual(Array(attempted.prefix(4)), [batch, batch, batch, batch])
+        XCTAssertEqual(Array(delivered.prefix(2)), [batch, batch])
+        XCTAssertEqual(controller.unsentBatchQueueSnapshotForTesting().pendingBatches, [batch])
+
+        await controller.handleBatchAcknowledgementForTesting(
+            SyncBatchAcknowledgement(batchID: batch.id), from: peer
+        )
+        XCTAssertTrue(controller.unsentBatchQueueSnapshotForTesting().pendingBatches.isEmpty)
+        let attemptsAfterAcknowledgement = attempted.count
+        try await Task.sleep(for: .milliseconds(90))
+        XCTAssertEqual(attempted.count, attemptsAfterAcknowledgement)
+    }
+
+    func testMYR225PartialDisconnectPreservesRetryForRemainingPeer() async throws {
+        let departing = MCPeerID(displayName: "phone|title-departing")
+        let remaining = MCPeerID(displayName: "phone|title-remaining")
+        var connected = [departing, remaining]
+        let batch = makeTitleBatch(idSuffix: 225914)
+        var sent: [SyncBatch] = []
+        var recipients: [[MCPeerID]] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: temporaryQueueFileURL(named: "mac-title-partial-disconnect.json"),
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { connected },
+            sendBatchDataOperation: { data, peers, _ in
+                let envelope = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+                guard envelope.kind == .batchSync else { return }
+                sent.append(try MultipeerSyncMessageCoding.decodeBatchPayload(envelope.payload).batch)
+                recipients.append(peers)
+            }
+        )
+        defer { controller.stopNetworking() }
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "title-departing")
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "title-remaining")
+        controller.setBatchAckRetryDelaysForTesting([50_000_000])
+
+        try await controller.acceptLocalBatch(batch)
+        XCTAssertEqual(sent, [batch])
+        XCTAssertEqual(Set(recipients.first ?? []), Set([departing, remaining]))
+        connected = [remaining]
+        controller.handlePeerDisconnectForTesting(peerDeviceID: "title-departing")
+
+        await waitUntil { sent.count >= 2 }
+        XCTAssertEqual(Array(sent.prefix(2)), [batch, batch])
+        XCTAssertEqual(recipients.dropFirst().first, [remaining])
+        XCTAssertEqual(controller.unsentBatchQueueSnapshotForTesting().pendingBatches, [batch])
+        await controller.handleBatchAcknowledgementForTesting(
+            SyncBatchAcknowledgement(batchID: batch.id), from: remaining
+        )
+        XCTAssertTrue(controller.unsentBatchQueueSnapshotForTesting().pendingBatches.isEmpty)
+        let sendsAfterAcknowledgement = sent.count
+        try await Task.sleep(for: .milliseconds(90))
+        XCTAssertEqual(sent.count, sendsAfterAcknowledgement)
+    }
+
     func testMYR221BatchAcceptedDuringActiveDrainRetainsAcknowledgementOwnership() async throws {
         let senderPeerID = MCPeerID(displayName: "remote|compatible-redelivery-sender")
         let receiverPeerID = MCPeerID(displayName: "remote|compatible-redelivery-receiver")

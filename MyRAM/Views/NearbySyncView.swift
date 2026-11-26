@@ -115,6 +115,7 @@ struct NearbySyncView: View {
             NavigationStack {
                 ScrollView {
                     Text(capture.text)
+                        .accessibilityIdentifier("ios-sync-diagnostics-snapshot")
                         .font(.system(.caption, design: .monospaced))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -126,6 +127,7 @@ struct NearbySyncView: View {
                         Button("Close") {
                             capturedSyncDiagnostics = nil
                         }
+                        .accessibilityIdentifier("ios-sync-diagnostics-close")
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Copy diagnostics") {

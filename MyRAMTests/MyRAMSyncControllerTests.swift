@@ -1370,6 +1370,87 @@ final class MyRAMSyncControllerTests: XCTestCase {
         XCTAssertEqual(receiver.lastSyncAt, batchB.createdAt)
     }
 
+    func testMYR225RetainedThreeTitleBatchResumesAfterStartupRecoveryWithoutRedelivery() async throws {
+        let incomingURL = temporaryQueueFileURL()
+        let senderURL = temporaryQueueFileURL()
+        let container = try makeContainer()
+        let context = container.mainContext
+        let note = Note(title: "ANOTHER NEW TITLE", content: "Unchanged")
+        context.insert(note)
+        try context.save()
+        let origin = try XCTUnwrap(UUID(uuidString: "09B6DC06-B415-4288-BE56-71D5F719AC3F"))
+        let createdAt = Date(timeIntervalSinceReferenceDate: 816715027.461508)
+        let titles = ["ANOTHER NEW [TITLE", "ANOTHER NEW [MacTITLE", "ANOTHER NEW [Mac] TITLE"]
+        let modifiedTimes = [816715027.461508, 816715028.711543, 816715029.798204]
+        let batch = SyncBatch(
+            id: try XCTUnwrap(UUID(uuidString: "527E25AB-87D4-45DB-9504-FDB2A2329BA3")),
+            originDeviceID: origin,
+            createdAt: createdAt,
+            batchSequence: 52,
+            changes: titles.enumerated().map { index, title in
+                .noteTitleChanged(.init(noteID: note.id, title: title,
+                                        modifiedAt: Date(timeIntervalSinceReferenceDate: modifiedTimes[index])))
+            }
+        )
+        let senderTransport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
+        let sender = try makeController(unsentBatchQueueFileURL: senderURL, transport: senderTransport)
+        sender.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "remote-device")
+        try await sender.acceptLocalBatch(batch)
+        await waitUntil { senderTransport.sentBatchEnvelopes.count == 1 }
+
+        let originPeer = MCPeerID(displayName: "Mac|\(origin.uuidString)")
+        let encoded = try XCTUnwrap(senderTransport.sentData.last)
+        do {
+            let transport = FakeMyRAMSyncTransport(connectedPeers: [originPeer])
+            let receiver = try makeController(transport: transport)
+            let model = NotesViewModel(
+                context: context, syncController: receiver,
+                pendingIncomingBatchQueueFileURL: incomingURL,
+                pendingLocalConvergenceBatchQueueFileURL: temporaryQueueFileURL(),
+                defersModelInitializationUntilMigration: true
+            )
+            receiver.session(receiver.retainedSessionForInvitationTests, didReceive: encoded, fromPeer: originPeer)
+            await waitUntil { receiver.readOnlySyncDiagnostics.contains("incoming_convergence=startupRecoveryPending") }
+            XCTAssertTrue(receiver.readOnlySyncDiagnostics.contains("pending_incoming_durable_count=1"))
+            XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: incomingURL).pendingBatches, [batch])
+            XCTAssertEqual(note.title, "ANOTHER NEW TITLE")
+            XCTAssertTrue(transport.sentBatchAcknowledgements.isEmpty)
+            withExtendedLifetime(model) {}
+        }
+
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [originPeer])
+        let receiver = try makeController(transport: transport)
+        let model = NotesViewModel(
+            context: context, syncController: receiver,
+            pendingIncomingBatchQueueFileURL: incomingURL,
+            pendingLocalConvergenceBatchQueueFileURL: temporaryQueueFileURL(),
+            defersModelInitializationUntilMigration: true
+        )
+        model.completeStartupInitializationAfterMigration()
+        model.completeStartupSyncRecovery()
+        model.resumePendingConvergencePresentationIfNeeded()
+        await waitUntil { transport.sentBatchAcknowledgements.count == 1 }
+        XCTAssertEqual(transport.sentBatchAcknowledgements, [.init(batchID: batch.id)])
+        XCTAssertEqual(note.title, titles.last)
+        XCTAssertEqual(note.content, "Unchanged")
+        XCTAssertTrue(FileBackedSyncBatchQueue(fileURL: incomingURL).isEmpty)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<IncorporatedBatchOperationIdentity>())
+            .filter { $0.batchID == batch.id }.map(\.operationIndex).sorted(), [0, 1, 2])
+
+        await deliverRawData(try XCTUnwrap(transport.sentData.last), to: sender)
+        await waitUntil { sender.unsentBatchQueueSnapshot().pendingBatches.isEmpty }
+        XCTAssertTrue(FileBackedSyncBatchQueue(fileURL: senderURL).isEmpty)
+
+        receiver.session(receiver.retainedSessionForInvitationTests, didReceive: encoded, fromPeer: originPeer)
+        await waitUntil { transport.sentBatchAcknowledgements.count == 2 }
+        XCTAssertEqual(transport.sentBatchAcknowledgements, [.init(batchID: batch.id), .init(batchID: batch.id)])
+        XCTAssertEqual(try context.fetch(FetchDescriptor<IncorporatedBatchOperationIdentity>())
+            .filter { $0.batchID == batch.id }.map(\.operationIndex).sorted(), [0, 1, 2])
+        XCTAssertEqual(note.title, titles.last)
+        XCTAssertEqual(senderTransport.sentBatchEnvelopes.map(\.batch), [batch])
+        withExtendedLifetime(model) {}
+    }
+
     func testIncomingBatchSyncSuppressesAcknowledgementForRecoverableAnchorlessCompatibilityRejection() async throws {
         let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
         let controller = try makeController(transport: transport)

@@ -324,7 +324,7 @@ struct NoteEditorView: View {
     @ViewBuilder
     private var syncStatusOverlay: some View {
         if let syncController {
-            SyncStatusIndicator(syncController: syncController) {
+            SyncStatusIndicator(syncController: syncController, accessibilityID: "editor-sync-status-indicator") {
                 openNearbySync(onFallback: onOpenSyncConflicts)
             }
             .padding(.top, showsTopBar ? 58 : 14)
@@ -371,6 +371,7 @@ struct NoteEditorView: View {
                         Button("Done") {
                             showingNearbySync = false
                         }
+                        .accessibilityIdentifier("editor-sync-done")
                     }
                 }
             }
