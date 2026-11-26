@@ -132,12 +132,8 @@ final class MyRAMUITests: XCTestCase {
 
         let titleButton = app.buttons["edit-note-title"]
         let body = findElement("note-editor-body", in: app)
-        func rename(_ from: String, _ to: String) {
-            titleButton.tap()
-            let alert = app.alerts["Edit Title"]
-            XCTAssertTrue(alert.waitForExistence(timeout: 10))
-            replaceText(in: alert.textFields.firstMatch, with: to, fallbackExistingText: from)
-            alert.buttons["Save"].tap()
+        func rename(_ from: String, _ to: String, successor: String? = nil) {
+            saveEditorTitle(in: app, from: from, to: to, successor: successor)
         }
         func assertEditor(_ expectedTitle: String, _ expectedBody: String) {
             XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
@@ -152,14 +148,16 @@ final class MyRAMUITests: XCTestCase {
             add(attachment)
         }
 
-        rename("Untitled", title("A"))
+        rename("", title("A"))
         XCTAssertTrue(body.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitForStableHitTarget(body), "Body must be interactive after title save")
         body.tap()
         body.typeText(initial)
         assertEditor(title("B"), initial)
-        rename(title("B"), title("C"))
+        rename(title("B"), title("C"), successor: title("D"))
         assertEditor(title("D"), combined)
         rename(title("D"), title("E"))
+        XCTAssertTrue(waitForStableHitTarget(body), "Body must be interactive after title save")
         body.tap()
         body.typeText(" iPhone")
         assertEditor(title("E"), final)
@@ -466,12 +464,15 @@ final class MyRAMUITests: XCTestCase {
 
         openNewNote(in: app)
 
-        let editTitleButton = app.buttons["edit-note-title"]
-        XCTAssertTrue(editTitleButton.waitForExistence(timeout: Timeout.standard))
-        editTitleButton.tap()
-
-        XCTAssertTrue(app.alerts["Edit Title"].waitForExistence(timeout: Timeout.standard))
-        XCTAssertTrue(app.buttons["Save"].exists)
+        // Exercise the same real title-save transition used by the physical
+        // application-sync scenario, including empty and existing titles.
+        saveEditorTitle(in: app, from: "", to: "Native title verification")
+        saveEditorTitle(in: app, from: "Native title verification", to: "Native title renamed")
+        let body = findElement("note-editor-body", in: app)
+        XCTAssertTrue(waitForStableHitTarget(body), "Title dialog must not obstruct the editor")
+        body.tap()
+        body.typeText("Native title save body")
+        XCTAssertEqual(body.value as? String, "Native title save body")
     }
 
     func testKeyboardControlsAreCollapsedByDefault() throws {
@@ -594,6 +595,94 @@ final class MyRAMUITests: XCTestCase {
     private func tapOverflowToggle(_ toggle: XCUIElement) {
         XCTAssertTrue(toggle.waitForExistence(timeout: Timeout.short), "keyboard-control-overflow-toggle not found")
         toggle.tap()
+    }
+
+    /// Native keyboard transitions can move an alert between the text-entry
+    /// event and the next hit test. Wait for stable, enabled, hittable geometry
+    /// rather than assuming that existence or an idle app guarantees a hit.
+    private func waitForStableHitTarget(_ element: XCUIElement, keyboard: XCUIElement? = nil,
+                                        timeout: TimeInterval = 10) -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(timeout))
+        var previousFrame: CGRect?
+        var previousKeyboardFrame: CGRect?
+        var stableSince: ContinuousClock.Instant?
+        while clock.now < deadline {
+            let keyboardFrame = keyboard.flatMap { $0.exists ? $0.frame : nil }
+            let keyboardReady = keyboard == nil || keyboardFrame.map { !$0.isEmpty } == true
+            if element.exists, element.isEnabled, element.isHittable, keyboardReady {
+                let frame = element.frame
+                if !frame.isEmpty, frame == previousFrame, keyboardFrame == previousKeyboardFrame {
+                    if let stableSince, stableSince.duration(to: clock.now) >= .seconds(1) {
+                        return true
+                    }
+                } else {
+                    previousFrame = frame
+                    previousKeyboardFrame = keyboardFrame
+                    stableSince = frame.isEmpty ? nil : clock.now
+                }
+            } else {
+                previousFrame = nil
+                previousKeyboardFrame = nil
+                stableSince = nil
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return false
+    }
+
+    /// Every title transition must commit and dismiss the real editor alert
+    /// before any subsequent interaction is allowed to target the note body.
+    private func saveEditorTitle(in app: XCUIApplication, from original: String,
+                                 to replacement: String, successor: String? = nil) {
+        let titleButton = app.buttons["edit-note-title"]
+        let alert = app.alerts["Edit Title"]
+        XCTAssertTrue(waitForStableHitTarget(titleButton))
+        titleButton.tap()
+        XCTAssertTrue(alert.waitForExistence(timeout: 10))
+        let field = alert.textFields.firstMatch
+        XCTAssertTrue(waitForStableHitTarget(field))
+        let observed = field.value as? String ?? ""
+        if original.isEmpty {
+            XCTAssertTrue(observed.isEmpty || observed == field.placeholderValue,
+                          "New note must have an empty title, not a stored placeholder")
+        } else {
+            XCTAssertEqual(observed, original, "Title draft must match the selected note")
+        }
+        let keyboard = app.keyboards.firstMatch
+        // A visible software keyboard means the alert has already focused its
+        // only text field. Avoid moving the caret or opening the edit menu.
+        if !keyboard.exists { field.tap() }
+        let expectedKeyboard: XCUIElement? = keyboard.exists ? keyboard : nil
+        // Placeholder text is not editable content. Never issue deletes for it.
+        if !original.isEmpty {
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: original.count))
+        }
+        field.typeText(replacement)
+        XCTAssertEqual(field.value as? String, replacement, "Exact title draft required before Save")
+        let save = alert.buttons["Save"]
+        XCTAssertTrue(waitForStableHitTarget(save, keyboard: expectedKeyboard),
+                      "Title Save never became a stable hit target after keyboard transition")
+        save.tap()
+        let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"),
+                                                  object: alert)
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 10), .completed,
+                       "Title Save did not dismiss Edit Title; refusing to edit behind the modal")
+        // The remote peer may already have observed the committed rename and
+        // advanced to its next title; the Mac trace independently proves that
+        // it observed the intermediate value before producing that successor.
+        let accepted = successor.map { [replacement, $0] } ?? [replacement]
+        let savedTitle = XCTNSPredicateExpectation(
+            predicate: NSCompoundPredicate(andPredicateWithSubpredicates: [
+                NSPredicate(format: "exists == true"),
+                NSCompoundPredicate(orPredicateWithSubpredicates: accepted.map {
+                    NSPredicate(format: "label CONTAINS %@", $0)
+                })
+            ]),
+            object: titleButton
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [savedTitle], timeout: 10), .completed,
+                       "Title editor did not display the committed title")
     }
 
     private func replaceText(in textField: XCUIElement, with replacement: String, fallbackExistingText: String) {

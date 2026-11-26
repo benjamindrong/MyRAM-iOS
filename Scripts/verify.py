@@ -692,8 +692,12 @@ def wait_sync_event(process: subprocess.Popen, log: Path, token: str,
 def physical_sync_phase(evidence: Evidence, root: Path, scratch: Path,
                         iphone: str, env: dict[str, str]) -> None:
     # Never start a second process against the same persistent Test Host store.
-    check_running = ('import AppKit; import Darwin; exit(NSRunningApplication.'
-                     'runningApplications(withBundleIdentifier: "' + SYNC_MAC_ID + '").isEmpty ? 0 : 1)')
+    check_running = ('import AppKit; import Darwin; '
+                     'let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "'
+                     + SYNC_MAC_ID + '"); '
+                     'for app in apps { print("BLOCKED: Quit the existing Test Host normally; PID: " '
+                     '+ String(app.processIdentifier) + " bundle: " '
+                     '+ (app.bundleURL?.path ?? "unknown")) }; exit(apps.isEmpty ? 0 : 1)')
     evidence.run("physical-sync-existing-host-preflight", ["xcrun", "swift", "-e", check_running], env=env)
     derived = scratch / "PhysicalSyncDerivedData"
     common = ["xcodebuild", "-project", "MyRAM.xcodeproj", "-configuration", "Debug",
